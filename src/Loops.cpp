@@ -18,12 +18,36 @@ static float ph_sensor_value;     // pH sensor current value
 static float orp_sensor_value;    // ORP sensor current value
 static float psi_sensor_value;    // PSI sensor current value
 
+// Setup instance for flow measurements
+volatile int flow_pulse_count;    // FLOW sensor current value
+unsigned long flow_millis         = 0;
+struct flow
+{ int reading;
+  double value;
+} flow;
+// The hall-effect flow sensor outputs approximately 4.5 pulses per second per litre/minute of flow.
+// 13.51 is to make 100 for the full flow
+const float flow_calibration_factor = 12/13.51*60;
+
+// Setup instance for flow2 measurements
+volatile int flow2_pulse_count;    // FLOW2 sensor current value
+unsigned long flow2_millis         = 0;
+struct flow2
+{ int reading;
+  double value;
+} flow2;
+// The hall-effect flow2 sensor outputs approximately 4.5 pulses per second per litre/minute of flow2.
+// 13.51 is to make 100 for the full flow
+const float flow2_calibration_factor = 4.5/13.51*60;
+
 // Signal filtering library sample buffers
 static RunningMedian samples_WTemp = RunningMedian(11);
 static RunningMedian samples_ATemp = RunningMedian(11);
 static RunningMedian samples_Ph    = RunningMedian(11);
 static RunningMedian samples_Orp   = RunningMedian(11);
 static RunningMedian samples_PSI   = RunningMedian(11);
+static RunningMedian samples_FLOW  = RunningMedian(11);
+static RunningMedian samples_FLOW2 = RunningMedian(11);
 
 void stack_mon(UBaseType_t&);
 void lockI2C();
@@ -38,6 +62,20 @@ void unlockI2C();
 // (3 per channel), with height values retrieved per second -> 0,89 value per second. The value
 // returned for each channel is the median of the three samples. Then, among the last 
 // 11 samples returned, we take the 5 median ones and compute the mean as consolidated value.
+
+// PulseCounter for FLOW
+void IRAM_ATTR flow_pulse_counter()
+{
+  // Increment the pulse counter
+  flow_pulse_count++;
+}
+
+// PulseCounter for FLOW2
+void IRAM_ATTR flow2_pulse_counter()
+{
+  // Increment the pulse counter
+  flow2_pulse_count++;
+}
 
 void AnalogInit()
 {
@@ -114,7 +152,7 @@ void AnalogPoll(void *pvParameters)
 #endif
 
         //ORP
-        samples_Orp.add(orp_sensor_value);                                                                    // compute average of ORP from last 5 measurements
+        samples_Orp.add(orp_sensor_value);         // compute average of ORP from last 5 measurements
         storage.OrpValue = (samples_Orp.getAverage(5)*0.1875/1000.)*storage.OrpCalibCoeffs0 + storage.OrpCalibCoeffs1;
 
 #ifdef SIMU
@@ -132,7 +170,7 @@ void AnalogPoll(void *pvParameters)
 #endif
 
         //PSI (water pressure)
-        samples_PSI.add(psi_sensor_value);                                                                    // compute average of PSI from last 5 measurements
+        samples_PSI.add(psi_sensor_value);        // compute average of PSI from last 5 measurements
         storage.PSIValue = (samples_PSI.getAverage(5)*0.1875/1000.)*storage.PSICalibCoeffs0 + storage.PSICalibCoeffs1;
 
         Debug.print(DBG_DEBUG,"pH: %5.0f - %4.2f - ORP: %5.0f - %3.0fmV - PSI: %5.0f - %4.2fBar\r",
@@ -154,15 +192,30 @@ void AnalogPoll(void *pvParameters)
   }  
 }
 
+void FlowInit()
+{
+flow_millis=millis();
+  flow_pulse_count  = 0;
+  attachInterrupt(digitalPinToInterrupt(FLOW), flow_pulse_counter, RISING);
+}
+
+void Flow2Init()
+{
+flow2_millis=millis();
+  flow2_pulse_count  = 0;
+  attachInterrupt(digitalPinToInterrupt(FLOW2), flow2_pulse_counter, FALLING);
+}
+
+
 void StatusLights(void *pvParameters)
 {
   static uint8_t line = 0;
   uint8_t status;
 
   while (!startTasks) ;
-  vTaskDelay(DT7);                                // Scheduling offset 
+  vTaskDelay(DT8);                                // Scheduling offset 
 
-  TickType_t period = PT7;  
+  TickType_t period = PT8;  
   TickType_t ticktime = xTaskGetTickCount();
   static UBaseType_t hwm = 0;
 
@@ -187,6 +240,8 @@ void StatusLights(void *pvParameters)
         status |= (storage.AutoMode & 1) << 2;
         status |= (AntiFreezeFiltering & 1) << 3;
         status |= (PSIError & 1) << 7;
+        status |= (FLOWError & 1) << 7;
+        status |= (FLOW2Error & 1) << 7;
     } else
     {
         line = 0;
@@ -221,6 +276,7 @@ void StatusLights(void *pvParameters)
   }  
 }
 
+//Ph regulation loop
 void pHRegulation(void *pvParameters)
 {
   while (!startTasks) ;
@@ -355,6 +411,73 @@ void OrpRegulation(void *pvParameters)
     vTaskDelayUntil(&ticktime,period);
   }
 }
+
+//Flow measurements loop
+void FlowMeasures(void *pvParameters)
+{
+  while (!startTasks) ;
+  vTaskDelay(DT7);                                // Scheduling offset 
+
+  TickType_t period = PT7;  
+  TickType_t ticktime = xTaskGetTickCount();
+  static UBaseType_t hwm = 0;
+
+  #ifdef CHRONO
+  unsigned long td;
+  int t_act=0,t_min=999,t_max=0;
+  float t_mean=0.;
+  int n=1;
+  #endif
+
+
+  for(;;)
+  {        
+    #ifdef CHRONO
+    td = millis();
+    #endif 
+
+      detachInterrupt(digitalPinToInterrupt(FLOW));
+      flow.value = ((1000.0 / (millis() - flow_millis)) * flow_pulse_count) / flow_calibration_factor * 60;
+
+      detachInterrupt(digitalPinToInterrupt(FLOW2));
+      flow2.value = ((1000.0 / (millis() - flow2_millis)) * flow2_pulse_count) / flow2_calibration_factor * 60;
+
+      flow.reading = flow_pulse_count;
+      flow_millis=millis();
+      flow_pulse_count=0;
+      attachInterrupt(digitalPinToInterrupt(FLOW), flow_pulse_counter, RISING);
+
+      flow2.reading = flow2_pulse_count;
+      flow2_millis=millis();
+      flow2_pulse_count=0;
+      attachInterrupt(digitalPinToInterrupt(FLOW2), flow2_pulse_counter, FALLING);
+
+      //FLOW (Main-Pipe)
+      samples_FLOW.add(flow.value);        // compute average of Flow from last 5 measurements
+        storage.FLOWValue = (samples_FLOW.getAverage(5)*0.1875/1000.);
+
+      //FLOW2 (Meassure-Pipe)
+      samples_FLOW2.add(flow2.value);      // compute average of Flow2 from last 5 measurements
+        storage.FLOW2Value = (samples_FLOW2.getAverage(5)*0.1875/1000.);
+
+      Debug.print(DBG_DEBUG,"Flow: %5.0f - %4.2f - Flow2: %5.0f - %3.0f%\r",
+          flow.value,storage.FLOWValue,flow2.value,storage.FLOW2Value);
+
+    #ifdef CHRONO
+    t_act = millis() - td;
+    if(t_act > t_max) t_max = t_act;
+    if(t_act < t_min) t_min = t_act;
+    t_mean += (t_act - t_mean)/n;
+    ++n;
+    Debug.print(DBG_INFO,"[FlowMeasures] td: %d t_act: %d t_min: %d t_max: %d t_mean: %4.1f",td,t_act,t_min,t_max,t_mean);
+    #endif
+
+    stack_mon(hwm);
+    vTaskDelayUntil(&ticktime,period);
+  }
+
+}
+
 
 //Init DS18B20 one-wire library
 void TempInit()

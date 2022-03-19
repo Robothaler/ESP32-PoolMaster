@@ -1,8 +1,8 @@
 #pragma once
 #define ARDUINOJSON_USE_DOUBLE 1  // Required to force ArduinoJSON to treat float as double
 #define DEBUG_LEVEL DBG_INFO      // Possible levels : NONE/ERROR/WARNING/INFO/DEBUG/VERBOSE
-//#define CHRONO                    // Activate tasks timings traces for profiling
-//#define SIMU                      // Used to simulate pH/ORP sensors. Very simple simulation:
+// #define CHRONO                    // Activate tasks timings traces for profiling
+// #define SIMU                      // Used to simulate pH/ORP sensors. Very simple simulation:
                                     // the sensor value is computed from the output of the PID 
                                     // loop to reach linearly the theorical value produced by this
                                     // output after one hour
@@ -28,6 +28,7 @@
 #include <ArduinoOTA.h>           // On The Air WiFi update 
 #include "AsyncMqttClient.h"      // Async. MQTT client
 #include "ADS1115.h"              // ADS1115 sensors library
+#include <credentials.h>          // WIFI Credentials
 
 // General shared data structure
 struct StoreStruct
@@ -37,8 +38,8 @@ struct StoreStruct
   uint8_t FiltrationDuration, FiltrationStart, FiltrationStop, FiltrationStartMin, FiltrationStopMax, DelayPIDs;
   unsigned long PhPumpUpTimeLimit, ChlPumpUpTimeLimit,PublishPeriod;
   unsigned long PhPIDWindowSize, OrpPIDWindowSize, PhPIDwindowStartTime, OrpPIDwindowStartTime;
-  double Ph_SetPoint, Orp_SetPoint, PSI_HighThreshold, PSI_MedThreshold, WaterTempLowThreshold, WaterTemp_SetPoint, TempExternal, pHCalibCoeffs0, pHCalibCoeffs1, OrpCalibCoeffs0, OrpCalibCoeffs1, PSICalibCoeffs0, PSICalibCoeffs1;
-  double Ph_Kp, Ph_Ki, Ph_Kd, Orp_Kp, Orp_Ki, Orp_Kd, PhPIDOutput, OrpPIDOutput, TempValue, PhValue, OrpValue, PSIValue;
+  double Ph_SetPoint, Orp_SetPoint, PSI_HighThreshold, PSI_MedThreshold, FLOW_HighThreshold, FLOW_MedThreshold, FLOW2_HighThreshold, FLOW2_MedThreshold, WaterTempLowThreshold, WaterTemp_SetPoint, TempExternal, pHCalibCoeffs0, pHCalibCoeffs1, OrpCalibCoeffs0, OrpCalibCoeffs1, PSICalibCoeffs0, PSICalibCoeffs1;
+  double Ph_Kp, Ph_Ki, Ph_Kd, Orp_Kp, Orp_Ki, Orp_Kd, PhPIDOutput, OrpPIDOutput, TempValue, PhValue, OrpValue, PSIValue, FLOWValue, FLOW2Value;
   double AcidFill, ChlFill, pHTankVol, ChlTankVol, pHPumpFR, ChlPumpFR;
 } ;
 
@@ -62,6 +63,8 @@ extern PID PhPID;
 extern PID OrpPID;
 
 extern bool PSIError;
+extern bool FLOWError;
+extern bool FLOW2Error;
 
 extern tm timeinfo;
 
@@ -71,8 +74,10 @@ extern String Firmw;
 extern AsyncMqttClient mqttClient;                     // MQTT async. client
 
 // Various flags
-extern volatile bool startTasks;                                // flag to start loop tasks       
+extern volatile bool startTasks;                       // flag to start loop tasks       
 extern bool MQTTConnection;                            // MQTT connected flag
 extern bool EmergencyStopFiltPump;                     // Filtering pump stopped manually; needs to be cleared to restart
 extern bool AntiFreezeFiltering;                       // Filtration anti freeze mode
 extern bool PSIError;                                  // Water pressure alarm
+extern bool FLOWError;                                 // Flow in Main-Pipe alarm
+extern bool FLOW2Error;                                // Flow in Measure-Pipe alarm

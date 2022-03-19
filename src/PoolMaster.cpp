@@ -24,7 +24,7 @@ void Send_IFTTTNotif(void);
 void PoolMaster(void *pvParameters)
 {
 
-                                                                                                                                                                                                 bool DoneForTheDay = false;                     // Reset actions done once per day
+  bool DoneForTheDay = false;                     // Reset actions done once per day
   bool d_calc = false;                            // Filtration duration computed
   bool cleaning_done = false;                     // daily cleaning done   
 
@@ -130,7 +130,7 @@ void PoolMaster(void *pvParameters)
 
     //start filtration pump as scheduled
     if (!EmergencyStopFiltPump && !FiltrationPump.IsRunning() && storage.AutoMode &&
-        !PSIError && hour() >= storage.FiltrationStart && hour() < storage.FiltrationStop )
+        !PSIError && !FLOWError && hour() >= storage.FiltrationStart && hour() < storage.FiltrationStop )
         FiltrationPump.Start();
 
     //start cleaning robot for 2 hours 30mn after filtration start
@@ -149,7 +149,7 @@ void PoolMaster(void *pvParameters)
 
     // start PIDs with delay after FiltrationStart in order to let the readings stabilize
     // start inhibited if water temperature below threshold and/or in winter mode
-    if (FiltrationPump.IsRunning() && storage.AutoMode && !storage.WinterMode && !PhPID.GetMode() &&
+    if (FiltrationPump.IsRunning() && storage.AutoMode && !FLOW2Error && !storage.WinterMode && !PhPID.GetMode() &&
         ((millis() - FiltrationPump.LastStartTime) / 1000 / 60 >= storage.DelayPIDs) &&
         (hour() >= storage.FiltrationStart) && (hour() < storage.FiltrationStop) &&
         storage.TempValue >= storage.WaterTempLowThreshold)
@@ -168,7 +168,7 @@ void PoolMaster(void *pvParameters)
     }
 
     //Outside regular filtration hours, start filtration in case of cold Air temperatures (<-2.0deg)
-    if (!EmergencyStopFiltPump && storage.AutoMode && !PSIError && !FiltrationPump.IsRunning() && ((hour() < storage.FiltrationStart) || (hour() > storage.FiltrationStop)) && (storage.TempExternal < -2.0))
+    if (!EmergencyStopFiltPump && storage.AutoMode && !PSIError && !FLOWError && !FiltrationPump.IsRunning() && ((hour() < storage.FiltrationStart) || (hour() > storage.FiltrationStop)) && (storage.TempExternal < -2.0))
     {
         FiltrationPump.Start();
         AntiFreezeFiltering = true;
@@ -187,7 +187,22 @@ void PoolMaster(void *pvParameters)
         FiltrationPump.Stop();
         PSIError = true;
         mqttErrorPublish("{\"PSI Error\":1}");
-    }  
+    }
+
+    //If filtration pump has been running for over 45secs but flow in Main-Pipe is still low, stop the filtration pump, something is wrong, set error flag
+    if (FiltrationPump.IsRunning() && ((millis() - FiltrationPump.LastStartTime) > 45000) && (storage.FLOWValue < storage.FLOW_MedThreshold))
+    {
+        FiltrationPump.Stop();
+        FLOWError = true;
+        mqttErrorPublish("{\"FLOW Error\":1}");
+    }
+
+    //If filtration pump has been running for over 45secs but flow in Meassure-Pipe is still low, something is wrong, set error flag
+    if (FiltrationPump.IsRunning() && ((millis() - FiltrationPump.LastStartTime) > 45000) && (storage.FLOW2Value < storage.FLOW2_MedThreshold))
+    {
+        FLOW2Error = true;
+        mqttErrorPublish("{\"FLOW2 Error\":1}");
+    }
 
     // Over-pressure error
     if (storage.PSIValue > storage.PSI_HighThreshold)
@@ -285,6 +300,50 @@ void Send_IFTTTNotif(){
                     url2 += String("High");
                 }
                 url2 += String("%20pressure:%20") + String(storage.PSIValue) + String("bar");
+                wificlient.print(String("POST ") + url1 + url2 + String(" HTTP/1.1\r\nHost: maker.ifttt.com\r\nConnection: close\r\n\r\n"));
+                notif_sent[0] = true;
+            }
+        }    
+    } else notif_sent[0] = false;
+
+    if(FLOWError)
+    {
+        if(!notif_sent[0])
+        {
+            if(wificlient.connect("maker.ifttt.com",80))
+            {
+                url2 = String("?value1=Water%20flow&value2=");
+                if(storage.FLOWValue <= storage.FLOW_MedThreshold)
+                {
+                    url2 += String("Low");
+                } 
+                else if (storage.FLOWValue >= storage.FLOW_HighThreshold)
+                {
+                    url2 += String("High");
+                }
+                url2 += String("%20flow:%20") + String(storage.FLOWValue) + String("bar");
+                wificlient.print(String("POST ") + url1 + url2 + String(" HTTP/1.1\r\nHost: maker.ifttt.com\r\nConnection: close\r\n\r\n"));
+                notif_sent[0] = true;
+            }
+        }    
+    } else notif_sent[0] = false;
+
+    if(FLOW2Error)
+    {
+        if(!notif_sent[0])
+        {
+            if(wificlient.connect("maker.ifttt.com",80))
+            {
+                url2 = String("?value1=Water%20flow2&value2=");
+                if(storage.FLOW2Value <= storage.FLOW2_MedThreshold)
+                {
+                    url2 += String("Low");
+                } 
+                else if (storage.FLOW2Value >= storage.FLOW2_HighThreshold)
+                {
+                    url2 += String("High");
+                }
+                url2 += String("%20flow2:%20") + String(storage.FLOW2Value) + String("bar");
                 wificlient.print(String("POST ") + url1 + url2 + String(" HTTP/1.1\r\nHost: maker.ifttt.com\r\nConnection: close\r\n\r\n"));
                 notif_sent[0] = true;
             }

@@ -10,11 +10,12 @@
 #include "PoolMaster.h"
 
 //Size of the buffer to store outgoing JSON messages
-#define PAYLOAD_BUFFER_LENGTH 150
+#define PAYLOAD_BUFFER_LENGTH 200
 
 // BitMaps with GPIO states
 static uint8_t BitMap1 = 0;
 static uint8_t BitMap2 = 0;
+static uint8_t BitMap3 = 0;
 
 #ifdef DEVT
 static const char* PoolTopicMeas1 = "Home/Pool6/Meas1";
@@ -24,6 +25,7 @@ static const char* PoolTopicSet2  = "Home/Pool6/Set2";
 static const char* PoolTopicSet3  = "Home/Pool6/Set3";
 static const char* PoolTopicSet4  = "Home/Pool6/Set4";
 static const char* PoolTopicSet5  = "Home/Pool6/Set5";
+static const char* PoolTopicSet6  = "Home/Pool6/Set6";
 #else
 static const char* PoolTopicMeas1 = "Home/Pool/Meas1";
 static const char* PoolTopicMeas2 = "Home/Pool/Meas2";
@@ -32,6 +34,7 @@ static const char* PoolTopicSet2  = "Home/Pool/Set2";
 static const char* PoolTopicSet3  = "Home/Pool/Set3";
 static const char* PoolTopicSet4  = "Home/Pool/Set4";
 static const char* PoolTopicSet5  = "Home/Pool/Set5";
+static const char* PoolTopicSet6  = "Home/Pool/Set6";
 #endif
 
 int freeRam(void);
@@ -42,14 +45,13 @@ void EncodeBitMap()
 {
   BitMap1 = 0;
   BitMap2 = 0;
-  BitMap1 |= (FiltrationPump.IsRunning() & 1) << 7;
-  BitMap1 |= (PhPump.IsRunning() & 1) << 6;
-  BitMap1 |= (ChlPump.IsRunning() & 1) << 5;
-  BitMap1 |= (PhPump.TankLevel() & 1) << 4;
-  BitMap1 |= (ChlPump.TankLevel() & 1) << 3;
-  BitMap1 |= (PSIError & 1) << 2;
-  BitMap1 |= (PhPump.UpTimeError & 1) << 1;
-  BitMap1 |= (ChlPump.UpTimeError & 1) << 0;
+  BitMap3 = 0;
+
+  BitMap1 |= (FiltrationPump.IsRunning() & 1) << 4;
+  BitMap1 |= (PhPump.IsRunning() & 1) << 3;
+  BitMap1 |= (ChlPump.IsRunning() & 1) << 2;
+  BitMap1 |= (PhPump.TankLevel() & 1) << 1;
+  BitMap1 |= (ChlPump.TankLevel() & 1) << 0;
 
   BitMap2 |= (PhPID.GetMode() & 1) << 7;
   BitMap2 |= (OrpPID.GetMode() & 1) << 6;
@@ -59,8 +61,13 @@ void EncodeBitMap()
   BitMap2 |= !digitalRead(RELAY_R0) << 3;
   BitMap2 |= !digitalRead(RELAY_R1) << 2;
   BitMap2 |= (storage.WinterMode & 1) << 1;
-  BitMap2 |= (0 & 1U) << 0;      
+  BitMap2 |= (0 & 1U) << 0;    
 
+  BitMap3 |= (FLOW2Error & 1) << 4;
+  BitMap3 |= (FLOWError & 1) << 3;
+  BitMap3 |= (PSIError & 1) << 2;
+  BitMap3 |= (PhPump.UpTimeError & 1) << 1;
+  BitMap3 |= (ChlPump.UpTimeError & 1) << 0;  
 }
 
 void PublishTopic(const char* topic, JsonDocument& root)
@@ -82,7 +89,7 @@ void PublishTopic(const char* topic, JsonDocument& root)
 void SettingsPublish(void *pvParameters)
 {
   while(!startTasks);
-  vTaskDelay(DT9);                                // Scheduling offset 
+  vTaskDelay(DT10);                                // Scheduling offset 
 
   uint32_t mod1 = xTaskGetTickCount() % 1000;     // This is the offset to respect for future resume
   uint32_t mod2;
@@ -131,14 +138,14 @@ void SettingsPublish(void *pvParameters)
         const int capacity = JSON_OBJECT_SIZE(8);
         StaticJsonDocument<capacity> root;
 
-        root["pHWS"]  = storage.PhPIDWindowSize / 1000 / 60;        //pH PID window size (/!\ mins)
-        root["ChlWS"] = storage.OrpPIDWindowSize / 1000 / 60;       //Orp PID window size (/!\ mins)
-        root["pHSP"]  = storage.Ph_SetPoint * 100;                  //pH setpoint (/!\ x100)
-        root["OrpSP"] = storage.Orp_SetPoint;                       //Orp setpoint
-        root["WSP"]   = storage.WaterTemp_SetPoint * 100;           //Water temperature setpoint (/!\ x100)
-        root["WLT"]   = storage.WaterTempLowThreshold * 100;        //Water temperature low threshold to activate anti-freeze mode (/!\ x100)
-        root["PSIHT"] = storage.PSI_HighThreshold * 100;            //Water pressure high threshold to trigger error (/!\ x100)
-        root["PSIMT"] = storage.PSI_MedThreshold * 100;             //Water pressure medium threshold (unused yet) (/!\ x100)
+        root["pHWS"]    = storage.PhPIDWindowSize / 1000 / 60;        //pH PID window size (/!\ mins)
+        root["ChlWS"]   = storage.OrpPIDWindowSize / 1000 / 60;       //Orp PID window size (/!\ mins)
+        root["pHSP"]    = storage.Ph_SetPoint * 100;                  //pH setpoint (/!\ x100)
+        root["OrpSP"]   = storage.Orp_SetPoint;                       //Orp setpoint
+        root["WSP"]     = storage.WaterTemp_SetPoint * 100;           //Water temperature setpoint (/!\ x100)
+        root["WLT"]     = storage.WaterTempLowThreshold * 100;        //Water temperature low threshold to activate anti-freeze mode (/!\ x100)
+        root["PSIHT"]   = storage.PSI_HighThreshold * 100;            //Water pressure high threshold to trigger error (/!\ x100)
+        root["PSIMT"]   = storage.PSI_MedThreshold * 100;             //Water pressure medium threshold (unused yet) (/!\ x100)
 
         PublishTopic(PoolTopicSet2, root);
     }
@@ -169,16 +176,16 @@ void SettingsPublish(void *pvParameters)
         const int capacity = JSON_OBJECT_SIZE(8);
         StaticJsonDocument<capacity> root;
 
-        root["pHKp"]  = storage.Ph_Kp;    //pH PID coeffcicient Kp
-        root["pHKi"]  = storage.Ph_Ki;    //pH PID coeffcicient Ki
-        root["pHKd"]  = storage.Ph_Kd;    //pH PID coeffcicient Kd
+        root["pHKp"]  = storage.Ph_Kp;                      //pH PID coeffcicient Kp
+        root["pHKi"]  = storage.Ph_Ki;                      //pH PID coeffcicient Ki
+        root["pHKd"]  = storage.Ph_Kd;                      //pH PID coeffcicient Kd
 
-        root["OrpKp"] = storage.Orp_Kp;    //Orp PID coeffcicient Kp
-        root["OrpKi"] = storage.Orp_Ki;    //Orp PID coeffcicient Ki
-        root["OrpKd"] = storage.Orp_Kd;    //Orp PID coeffcicient Kd
+        root["OrpKp"] = storage.Orp_Kp;                     //Orp PID coeffcicient Kp
+        root["OrpKi"] = storage.Orp_Ki;                     //Orp PID coeffcicient Ki
+        root["OrpKd"] = storage.Orp_Kd;                     //Orp PID coeffcicient Kd
 
-        root["Dpid"]   = storage.DelayPIDs;     //Delay from FSta for the water regulation/PIDs to start (mins) 
-        root["PubP"]   = storage.PublishPeriod/1000; // Settings publish period in sec
+        root["Dpid"]  = storage.DelayPIDs;                  //Delay from FSta for the water regulation/PIDs to start (mins) 
+        root["PubP"]  = storage.PublishPeriod/1000;         //Settings publish period in sec
 
         PublishTopic(PoolTopicSet4, root);
     }
@@ -191,12 +198,28 @@ void SettingsPublish(void *pvParameters)
         const int capacity = JSON_OBJECT_SIZE(4);
         StaticJsonDocument<capacity> root;
 
-        root["pHTV"]  = storage.pHTankVol;           //Acid tank nominal volume (Liters)
-        root["ChlTV"] = storage.ChlTankVol;          //Chl tank nominal volume (Liters)
-        root["pHFR"]  = storage.pHPumpFR;            //Acid pump flow rate (L/hour)
-        root["OrpFR"] = storage.ChlPumpFR;           //Chl pump flow rate (L/hour)
-
+        root["pHTV"]    = storage.pHTankVol;                          //Acid tank nominal volume (Liters)
+        root["ChlTV"]   = storage.ChlTankVol;                         //Chl tank nominal volume (Liters)
+        root["pHFR"]    = storage.pHPumpFR;                           //Acid pump flow rate (L/hour)
+        root["OrpFR"]   = storage.ChlPumpFR;                          //Chl pump flow rate (L/hour)
+        
         PublishTopic(PoolTopicSet5, root);
+    }
+    else
+        Debug.print(DBG_ERROR,"Failed to connect to the MQTT broker");
+
+    if (mqttClient.connected())
+    {
+        //send a JSON to MQTT broker. /!\ Split JSON if longer than 100 bytes
+        const int capacity = JSON_OBJECT_SIZE(4);
+        StaticJsonDocument<capacity> root;
+
+        root["FLWHT"]  = storage.FLOW_HighThreshold;           //Flow high threshold to trigger error
+        root["FLWMT"]  = storage.FLOW_MedThreshold;            //Flow medium threshold (unused yet)
+        root["FLW2HT"] = storage.FLOW2_HighThreshold;          //Flow2 high threshold to trigger error
+        root["FLW2MT"] = storage.FLOW2_MedThreshold;           //Flow2 medium threshold (unused yet)
+
+        PublishTopic(PoolTopicSet6, root);
     }
     else
         Debug.print(DBG_ERROR,"Failed to connect to the MQTT broker");
@@ -233,7 +256,7 @@ void SettingsPublish(void *pvParameters)
 void MeasuresPublish(void *pvParameters)
 { 
   while(!startTasks);
-  vTaskDelay(DT8);                                // Scheduling offset 
+  vTaskDelay(DT9);                                // Scheduling offset 
   uint32_t mod1 = xTaskGetTickCount() % 1000;     // This is the offset to respect for future resume
 
   TickType_t WaitTimeOut;
@@ -282,13 +305,15 @@ void MeasuresPublish(void *pvParameters)
     {
         //send a JSON to MQTT broker. /!\ Split JSON if longer than 100 bytes
         //Will publish something like {"Tmp":818,"pH":321,"PSI":56,"Orp":583,"FilUpT":8995,"PhUpT":0,"ChlUpT":0}
-        const int capacity = JSON_OBJECT_SIZE(7);
+        const int capacity = JSON_OBJECT_SIZE(9);
         StaticJsonDocument<capacity> root;
 
         root["TE"]      = storage.TempExternal * 100;        // /!\ x100
         root["Tmp"]     = storage.TempValue * 100;
         root["pH"]      = storage.PhValue * 100;
         root["PSI"]     = storage.PSIValue * 100;
+        root["FLOW"]    = storage.FLOWValue * 100;
+        root["FLOW2"]   = storage.FLOW2Value * 100;
         root["Orp"]     = storage.OrpValue;
         root["PhUpT"]   = PhPump.UpTime / 1000;
         root["ChlUpT"]  = ChlPump.UpTime / 1000;
@@ -303,13 +328,14 @@ void MeasuresPublish(void *pvParameters)
     {
         //send a JSON to MQTT broker. /!\ Split JSON if longer than 100 bytes
         //Will publish something like {"AcidF":100,"ChlF":100,"IO":11,"IO2":0}
-        const int capacity = JSON_OBJECT_SIZE(4);
+        const int capacity = JSON_OBJECT_SIZE(5);
         StaticJsonDocument<capacity> root;
 
         root["AcidF"] = PhPump.GetTankFill();
         root["ChlF"]  = ChlPump.GetTankFill();
         root["IO"]    = BitMap1;
         root["IO2"]   = BitMap2;
+        root["IO3"]   = BitMap3;
 
         PublishTopic(PoolTopicMeas2, root);
     }

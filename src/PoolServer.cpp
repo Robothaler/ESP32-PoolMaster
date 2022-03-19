@@ -14,6 +14,7 @@ bool saveParam(const char*,double );
 void PublishSettings(void);
 void simpLinReg(float * , float * , double & , double &, int );
 void ProcessCommand(char*);
+void Flow();
 void PublishMeasures();
 void SetPhPID(bool);
 void SetOrpPID(bool);
@@ -23,7 +24,7 @@ void ProcessCommand(void *pvParameters)
 {
   //Json Document
   StaticJsonDocument<200> command;
-  char JSONCommand[150] = "";                         // JSON command to process  
+  char JSONCommand[150] = "";                     // JSON command to process  
 
   while (!startTasks) ;
   vTaskDelay(DT2);                                // Scheduling offset   
@@ -356,7 +357,31 @@ void ProcessCommand(void *pvParameters)
           storage.PSI_MedThreshold = (double)command[F("PSILow")];
           saveParam("PSI_Med",storage.PSI_MedThreshold);
           PublishSettings();
-        }         
+        }
+        else if (command.containsKey(F("FLOWHigh"))) //"FLOWHigh" command which sets the water high-pressure threshold
+        {
+          storage.FLOW_HighThreshold = (double)command[F("FLOWHigh")];
+          saveParam("FLOW_High",storage.FLOW_HighThreshold);
+          PublishSettings();
+        }
+        else if (command.containsKey(F("FLOWLow"))) //"FLOWLow" command which sets the water low-pressure threshold
+        {
+          storage.FLOW_MedThreshold = (double)command[F("FLOWLow")];
+          saveParam("FLOW_Med",storage.FLOW_MedThreshold);
+          PublishSettings();
+        }
+        else if (command.containsKey(F("FLOW2High"))) //"FLOW2High" command which sets the water high-pressure threshold
+        {
+          storage.FLOW2_HighThreshold = (double)command[F("FLOW2High")];
+          saveParam("FLOW2_High",storage.FLOW2_HighThreshold);
+          PublishSettings();
+        }
+        else if (command.containsKey(F("FLOW2Low"))) //"FLOW2Low" command which sets the water low-pressure threshold
+        {
+          storage.FLOW2_MedThreshold = (double)command[F("FLOW2Low")];
+          saveParam("FLOW2_Med",storage.FLOW2_MedThreshold);
+          PublishSettings();
+        }       
         else if (command.containsKey(F("pHPumpFR")))//"PhPumpFR" set flow rate of Ph pump
         {
           storage.pHPumpFR = (double)command[F("pHPumpFR")];
@@ -487,6 +512,12 @@ void ProcessCommand(void *pvParameters)
         {
           if (PSIError)
             PSIError = false;
+
+          if (FLOWError)
+            FLOWError = false;
+
+          if (FLOW2Error)
+            FLOW2Error = false;
 
           if (PhPump.UpTimeError)
             PhPump.ClearErrors();

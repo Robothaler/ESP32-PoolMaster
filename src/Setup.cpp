@@ -34,8 +34,8 @@ StoreStruct storage =
   10, 10, 20, 8, 22, 20,
   2700, 2700, 30000,
   1800000, 1800000, 0, 0,
-  7.3, 720.0, 1.8, 0.7, 10.0, 18.0, 3.0, 3.49625783, -2.011338191, -876.430775, 2328.8985, 1.0, 0.0,
-  2700000.0, 0.0, 0.0, 18000.0, 0.0, 0.0, 0.0, 0.0, 28.0, 7.3, 720., 1.3,
+  7.3, 720.0, 1.8, 0.7, 90.0, 60.0, 30.0, 10.0, 10.0, 18.0, 3.0, 3.49625783, -2.011338191, -876.430775, 2328.8985, 1.0, 0.0,
+  2700000.0, 0.0, 0.0, 18000.0, 0.0, 0.0, 0.0, 0.0, 28.0, 7.3, 720., 1.3, 70, 9,
   60.0, 85.0, 20.0, 20.0, 1.5, 1.5
 };
 
@@ -47,6 +47,9 @@ volatile bool startTasks = false;               // Signal to start loop tasks
 bool AntiFreezeFiltering = false;               // Filtration anti freeze mode
 bool EmergencyStopFiltPump = false;             // flag will be (re)set by double-tapp button
 bool PSIError = false;                          // Water pressure OK
+bool FLOWError = false;                         // Water flow in Main-Pipe OK
+bool FLOW2Error = false;                        // Water flow in Meassure-Pipe OK
+
 
 // Queue object to store incoming JSON commands (up to 10)
 QueueHandle_t queueIn;
@@ -96,6 +99,8 @@ void SetPhPID(bool);
 void SetOrpPID(bool);
 int  freeRam (void);
 void AnalogInit(void);
+void FlowInit(void);
+void Flow2Init(void);
 void TempInit(void);
 bool saveParam(const char*,uint8_t );
 unsigned stack_hwm();
@@ -109,6 +114,7 @@ void pHRegulation(void*);
 void OrpRegulation(void*);
 void getTemp(void*);
 void ProcessCommand(void*);
+void FlowMeasures(void*);
 void SettingsPublish(void*);
 void MeasuresPublish(void*);
 void StatusLights(void*);
@@ -176,8 +182,10 @@ void setup()
   digitalWrite(RELAY_R1,HIGH);
 
 // Warning: pins used here have no pull-ups, provide external ones
-  pinMode(CHL_LEVEL, INPUT);
-  pinMode(PH_LEVEL, INPUT);
+  pinMode(FLOW, INPUT);
+  pinMode(FLOW2, INPUT);
+  pinMode(WATER_MAX_LVL, INPUT);
+  pinMode(WATER_MIN_LVL, INPUT);
 
   // Initialize watch-dog
   esp_task_wdt_init(WDT_TIMEOUT, true);
@@ -218,11 +226,16 @@ void setup()
   // Init pH, ORP and PSI analog measurements
   AnalogInit();
 
+  // Init Flow measurements
+  FlowInit();
+
+  // Init Flow2 measurements
+  Flow2Init();
+  
   // Init Water and Air temperatures measurements
   TempInit();
 
   // Clear status LEDs
-
   Wire.beginTransmission(0x38);
   Wire.write((uint8_t)0xFF);
   Wire.endTransmission();
@@ -232,7 +245,6 @@ void setup()
   storage.OrpPIDwindowStartTime = millis();
 
   // Limit the PIDs output range in order to limit max. pumps runtime (safety first...)
-
   PhPID.SetTunings(storage.Ph_Kp, storage.Ph_Ki, storage.Ph_Kd);
   PhPID.SetControllerDirection(PhPID_DIRECTION);
   PhPID.SetSampleTime((int)storage.PhPIDWindowSize);
@@ -297,7 +309,7 @@ void setup()
   xTaskCreatePinnedToCore(
     ProcessCommand,
     "ProcessCommand",
-    3072,
+    4096,
     NULL,
     1,
     nullptr,
@@ -357,7 +369,18 @@ void setup()
     1,
     nullptr,
     app_cpu
-  );  
+  ); 
+
+    // Flow measurement polling task
+  xTaskCreatePinnedToCore(
+    FlowMeasures,
+    "FlowMeasures",
+    3072,
+    NULL,
+    1,
+    nullptr,
+    app_cpu
+  ); 
 
   // Measures MQTT publish 
   xTaskCreatePinnedToCore(
@@ -374,7 +397,7 @@ void setup()
   xTaskCreatePinnedToCore(
     SettingsPublish,
     "SettingsPublish",
-    3072,
+    5120,
     NULL,
     1,
     &pubSetTaskHandle,                // needed to notify task later
@@ -450,6 +473,10 @@ bool loadConfig()
   storage.Orp_SetPoint          = nvs.getDouble("Orp_SetPoint",750);
   storage.PSI_HighThreshold     = nvs.getDouble("PSI_High",0.5);
   storage.PSI_MedThreshold      = nvs.getDouble("PSI_Med",0.25);
+  storage.FLOW_HighThreshold    = nvs.getDouble("FLOW_High",90.);
+  storage.FLOW_MedThreshold     = nvs.getDouble("FLOW_Med",50.);
+  storage.FLOW2_HighThreshold   = nvs.getDouble("FLOW2_High",30.);
+  storage.FLOW2_MedThreshold    = nvs.getDouble("FLOW2_Med",8.);
   storage.WaterTempLowThreshold = nvs.getDouble("WaterTempLow",10.);
   storage.WaterTemp_SetPoint    = nvs.getDouble("WaterTempSet",27.);
   storage.TempExternal          = nvs.getDouble("TempExternal",3.);
@@ -471,6 +498,8 @@ bool loadConfig()
   storage.PhValue               = nvs.getDouble("PhValue",0.);
   storage.OrpValue              = nvs.getDouble("OrpValue",0.);
   storage.PSIValue              = nvs.getDouble("PSIValue",0.4);
+  storage.FLOWValue             = nvs.getDouble("FLOWValue",40.);
+  storage.FLOW2Value            = nvs.getDouble("FLOW2Value",8.);
   storage.AcidFill              = nvs.getDouble("AcidFill",100.);
   storage.ChlFill               = nvs.getDouble("ChlFill",100.);
   storage.pHTankVol             = nvs.getDouble("pHTankVol",20.);
@@ -486,14 +515,14 @@ bool loadConfig()
               storage.FiltrationStartMin,storage.FiltrationStopMax,storage.DelayPIDs);
   Debug.print(DBG_INFO,"%d, %d, %d",storage.PhPumpUpTimeLimit,storage.ChlPumpUpTimeLimit,storage.PublishPeriod);
   Debug.print(DBG_INFO,"%d, %d, %d, %d",storage.PhPIDWindowSize,storage.OrpPIDWindowSize,storage.PhPIDwindowStartTime,storage.OrpPIDwindowStartTime);
-  Debug.print(DBG_INFO,"%3.1f, %4.0f, %3.1f, %3.1f, %3.0f, %3.0f, %4.1f, %8.6f, %9.6f, %11.6f, %11.6f, %3.1f, %3.1f",
-              storage.Ph_SetPoint,storage.Orp_SetPoint,storage.PSI_HighThreshold,
-              storage.PSI_MedThreshold,storage.WaterTempLowThreshold,storage.WaterTemp_SetPoint,storage.TempExternal,
+  Debug.print(DBG_INFO,"%3.1f, %4.0f, %3.1f, %3.0f, %3.0f, %3.1f, %3.0f, %3.0f, %4.1f, %8.6f, %9.6f, %11.6f, %11.6f, %3.1f, %3.1f",
+              storage.Ph_SetPoint,storage.Orp_SetPoint,storage.PSI_HighThreshold,storage.FLOW_HighThreshold,storage.FLOW2_HighThreshold,
+              storage.PSI_MedThreshold,storage.FLOW_MedThreshold,storage.FLOW2_MedThreshold,storage.WaterTempLowThreshold,storage.WaterTemp_SetPoint,storage.TempExternal,
               storage.pHCalibCoeffs0,storage.pHCalibCoeffs1,storage.OrpCalibCoeffs0,storage.OrpCalibCoeffs1,
               storage.PSICalibCoeffs0,storage.PSICalibCoeffs1);
-  Debug.print(DBG_INFO,"%8.0f, %3.0f, %3.0f, %6.0f, %3.0f, %3.0f, %7.0f, %7.0f, %4.2f, %4.2f, %4.0f, %4.2f",
+  Debug.print(DBG_INFO,"%8.0f, %3.0f, %3.0f, %6.0f, %3.0f, %3.0f, %7.0f, %7.0f, %4.2f, %4.2f, %4.0f, %3.0f, %3.0f",
               storage.Ph_Kp,storage.Ph_Ki,storage.Ph_Kd,storage.Orp_Kp,storage.Orp_Ki,storage.Orp_Kd,
-              storage.PhPIDOutput,storage.OrpPIDOutput,storage.TempValue,storage.PhValue,storage.OrpValue,storage.PSIValue);
+              storage.PhPIDOutput,storage.OrpPIDOutput,storage.TempValue,storage.PhValue,storage.OrpValue,storage.PSIValue,storage.FLOWValue,storage.FLOW2Value);
   Debug.print(DBG_INFO,"%3.0f, %3.0f, %3.0f, %3.0f, %3.1f, %3.1f ",storage.AcidFill,storage.ChlFill,storage.pHTankVol,storage.ChlTankVol,
               storage.pHPumpFR,storage.ChlPumpFR);
 
@@ -526,6 +555,10 @@ bool saveConfig()
   i += nvs.putDouble("Orp_SetPoint",storage.Orp_SetPoint);
   i += nvs.putDouble("PSI_High",storage.PSI_HighThreshold);
   i += nvs.putDouble("PSI_Med",storage.PSI_MedThreshold);
+  i += nvs.putDouble("FLOW_High",storage.FLOW_HighThreshold);
+  i += nvs.putDouble("FLOW_Med",storage.FLOW_MedThreshold);
+  i += nvs.putDouble("FLOW2_High",storage.FLOW2_HighThreshold);
+  i += nvs.putDouble("FLOW2_Med",storage.FLOW2_MedThreshold);
   i += nvs.putDouble("WaterTempLow",storage.WaterTempLowThreshold);
   i += nvs.putDouble("WaterTempSet",storage.WaterTemp_SetPoint);
   i += nvs.putDouble("TempExternal",storage.TempExternal);
@@ -547,6 +580,8 @@ bool saveConfig()
   i += nvs.putDouble("PhValue",storage.PhValue);
   i += nvs.putDouble("OrpValue",storage.OrpValue);
   i += nvs.putDouble("PSIValue",storage.PSIValue);
+  i += nvs.putDouble("FLOWValue",storage.FLOWValue);
+  i += nvs.putDouble("FLOW2Value",storage.FLOW2Value);
   i += nvs.putDouble("AcidFill",storage.AcidFill);
   i += nvs.putDouble("ChlFill",storage.ChlFill);
   i += nvs.putDouble("pHTankVol",storage.pHTankVol);

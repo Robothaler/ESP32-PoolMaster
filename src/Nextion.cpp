@@ -32,16 +32,16 @@ static uint8_t debounceR2    = 0;
 // Used to refresh only modified values
 static struct TFTStruct
 {
-  float pH, Orp, pHSP, OrpSP, WT, WTSP, AT, PSI;
+  float pH, Orp, pHSP, OrpSP, WT, WTSP, AT, PSI, flow, flow2;
   uint8_t FSta, FSto, pHTkFill, OrpTkFill, PIDpH, PIDChl;
-  boolean Mode, NetW, Filt, Robot, R0, R1, R2, pHUTErr, ChlUTErr, PSIErr, pHTLErr, ChlTLErr;
+  boolean Mode, NetW, Filt, Robot, R0, R1, R2, pHUTErr, ChlUTErr, PSIErr, FLOWErr, FLOW2Err, pHTLErr, ChlTLErr;
   unsigned long pHPpRT, OrpPpRT;
   String FW;
 } TFTStruc =
 { //default values to force update on next refresh
-  -1., -1., -1., -1., -1., -1., -1., -1.,
+  -1., -1., -1., -1., -1., -1., -1., -1., -1., -1.,
   0, 0, 0, 0, 0, 0,
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
   99, 99,
   ""
 };
@@ -215,6 +215,20 @@ void UpdateTFT()
     temp = String(TFTStruc.PSI, 2) + F("b");
     myNex.writeStr(F("page0.vaPSI.txt"), temp);
     if (CurrentPage == 0)  myNex.writeStr(F("P.txt"), temp);
+  }
+  if (storage.FLOWValue != TFTStruc.flow || !refresh)
+  {
+    TFTStruc.flow = storage.FLOWValue;
+    temp = String(TFTStruc.flow, 2) + F("b");
+    myNex.writeStr(F("page0.vaFLOW.txt"), temp);
+    if (CurrentPage == 0)  myNex.writeStr(F("F.txt"), temp);
+  }
+  if (storage.FLOW2Value != TFTStruc.flow2 || !refresh)
+  {
+    TFTStruc.flow2 = storage.FLOWValue;
+    temp = String(TFTStruc.flow2, 2) + F("b");
+    myNex.writeStr(F("page0.vaFLOW2.txt"), temp);
+    if (CurrentPage == 0)  myNex.writeStr(F("F2.txt"), temp);
   }
 
   if ((storage.FiltrationStop != TFTStruc.FSto) || (storage.FiltrationStart != TFTStruc.FSta) || !refresh)
@@ -409,6 +423,28 @@ void UpdateTFT()
     }
     else
       myNex.writeStr(F("page0.vaPSIErr.val=0"));
+  }
+
+    if (FLOWError != TFTStruc.FLOWErr || !refresh)
+  {
+    TFTStruc.FLOWErr = FLOWError;
+    if (TFTStruc.FLOWErr)
+    {
+      myNex.writeStr(F("page0.vaFLOWErr.val=1"));
+    }
+    else
+      myNex.writeStr(F("page0.vaFLOWErr.val=0"));
+  }
+
+      if (FLOW2Error != TFTStruc.FLOW2Err || !refresh)
+  {
+    TFTStruc.FLOW2Err = FLOW2Error;
+    if (TFTStruc.FLOW2Err)
+    {
+      myNex.writeStr(F("page0.vaFLOW2Err.val=1"));
+    }
+    else
+      myNex.writeStr(F("page0.vaFLOW2Err.val=0"));
   }
 
   if (ChlPump.UpTimeError != TFTStruc.ChlUTErr || !refresh)

@@ -1,9 +1,9 @@
 // Firmware revision
-#define FIRMW "ESP-2.A"
+#define FIRMW "ESP-3.0A"
 
 // WiFi credentials
-#define WIFI_NETWORK "YOUR_WIFI_NETWORK_ID"
-#define WIFI_PASSWORD "YOUR_WIFI_NETWORK_PWD"
+// #define WIFI_NETWORK "YOUR_WIFI_NETWORK_ID"
+// #define WIFI_PASSWORD "YOUR_WIFI_NETWORK_PWD"
 
 //IFTTT key to trigger event
 #define IFTTT_key "/trigger/PoolMaster/with/key/Your_IFTTT_Key"
@@ -17,11 +17,15 @@
 #define PH_PUMP         25
 #define CHL_PUMP        26
 #define RELAY_R0        27   // Projecteur
-#define RELAY_R1         4   // Spare, not connected
+#define RELAY_R1         4   // heatpump
 
-//Digital input pins connected to Acid and Chl tank level reed switches
-#define CHL_LEVEL       39   // not wired. Use NO_LEVEL option of Pump class
-#define PH_LEVEL        36   //                - " -
+//Digital input pins connected to Flow-Meter additional security for Filtrationpump and dosing
+#define FLOW            39   // Flow-Meter in Main-Pipe to be sure Filtrationpump is running
+#define FLOW2           36   // Flow-Meter in Measure-Pipe to be sure water is flowing
+
+//Digital input pins connected to level reed switches in pool to indicate low or high water level
+#define WATER_MAX_LVL   34
+#define WATER_MIN_LVL   35
 
 //One wire bus for the air/water temperature measurement
 #define ONE_WIRE_BUS_A  18
@@ -48,14 +52,14 @@
 
 //Version of config stored in EEPROM
 //Random value. Change this value (to any other value) to revert the config to default values
-#define CONFIG_VERSION 50
+#define CONFIG_VERSION 25
 
 //MQTT stuff including local broker/server IP address, login and pwd
 //------------------------------------------------------------------
 //interval (in miilisec) between MQTT publishes of measurement data
 #define PUBLISHINTERVAL 30000
 
-#define MQTT_SERVER_IP IPAddress(192, 168, 1, 51)
+#define MQTT_SERVER_IP IPAddress(192, 168, 178, 55)
 #define MQTT_SERVER_PORT 1883
 
 //Display timeout before blanking
@@ -63,34 +67,37 @@
 
 // Loop tasks scheduling parameters
 //---------------------------------
-// T1: AnalogPoll
-// T2: PoolServer
-// T3: PoolMaster
-// T4: getTemp
-// T5: OrpRegulation
-// T6: pHRegulation
-// T7: StatusLights
-// T8: PublishMeasures
-// T9: PublishSettings 
+// T1:  AnalogPoll
+// T2:  PoolServer
+// T3:  PoolMaster
+// T4:  getTemp
+// T5:  OrpRegulation
+// T6:  pHRegulation
+// T7:  FlowMeasures
+// T8:  StatusLights
+// T9:  PublishMeasures
+// T10: PublishSettings 
 
 //Periods 
-// Task9 period is initialized with PUBLISHINTERVAL and can be changed dynamically
+// Task10 period is initialized with PUBLISHINTERVAL and can be changed dynamically
 #define PT1 125
 #define PT2 500
 #define PT3 500
 #define PT4 1000 / (1 << (12 - TEMPERATURE_RESOLUTION))
 #define PT5 1000
 #define PT6 1000
-#define PT7 3000
-#define PT8 30000
+#define PT7 1000
+#define PT8 3000
+#define PT9 30000
 
 //Start offsets to spread tasks along time
 // Task1 has no delay
-#define DT2 190/portTICK_PERIOD_MS
-#define DT3 310/portTICK_PERIOD_MS
-#define DT4 440/portTICK_PERIOD_MS
-#define DT5 560/portTICK_PERIOD_MS
-#define DT6 920/portTICK_PERIOD_MS
-#define DT7 100/portTICK_PERIOD_MS
-#define DT8 570/portTICK_PERIOD_MS
-#define DT9 940/portTICK_PERIOD_MS
+#define DT2  190/portTICK_PERIOD_MS
+#define DT3  310/portTICK_PERIOD_MS
+#define DT4  440/portTICK_PERIOD_MS
+#define DT5  560/portTICK_PERIOD_MS
+#define DT6  920/portTICK_PERIOD_MS
+#define DT7  1060/portTICK_PERIOD_MS
+#define DT8  100/portTICK_PERIOD_MS
+#define DT9  570/portTICK_PERIOD_MS
+#define DT10 940/portTICK_PERIOD_MS
