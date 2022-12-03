@@ -21,24 +21,16 @@ static float psi_sensor_value;    // PSI sensor current value
 // Setup instance for flow measurements
 volatile int flow_pulse_count;    // FLOW sensor current value
 unsigned long flow_millis         = 0;
-struct flow
-{ int reading;
-  double value;
-} flow;
-// The hall-effect flow sensor outputs approximately 4.5 pulses per second per litre/minute of flow.
-// 13.51 is to make 100 for the full flow
-const float flow_calibration_factor = 12/13.51*60;
 
 // Setup instance for flow2 measurements
 volatile int flow2_pulse_count;    // FLOW2 sensor current value
 unsigned long flow2_millis         = 0;
-struct flow2
-{ int reading;
-  double value;
-} flow2;
+
 // The hall-effect flow2 sensor outputs approximately 4.5 pulses per second per litre/minute of flow2.
 // 13.51 is to make 100 for the full flow
-const float flow2_calibration_factor = 4.5/13.51*60;
+const float flow_calibration_factor   = 12/13.51*60;
+const float flow2_calibration_factor  = 4.5/13.51*60;
+
 
 // Signal filtering library sample buffers
 static RunningMedian samples_WTemp = RunningMedian(11);
@@ -46,8 +38,6 @@ static RunningMedian samples_ATemp = RunningMedian(11);
 static RunningMedian samples_Ph    = RunningMedian(11);
 static RunningMedian samples_Orp   = RunningMedian(11);
 static RunningMedian samples_PSI   = RunningMedian(11);
-static RunningMedian samples_FLOW  = RunningMedian(11);
-static RunningMedian samples_FLOW2 = RunningMedian(11);
 
 void stack_mon(UBaseType_t&);
 void lockI2C();
@@ -437,31 +427,22 @@ void FlowMeasures(void *pvParameters)
     #endif 
 
       detachInterrupt(digitalPinToInterrupt(FLOW));
-      flow.value = ((1000.0 / (millis() - flow_millis)) * flow_pulse_count) / flow_calibration_factor * 60;
+      storage.FLOWValue = ((1000.0 / (millis() - flow_millis)) * flow_pulse_count) / flow_calibration_factor * 60;
 
-      detachInterrupt(digitalPinToInterrupt(FLOW2));
-      flow2.value = ((1000.0 / (millis() - flow2_millis)) * flow2_pulse_count) / flow2_calibration_factor * 60;
-
-      flow.reading = flow_pulse_count;
       flow_millis=millis();
       flow_pulse_count=0;
       attachInterrupt(digitalPinToInterrupt(FLOW), flow_pulse_counter, RISING);
 
-      flow2.reading = flow2_pulse_count;
+
+      detachInterrupt(digitalPinToInterrupt(FLOW2));
+      storage.FLOWValue = ((1000.0 / (millis() - flow2_millis)) * flow2_pulse_count) / flow2_calibration_factor * 60;
+
       flow2_millis=millis();
       flow2_pulse_count=0;
       attachInterrupt(digitalPinToInterrupt(FLOW2), flow2_pulse_counter, FALLING);
 
-      //FLOW (Main-Pipe)
-      samples_FLOW.add(flow.value);        // compute average of Flow from last 5 measurements
-        storage.FLOWValue = (samples_FLOW.getAverage(5)*0.1875/1000.);
-
-      //FLOW2 (Meassure-Pipe)
-      samples_FLOW2.add(flow2.value);      // compute average of Flow2 from last 5 measurements
-        storage.FLOW2Value = (samples_FLOW2.getAverage(5)*0.1875/1000.);
-
-      Debug.print(DBG_DEBUG,"Flow: %5.0f - %4.2f - Flow2: %5.0f - %3.0f%\r",
-          flow.value,storage.FLOWValue,flow2.value,storage.FLOW2Value);
+      Debug.print(DBG_INFO,"Flow: %4.1f l/min - Flow2: %4.1f l/min\r",
+          storage.FLOWValue,storage.FLOW2Value);
 
     #ifdef CHRONO
     t_act = millis() - td;

@@ -71,7 +71,7 @@ void mqttErrorPublish(const char* Payload){
 void connectToWiFi(){
   Debug.print(DBG_INFO,"[WiFi] Connecting to WiFi...");
   WiFi.mode(WIFI_STA);
-  WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE);
+  //WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE); // When using this workaround, WiFi.localIP() returns 255.255.255.255 after a successful wifi connect and the signal k server can't be found with mdns.
   WiFi.setHostname("PoolMaster"); 
   WiFi.begin(WIFI_NETWORK, WIFI_PASSWORD);
 }

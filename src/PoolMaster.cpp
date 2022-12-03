@@ -58,6 +58,9 @@ void PoolMaster(void *pvParameters)
 
     //update pumps
     FiltrationPump.loop();
+    HeatCirculatorPump.loop();
+    HeatPump.loop();
+    SaltPump.loop();
     PhPump.loop();
     ChlPump.loop();
     RobotPump.loop();  
@@ -77,6 +80,9 @@ void PoolMaster(void *pvParameters)
         ChlPump.ResetUpTime();
         ChlPump.SetTankFill(storage.ChlFill);
         RobotPump.ResetUpTime();
+        HeatCirculatorPump.ResetUpTime();
+        SaltPump.ResetUpTime();
+        HeatPump.ResetUpTime();
 
         EmergencyStopFiltPump = false;
         d_calc = false;
@@ -147,6 +153,40 @@ void PoolMaster(void *pvParameters)
         Debug.print(DBG_INFO,"Robot Stop after: %d mn",(int)(millis()-RobotPump.LastStartTime)/1000/60);
     }
 
+    //If water heating is desired and filtration has been running for over 5mins (so that measured water temp is accurate), open/close the HEAT_ON relay as required
+    //in order to regulate the water temp. When closing the HEAT_ON relay, my house heating system switches to a fixed water temperature mode and starts the pool water
+    //circulator in order to heat-up the heat exchanger located on the pool filtration water circuit
+    if (storage.WaterHeat && FiltrationPump.IsRunning())
+    {
+    if (FiltrationPump.UpTime / 1000 / 60 > 5)
+    {
+      if (storage.TempValue < (storage.WaterTemp_SetPoint - 0.2))
+      {
+        HeatCirculatorPump.Start();
+      }
+      else if (storage.TempValue > (storage.WaterTemp_SetPoint + 0.2))
+      {
+        HeatCirculatorPump.Stop();
+      }
+    }
+    }
+    else
+    {
+    HeatCirculatorPump.Stop();
+    }
+
+    //The circulator of the pool water heating circuit needs to run regularly to avoid blocking
+    //Let it run every day at noon for 2 mins
+    if (storage.AutoMode && ((hour() == 12) && (minute() == 0)))
+    {
+    HeatCirculatorPump.Start();
+    }
+
+    if (storage.AutoMode && ((hour() == 12) && (minute() == 2)))
+    {
+    HeatCirculatorPump.Stop();
+    }
+
     // start PIDs with delay after FiltrationStart in order to let the readings stabilize
     // start inhibited if water temperature below threshold and/or in winter mode
     if (FiltrationPump.IsRunning() && storage.AutoMode && !FLOW2Error && !storage.WinterMode && !PhPID.GetMode() &&
@@ -189,16 +229,16 @@ void PoolMaster(void *pvParameters)
         mqttErrorPublish("{\"PSI Error\":1}");
     }
 
-    //If filtration pump has been running for over 45secs but flow in Main-Pipe is still low, stop the filtration pump, something is wrong, set error flag
-    if (FiltrationPump.IsRunning() && ((millis() - FiltrationPump.LastStartTime) > 45000) && (storage.FLOWValue < storage.FLOW_MedThreshold))
+    //If filtration pump has been running for over 40secs but flow in Main-Pipe is still low, stop the filtration pump, something is wrong, set error flag
+    if (FiltrationPump.IsRunning() && ((millis() - FiltrationPump.LastStartTime) > 40000) && (storage.FLOWValue < storage.FLOW_MedThreshold))
     {
         FiltrationPump.Stop();
         FLOWError = true;
         mqttErrorPublish("{\"FLOW Error\":1}");
     }
 
-    //If filtration pump has been running for over 45secs but flow in Meassure-Pipe is still low, something is wrong, set error flag
-    if (FiltrationPump.IsRunning() && ((millis() - FiltrationPump.LastStartTime) > 45000) && (storage.FLOW2Value < storage.FLOW2_MedThreshold))
+    //If filtration pump has been running for over 30secs but flow in Meassure-Pipe is still low, something is wrong, set error flag
+    if (FiltrationPump.IsRunning() && ((millis() - FiltrationPump.LastStartTime) > 30000) && (storage.FLOW2Value < storage.FLOW2_MedThreshold))
     {
         FLOW2Error = true;
         mqttErrorPublish("{\"FLOW2 Error\":1}");
@@ -213,6 +253,23 @@ void PoolMaster(void *pvParameters)
     } else if(storage.PSIValue >= storage.PSI_MedThreshold)
         PSIError = false;
 
+        // HighFlow-Rate error
+    if (storage.FLOWValue > storage.FLOW_HighThreshold)
+    {
+        FiltrationPump.Stop();
+        FLOWError = true;
+        mqttErrorPublish("{\"FLOW Error\":1}");
+    } else if(storage.FLOWValue >= storage.FLOW_MedThreshold)
+        FLOWError = false;
+
+    // HighFlow2-Rate error
+    if (storage.FLOW2Value > storage.FLOW2_HighThreshold)
+    {
+        FLOW2Error = true;
+        mqttErrorPublish("{\"FLOW2 Error\":1}");
+    } else if(storage.FLOW2Value >= storage.FLOW2_MedThreshold)
+        FLOW2Error = false;   
+    
     //UPdate Nextion TFT
     UpdateTFT();
 
@@ -321,7 +378,7 @@ void Send_IFTTTNotif(){
                 {
                     url2 += String("High");
                 }
-                url2 += String("%20flow:%20") + String(storage.FLOWValue) + String("bar");
+                url2 += String("%20flow:%20") + String(storage.FLOWValue) + String("%");
                 wificlient.print(String("POST ") + url1 + url2 + String(" HTTP/1.1\r\nHost: maker.ifttt.com\r\nConnection: close\r\n\r\n"));
                 notif_sent[0] = true;
             }
@@ -343,7 +400,7 @@ void Send_IFTTTNotif(){
                 {
                     url2 += String("High");
                 }
-                url2 += String("%20flow2:%20") + String(storage.FLOW2Value) + String("bar");
+                url2 += String("%20flow2:%20") + String(storage.FLOW2Value) + String("%");
                 wificlient.print(String("POST ") + url1 + url2 + String(" HTTP/1.1\r\nHost: maker.ifttt.com\r\nConnection: close\r\n\r\n"));
                 notif_sent[0] = true;
             }

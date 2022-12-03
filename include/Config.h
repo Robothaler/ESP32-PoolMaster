@@ -1,5 +1,5 @@
 // Firmware revision
-#define FIRMW "ESP-3.0A"
+#define FIRMW "ESP-3.01"
 
 // WiFi credentials
 // #define WIFI_NETWORK "YOUR_WIFI_NETWORK_ID"
@@ -11,17 +11,27 @@
 // PID Directions (either DIRECT or REVERSE depending on Ph/Orp correction vs water properties)
 #define PhPID_DIRECTION REVERSE
 #define OrpPID_DIRECTION DIRECT
+#define SALT_DIRECTION  DIRECT
 
 #define FILTRATION_PUMP 32
 #define ROBOT_PUMP	    33
 #define PH_PUMP         25
 #define CHL_PUMP        26
-#define RELAY_R0        27   // Projecteur
-#define RELAY_R1         4   // heatpump
+#define RELAY_R0        27  // Projecteur
+#define RELAY_R1         4  // spare
+
+#define SALT_PUMP       P0  // Salt-Manager
+#define SALT_POL_1      P1  // Salt-Manager Polarity DIRECT
+#define SALT_POL_2      P2  // Salt-Manager Polarity REVERSE
+#define HEAT_PUMP       P3  // Heatpump
+#define HEAT_ON         P4  // Solar, 3-way-valve
+#define LIGHT_POOL      P5  // Pool Spotlight
+#define LIGHT_ROOM      P6  // Serviceroom light
+#define WATER_FILL      P7  // Freshwater-Valve to fillup the Pool -> Needs to be combined with Levelsensors in the skimmer
 
 //Digital input pins connected to Flow-Meter additional security for Filtrationpump and dosing
 #define FLOW            39   // Flow-Meter in Main-Pipe to be sure Filtrationpump is running
-#define FLOW2           36   // Flow-Meter in Measure-Pipe to be sure water is flowing
+#define FLOW2           36   // Flow-Meter in Measure-Pipe to be sure water is flowing to get accurate values of ph and orp meter
 
 //Digital input pins connected to level reed switches in pool to indicate low or high water level
 #define WATER_MAX_LVL   34
@@ -52,7 +62,7 @@
 
 //Version of config stored in EEPROM
 //Random value. Change this value (to any other value) to revert the config to default values
-#define CONFIG_VERSION 25
+#define CONFIG_VERSION 15
 
 //MQTT stuff including local broker/server IP address, login and pwd
 //------------------------------------------------------------------

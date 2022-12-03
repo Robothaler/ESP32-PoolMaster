@@ -1,6 +1,6 @@
 #pragma once
 #define ARDUINOJSON_USE_DOUBLE 1  // Required to force ArduinoJSON to treat float as double
-#define DEBUG_LEVEL DBG_INFO      // Possible levels : NONE/ERROR/WARNING/INFO/DEBUG/VERBOSE
+#define DEBUG_LEVEL DBG_DEBUG      // Possible levels : NONE/ERROR/WARNING/INFO/DEBUG/VERBOSE
 // #define CHRONO                    // Activate tasks timings traces for profiling
 // #define SIMU                      // Used to simulate pH/ORP sensors. Very simple simulation:
                                     // the sensor value is computed from the output of the PID 
@@ -17,6 +17,7 @@
 #include <stdlib.h>               // Definitions  for common types, variables, and functions
 #include <ArduinoJson.h>          // JSON library
 #include <Pump.h>                 // Simple library to handle home-pool filtration and peristaltic pumps
+#include <PCF_Pump.h>             // Simple library to handle home-pool filtration and peristaltic pumps
 #include <DallasTemperature.h>    // Maxim (Dallas DS18B20) Temperature temperature sensor library
 #include <MQTT.h>                 // MQTT library
 #include <esp_task_wdt.h>         // ESP task management library
@@ -28,13 +29,14 @@
 #include <ArduinoOTA.h>           // On The Air WiFi update 
 #include "AsyncMqttClient.h"      // Async. MQTT client
 #include "ADS1115.h"              // ADS1115 sensors library
+#include "PCF8574.h"              // IO-Portexpander
 #include <credentials.h>          // WIFI Credentials
 
 // General shared data structure
 struct StoreStruct
 {
   uint8_t ConfigVersion;   // This is for testing if first time using eeprom or not
-  bool Ph_RegulationOnOff, Orp_RegulationOnOff, AutoMode, WinterMode;
+  bool Ph_RegulationOnOff, Orp_RegulationOnOff, AutoMode, SaltMode, WinterMode, WaterHeat;
   uint8_t FiltrationDuration, FiltrationStart, FiltrationStop, FiltrationStartMin, FiltrationStopMax, DelayPIDs;
   unsigned long PhPumpUpTimeLimit, ChlPumpUpTimeLimit,PublishPeriod;
   unsigned long PhPIDWindowSize, OrpPIDWindowSize, PhPIDwindowStartTime, OrpPIDwindowStartTime;
@@ -50,12 +52,18 @@ extern StoreStruct storage;
 #define QUEUE_ITEM_SIZE 100
 extern QueueHandle_t queueIn;
 
-//The four pumps of the system (instanciate the Pump class)
+//Set the I2C HEX Adress for the second PCF8574A IO-Portexpander
+extern PCF8574 pcf8574;
+
+//The six pumps of the system (instanciate the Pump class)
 //In this case, all pumps start/Stop are managed by relays
 extern Pump FiltrationPump;
 extern Pump PhPump;
 extern Pump ChlPump;
 extern Pump RobotPump;
+extern PCF_Pump HeatPump;
+extern PCF_Pump SaltPump;
+extern PCF_Pump HeatCirculatorPump;
 
 //PIDs instances
 //Specify the links and initial tuning parameters

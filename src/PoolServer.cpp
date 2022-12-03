@@ -212,9 +212,22 @@ void ProcessCommand(void *pvParameters)
             storage.AutoMode = 1;
           }
           saveParam("AutoMode",storage.AutoMode);
+        }        
+        else if (command.containsKey(F("Heat"))) //"Heat" command which starts/stops water heating
+        {
+          if ((int)command[F("Heat")] == 0)
+          {
+            storage.WaterHeat = false;
+            HeatCirculatorPump.Stop();
+          }
+          else
+          {
+            storage.WaterHeat = true;
+          }
+          saveParam("Heat",storage.WaterHeat);
         }
         else if (command.containsKey(F("Winter"))) //"Winter" command which activate/deactivate Winter Mode
-        {
+          {
           (bool)command[F("Winter")] ? storage.WinterMode = true : storage.WinterMode = false;
           saveParam("WinterMode",storage.WinterMode);
           PublishSettings(); 
@@ -430,6 +443,7 @@ void ProcessCommand(void *pvParameters)
           {
             EmergencyStopFiltPump = true;
             FiltrationPump.Stop();  //stop filtration pump
+            HeatCirculatorPump.Stop();  //stop Heat pump
 
             //Stop PIDs
             SetPhPID(false);
@@ -439,14 +453,17 @@ void ProcessCommand(void *pvParameters)
           {
             EmergencyStopFiltPump = false;
             FiltrationPump.Start();   //start filtration pump
+            HeatCirculatorPump.Start();   //start Heat pump
           }
         }
         else if (command.containsKey(F("RobotPump"))) //"RobotPump" command which starts or stops the Robot pump
         {
           if ((int)command[F("RobotPump")] == 0){
-            RobotPump.Stop();    //stop robot pump
+            //RobotPump.Stop();    //stop robot pump
+            SaltPump.Stop();    //stop Salt pump
           } else {
-            RobotPump.Start();   //start robot pump
+            //RobotPump.Start();   //start robot pump
+            SaltPump.Start();   //start robot pump
           }  
         }
         else if (command.containsKey(F("PhPump"))) //"PhPump" command which starts or stops the Acid pump

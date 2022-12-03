@@ -1,5 +1,5 @@
 // MQTT publish tasks
-// - PublishSettings (PoolTopicSet1-5)
+// - PublishSettings (PoolTopicSet1-6)
 // - PublishMeasures (PoolTopicMeas1-2)
 // The tasks are waiting for notification to publish. PublishMeasures has also a timeout allowing to publish
 // measures regularly
@@ -10,7 +10,7 @@
 #include "PoolMaster.h"
 
 //Size of the buffer to store outgoing JSON messages
-#define PAYLOAD_BUFFER_LENGTH 200
+#define PAYLOAD_BUFFER_LENGTH 150
 
 // BitMaps with GPIO states
 static uint8_t BitMap1 = 0;
@@ -53,9 +53,10 @@ void EncodeBitMap()
   BitMap1 |= (PhPump.TankLevel() & 1) << 1;
   BitMap1 |= (ChlPump.TankLevel() & 1) << 0;
 
-  BitMap2 |= (PhPID.GetMode() & 1) << 7;
-  BitMap2 |= (OrpPID.GetMode() & 1) << 6;
-  BitMap2 |= (storage.AutoMode & 1) << 5;
+  BitMap2 |= (PhPID.GetMode() & 1) << 8;
+  BitMap2 |= (OrpPID.GetMode() & 1) << 7;
+  BitMap2 |= (storage.AutoMode & 1) << 6;
+  BitMap2 |= (storage.WaterHeat & 1) << 5;
   BitMap2 |= (RobotPump.IsRunning() & 1) << 4;
 
   BitMap2 |= !digitalRead(RELAY_R0) << 3;
@@ -312,11 +313,17 @@ void MeasuresPublish(void *pvParameters)
         root["Tmp"]     = storage.TempValue * 100;
         root["pH"]      = storage.PhValue * 100;
         root["PSI"]     = storage.PSIValue * 100;
-        root["FLOW"]    = storage.FLOWValue * 100;
-        root["FLOW2"]   = storage.FLOW2Value * 100;
+        root["FLOW"]    = storage.FLOWValue;
+        root["FLOW2"]   = storage.FLOW2Value;
         root["Orp"]     = storage.OrpValue;
         root["PhUpT"]   = PhPump.UpTime / 1000;
         root["ChlUpT"]  = ChlPump.UpTime / 1000;
+
+        root["FUpT"]   = FiltrationPump.UpTime / 1000;          // Uptime of filtrationpump
+        root["HPUpT"]  = HeatPump.UpTime / 1000;                // Uptime of heatpump
+        root["SLUpT"]  = SaltPump.UpTime / 1000;                // Uptime of saltmanager
+        root["HPUpT"]  = HeatCirculatorPump.UpTime / 1000;      // Uptime of Solar-3-Way-Valve
+        
 
         PublishTopic(PoolTopicMeas1, root);
     }

@@ -1,6 +1,7 @@
 #undef __STRICT_ANSI__              // work-around for Time Zone definition
 #include <stdint.h>                 // std lib (types definitions)
 #include <Arduino.h>                // Arduino framework
+#include <esp_sntp.h>
 
 #include "Config.h"
 #include "PoolMaster.h"
@@ -30,16 +31,33 @@ String Firmw = FIRMW;
 StoreStruct storage =
 { 
   CONFIG_VERSION,
-  0, 0, 1, 0,
-  10, 10, 20, 8, 22, 20,
+  1, 1, 1, 0, 0, 0,
+  13, 8, 21, 8, 22, 20,
   2700, 2700, 30000,
   1800000, 1800000, 0, 0,
-  7.3, 720.0, 1.8, 0.7, 90.0, 60.0, 30.0, 10.0, 10.0, 18.0, 3.0, 3.49625783, -2.011338191, -876.430775, 2328.8985, 1.0, 0.0,
+  7.3, 720.0, 1.8, 90, 40.0, 0.4, 30.0, 7.0, 10.0, 30.0, 3.0, 3.48464236, -2.27151021, -951.822669, 2421.45966, 1.0, 0.0,
   2700000.0, 0.0, 0.0, 18000.0, 0.0, 0.0, 0.0, 0.0, 28.0, 7.3, 720., 1.3, 70, 9,
   60.0, 85.0, 20.0, 20.0, 1.5, 1.5
 };
 
+/*
+Description of above values
+
+ConfigVersion
+Ph_RegulationOnOff, Orp_RegulationOnOff, AutoMode, SaltMode, WinterMode, WaterHeat
+FiltrationDuration, FiltrationStart, FiltrationStop, FiltrationStartMin, FiltrationStopMax, DelayPIDs
+PhPumpUpTimeLimit, ChlPumpUpTimeLimit, PublishPeriod
+PhPIDWindowSize, OrpPIDWindowSize, PhPIDwindowStartTime, OrpPIDwindowStartTime
+Ph_SetPoint, Orp_SetPoint, PSI_HighThreshold, FLOW_HighThreshold, FLOW2_HighThreshold, PSI_MedThreshold, FLOW_MedThreshold, FLOW2_MedThreshold, WaterTempLowThreshold, WaterTemp_SetPoint, TempExternal, pHCalibCoeffs0, pHCalibCoeffs1, OrpCalibCoeffs0, OrpCalibCoeffs1, PSICalibCoeffs0, PSICalibCoeffs1
+Ph_Kp, Ph_Ki, Ph_Kd, Orp_Kp, Orp_Ki, Orp_Kd, PhPIDOutput, OrpPIDOutput, TempValue, PhValue, OrpValue, PSIValue, FLOWValue, FLOW2Value);
+AcidFill, ChlFill, pHTankVol, ChlTankVol, pHPumpFR, ChlPumpFR);
+
+*/
+
 tm timeinfo;
+
+//Set the I2C HEX Adress for the second PCF8574A IO-Portexpander
+PCF8574 pcf8574(0x3F);
 
 // Various global flags
 volatile bool startTasks = false;               // Signal to start loop tasks
@@ -63,13 +81,16 @@ Preferences nvs;
 // be read from NVS later. This means that the correct objects attributes must be set later in
 // the setup function (fortunatelly, init methods exist).
 
-// The four pumps of the system (instanciate the Pump class)
+// The six pumps of the system (instanciate the Pump class)
 // In this case, all pumps start/Stop are managed by relays. pH, ORP and Robot pumps are interlocked with 
 // filtration pump
 Pump FiltrationPump(FILTRATION_PUMP, FILTRATION_PUMP);
 Pump PhPump(PH_PUMP, PH_PUMP, NO_LEVEL, FILTRATION_PUMP, storage.pHPumpFR, storage.pHTankVol, storage.AcidFill);
 Pump ChlPump(CHL_PUMP, CHL_PUMP, NO_LEVEL, FILTRATION_PUMP, storage.ChlPumpFR, storage.ChlTankVol, storage.ChlFill);
 Pump RobotPump(ROBOT_PUMP, ROBOT_PUMP, NO_TANK, FILTRATION_PUMP);
+PCF_Pump SaltPump(SALT_PUMP, SALT_PUMP, NO_TANK, FILTRATION_PUMP);
+PCF_Pump HeatPump(HEAT_PUMP, HEAT_PUMP, NO_TANK, FILTRATION_PUMP);
+PCF_Pump HeatCirculatorPump(HEAT_ON, HEAT_ON, NO_TANK, FILTRATION_PUMP);
 
 // PIDs instances
 //Specify the direction and initial tuning parameters
@@ -240,6 +261,27 @@ void setup()
   Wire.write((uint8_t)0xFF);
   Wire.endTransmission();
 
+  // Set pinMode of PCF8574
+  for(int i=0;i<8;i++) {
+    pcf8574.pinMode(i, OUTPUT);
+  }
+	Debug.print(DBG_DEBUG,"[PCF8574_RELAY] Init pcf8574...");
+	if (pcf8574.begin()){
+    Debug.print(DBG_DEBUG,"[PCF8574_RELAY] OK");
+	}else{
+    Debug.print(DBG_DEBUG,"[PCF8574_RELAY] not OK");
+	}
+
+  // As the relays on the board are activated by a LOW level, set all levels HIGH at startup (Second PCF8574)
+  pcf8574.digitalWrite(SALT_PUMP, HIGH);
+  pcf8574.digitalWrite(SALT_POL_1, HIGH);
+  pcf8574.digitalWrite(SALT_POL_2, HIGH);
+  pcf8574.digitalWrite(HEAT_PUMP, HIGH);
+  pcf8574.digitalWrite(HEAT_ON, HIGH);
+  pcf8574.digitalWrite(LIGHT_POOL, HIGH);
+  pcf8574.digitalWrite(LIGHT_ROOM, HIGH);
+  pcf8574.digitalWrite(WATER_FILL, HIGH);
+
   // Initialize PIDs
   storage.PhPIDwindowStartTime  = millis();
   storage.OrpPIDwindowStartTime = millis();
@@ -261,6 +303,9 @@ void setup()
 
   //Initialize pump instances with stored config data
   FiltrationPump.SetMaxUpTime(0);     //no runtime limit for the filtration pump
+  HeatCirculatorPump.SetMaxUpTime(0); //no runtime limit for the Solar 3-way-valve
+  HeatPump.SetMaxUpTime(0);           //no runtime limit for the heatpump
+  SaltPump.SetMaxUpTime(0);           //no runtime limit for the saltmanager
 
   RobotPump.SetMaxUpTime(0);          //no runtime limit for the robot pump
 
@@ -281,6 +326,10 @@ void setup()
 
   // Robot pump off at start
   RobotPump.Stop();
+  HeatPump.Stop();
+  SaltPump.Stop();
+  HeatCirculatorPump.Stop();
+
 
   // Create queue for external commands
   queueIn = xQueueCreate((UBaseType_t)QUEUE_ITEMS_NBR,(UBaseType_t)QUEUE_ITEM_SIZE);
@@ -455,7 +504,9 @@ bool loadConfig()
   storage.Ph_RegulationOnOff    = nvs.getBool("Ph_RegOnOff",false);
   storage.Orp_RegulationOnOff   = nvs.getBool("Orp_RegOnOff",false);  
   storage.AutoMode              = nvs.getBool("AutoMode",true);
+  storage.SaltMode              = nvs.getBool("SaltMode",true);
   storage.WinterMode            = nvs.getBool("WinterMode",false);
+  storage.WaterHeat             = nvs.getBool("Heat",false);
   storage.FiltrationDuration    = nvs.getUChar("FiltrDuration",12);
   storage.FiltrationStart       = nvs.getUChar("FiltrStart",8);
   storage.FiltrationStop        = nvs.getUChar("FiltrStop",20);
@@ -471,7 +522,7 @@ bool loadConfig()
   storage.OrpPIDwindowStartTime = nvs.getULong("OrpPIDwStart",0);
   storage.Ph_SetPoint           = nvs.getDouble("Ph_SetPoint",7.3);
   storage.Orp_SetPoint          = nvs.getDouble("Orp_SetPoint",750);
-  storage.PSI_HighThreshold     = nvs.getDouble("PSI_High",0.5);
+  storage.PSI_HighThreshold     = nvs.getDouble("PSI_High",1.8);
   storage.PSI_MedThreshold      = nvs.getDouble("PSI_Med",0.25);
   storage.FLOW_HighThreshold    = nvs.getDouble("FLOW_High",90.);
   storage.FLOW_MedThreshold     = nvs.getDouble("FLOW_Med",50.);
@@ -510,7 +561,7 @@ bool loadConfig()
   nvs.end();
 
   Debug.print(DBG_INFO,"%d",storage.ConfigVersion);
-  Debug.print(DBG_INFO,"%d, %d, %d, %d",storage.Ph_RegulationOnOff,storage.Orp_RegulationOnOff,storage.AutoMode,storage.WinterMode);
+  Debug.print(DBG_INFO,"%d, %d, %d, %d, %d, %d",storage.Ph_RegulationOnOff,storage.Orp_RegulationOnOff,storage.AutoMode,storage.SaltMode,storage.WinterMode,storage.WaterHeat);
   Debug.print(DBG_INFO,"%d, %d, %d, %d, %d, %d",storage.FiltrationDuration,storage.FiltrationStart,storage.FiltrationStop,
               storage.FiltrationStartMin,storage.FiltrationStopMax,storage.DelayPIDs);
   Debug.print(DBG_INFO,"%d, %d, %d",storage.PhPumpUpTimeLimit,storage.ChlPumpUpTimeLimit,storage.PublishPeriod);
@@ -538,6 +589,7 @@ bool saveConfig()
   i += nvs.putBool("Orp_RegOnOff",storage.Orp_RegulationOnOff);  
   i += nvs.putBool("AutoMode",storage.AutoMode);
   i += nvs.putBool("WinterMode",storage.WinterMode);
+  i += nvs.putBool("Heat",storage.WaterHeat);
   i += nvs.putUChar("FiltrDuration",storage.FiltrationDuration);
   i += nvs.putUChar("FiltrStart",storage.FiltrationStart);
   i += nvs.putUChar("FiltrStop",storage.FiltrationStop);
@@ -661,15 +713,21 @@ void unlockI2C(){
 
 // Set time parameters, including DST
 void StartTime(){
-  configTime(0, 0,"0.pool.ntp.org","1.pool.ntp.org","2.pool.ntp.org"); // 3 possible NTP servers
+  configTime(0, 0,"0.pool.ntp.org","1.pool.ntp.org","192.168.178.1"); // 3 possible NTP servers
   setenv("TZ","CET-1CEST,M3.5.0/2,M10.5.0/3",3);                       // configure local time with automatic DST  
   tzset();
-  delay(200);
+  int retry = 0;
+  const int retry_count = 15;
+  while(sntp_get_sync_status() == SNTP_SYNC_STATUS_RESET && ++retry < retry_count){
+    Serial.print(".");
+    vTaskDelay(2000 / portTICK_PERIOD_MS);
+  }
+  Serial.println("");
   Debug.print(DBG_INFO,"NTP configured");
 }
 
 void readLocalTime(){
-  if(!getLocalTime(&timeinfo)){
+  if(!getLocalTime(&timeinfo,5000U)){
     Debug.print(DBG_WARNING,"Failed to obtain time");
     StartTime();
   }
