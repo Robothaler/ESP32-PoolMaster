@@ -16,7 +16,7 @@
 #include <Wire.h>                 // Two wires / I2C library
 #include <stdlib.h>               // Definitions  for common types, variables, and functions
 #include <ArduinoJson.h>          // JSON library
-#include <Pump.h>                 // Simple library to handle home-pool filtration and peristaltic pumps
+//#include <Pump.h>                 // Simple library to handle home-pool filtration and peristaltic pumps
 #include <PCF_Pump.h>             // Simple library to handle home-pool filtration and peristaltic pumps
 #include <DallasTemperature.h>    // Maxim (Dallas DS18B20) Temperature temperature sensor library
 #include <MQTT.h>                 // MQTT library
@@ -57,13 +57,13 @@ extern PCF8574 pcf8574;
 
 //The six pumps of the system (instanciate the Pump class)
 //In this case, all pumps start/Stop are managed by relays
-extern Pump FiltrationPump;
-extern Pump PhPump;
-extern Pump ChlPump;
-extern Pump RobotPump;
+extern PCF_Pump FiltrationPump;
+extern PCF_Pump PhPump;
+extern PCF_Pump ChlPump;
+extern PCF_Pump RobotPump;
 extern PCF_Pump HeatPump;
 extern PCF_Pump SaltPump;
-extern PCF_Pump HeatCirculatorPump;
+extern PCF_Pump SolarHeatPump;
 
 //PIDs instances
 //Specify the links and initial tuning parameters
