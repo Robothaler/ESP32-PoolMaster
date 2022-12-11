@@ -58,7 +58,7 @@ void PoolMaster(void *pvParameters)
 
     //update pumps
     FiltrationPump.loop();
-    HeatCirculatorPump.loop();
+    SolarHeatPump.loop();
     HeatPump.loop();
     SaltPump.loop();
     PhPump.loop();
@@ -80,7 +80,7 @@ void PoolMaster(void *pvParameters)
         ChlPump.ResetUpTime();
         ChlPump.SetTankFill(storage.ChlFill);
         RobotPump.ResetUpTime();
-        HeatCirculatorPump.ResetUpTime();
+        SolarHeatPump.ResetUpTime();
         SaltPump.ResetUpTime();
         HeatPump.ResetUpTime();
 
@@ -162,29 +162,29 @@ void PoolMaster(void *pvParameters)
     {
       if (storage.TempValue < (storage.WaterTemp_SetPoint - 0.2))
       {
-        HeatCirculatorPump.Start();
+        SolarHeatPump.Start();
       }
       else if (storage.TempValue > (storage.WaterTemp_SetPoint + 0.2))
       {
-        HeatCirculatorPump.Stop();
+        SolarHeatPump.Stop();
       }
     }
     }
     else
     {
-    HeatCirculatorPump.Stop();
+    SolarHeatPump.Stop();
     }
 
     //The circulator of the pool water heating circuit needs to run regularly to avoid blocking
     //Let it run every day at noon for 2 mins
     if (storage.AutoMode && ((hour() == 12) && (minute() == 0)))
     {
-    HeatCirculatorPump.Start();
+    SolarHeatPump.Start();
     }
 
     if (storage.AutoMode && ((hour() == 12) && (minute() == 2)))
     {
-    HeatCirculatorPump.Stop();
+    SolarHeatPump.Stop();
     }
 
     // start PIDs with delay after FiltrationStart in order to let the readings stabilize
