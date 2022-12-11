@@ -218,7 +218,7 @@ void ProcessCommand(void *pvParameters)
           if ((int)command[F("Heat")] == 0)
           {
             storage.WaterHeat = false;
-            HeatCirculatorPump.Stop();
+            SolarHeatPump.Stop();
           }
           else
           {
@@ -443,7 +443,6 @@ void ProcessCommand(void *pvParameters)
           {
             EmergencyStopFiltPump = true;
             FiltrationPump.Stop();  //stop filtration pump
-            HeatCirculatorPump.Stop();  //stop Heat pump
 
             //Stop PIDs
             SetPhPID(false);
@@ -453,17 +452,14 @@ void ProcessCommand(void *pvParameters)
           {
             EmergencyStopFiltPump = false;
             FiltrationPump.Start();   //start filtration pump
-            HeatCirculatorPump.Start();   //start Heat pump
           }
         }
         else if (command.containsKey(F("RobotPump"))) //"RobotPump" command which starts or stops the Robot pump
         {
           if ((int)command[F("RobotPump")] == 0){
-            //RobotPump.Stop();    //stop robot pump
-            SaltPump.Stop();    //stop Salt pump
+            RobotPump.Stop();    //stop robot pump
           } else {
-            //RobotPump.Start();   //start robot pump
-            SaltPump.Start();   //start robot pump
+            RobotPump.Start();   //start robot pump
           }  
         }
         else if (command.containsKey(F("PhPump"))) //"PhPump" command which starts or stops the Acid pump

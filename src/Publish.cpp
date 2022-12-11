@@ -322,7 +322,7 @@ void MeasuresPublish(void *pvParameters)
         root["FUpT"]   = FiltrationPump.UpTime / 1000;          // Uptime of filtrationpump
         root["HPUpT"]  = HeatPump.UpTime / 1000;                // Uptime of heatpump
         root["SLUpT"]  = SaltPump.UpTime / 1000;                // Uptime of saltmanager
-        root["HPUpT"]  = HeatCirculatorPump.UpTime / 1000;      // Uptime of Solar-3-Way-Valve
+        root["HPUpT"]  = SolarHeatPump.UpTime / 1000;      // Uptime of Solar-3-Way-Valve
         
 
         PublishTopic(PoolTopicMeas1, root);
