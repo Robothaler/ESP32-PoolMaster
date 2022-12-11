@@ -81,16 +81,16 @@ Preferences nvs;
 // be read from NVS later. This means that the correct objects attributes must be set later in
 // the setup function (fortunatelly, init methods exist).
 
-// The six pumps of the system (instanciate the Pump class)
-// In this case, all pumps start/Stop are managed by relays. pH, ORP and Robot pumps are interlocked with 
+// The seven pumps of the system (instanciate the Pump class)
+// In this case, all pumps start/Stop are managed by relays. pH, ORP, Salt, SolarHeat, Heat and Robot pumps are interlocked with 
 // filtration pump
-Pump FiltrationPump(FILTRATION_PUMP, FILTRATION_PUMP);
-Pump PhPump(PH_PUMP, PH_PUMP, NO_LEVEL, FILTRATION_PUMP, storage.pHPumpFR, storage.pHTankVol, storage.AcidFill);
-Pump ChlPump(CHL_PUMP, CHL_PUMP, NO_LEVEL, FILTRATION_PUMP, storage.ChlPumpFR, storage.ChlTankVol, storage.ChlFill);
-Pump RobotPump(ROBOT_PUMP, ROBOT_PUMP, NO_TANK, FILTRATION_PUMP);
+PCF_Pump FiltrationPump(FILTRATION_PUMP, FILTRATION_PUMP);
+PCF_Pump PhPump(PH_PUMP, PH_PUMP, NO_LEVEL, FILTRATION_PUMP, storage.pHPumpFR, storage.pHTankVol, storage.AcidFill);
+PCF_Pump ChlPump(CHL_PUMP, CHL_PUMP, NO_LEVEL, FILTRATION_PUMP, storage.ChlPumpFR, storage.ChlTankVol, storage.ChlFill);
+PCF_Pump RobotPump(ROBOT_PUMP, ROBOT_PUMP, NO_TANK, FILTRATION_PUMP);
 PCF_Pump SaltPump(SALT_PUMP, SALT_PUMP, NO_TANK, FILTRATION_PUMP);
 PCF_Pump HeatPump(HEAT_PUMP, HEAT_PUMP, NO_TANK, FILTRATION_PUMP);
-PCF_Pump HeatCirculatorPump(HEAT_ON, HEAT_ON, NO_TANK, FILTRATION_PUMP);
+PCF_Pump SolarHeatPump(HEAT_ON, HEAT_ON, NO_TANK, FILTRATION_PUMP);
 
 // PIDs instances
 //Specify the direction and initial tuning parameters
@@ -184,21 +184,20 @@ void setup()
   }  
 
   //Define pins directions
-  pinMode(FILTRATION_PUMP, OUTPUT);
-  pinMode(PH_PUMP, OUTPUT);
-  pinMode(CHL_PUMP, OUTPUT);
-  pinMode(ROBOT_PUMP,OUTPUT);
-
+  pinMode(SALT_POL_1, OUTPUT);
+  pinMode(SALT_POL_2, OUTPUT);
+  pinMode(LIGHT_POOL, OUTPUT);
+  pinMode(LIGHT_ROOM, OUTPUT);
   pinMode(RELAY_R0, OUTPUT);
   pinMode(RELAY_R1, OUTPUT);
 
   pinMode(BUZZER, OUTPUT);
 
   // As the relays on the board are activated by a LOW level, set all levels HIGH at startup
-  digitalWrite(FILTRATION_PUMP,HIGH);
-  digitalWrite(PH_PUMP,HIGH); 
-  digitalWrite(CHL_PUMP,HIGH);
-  digitalWrite(ROBOT_PUMP,HIGH);
+  digitalWrite(SALT_POL_1,HIGH);
+  digitalWrite(SALT_POL_2,HIGH); 
+  digitalWrite(LIGHT_POOL,HIGH);
+  digitalWrite(LIGHT_ROOM,HIGH);
   digitalWrite(RELAY_R0,HIGH);
   digitalWrite(RELAY_R1,HIGH);
 
@@ -273,13 +272,13 @@ void setup()
 	}
 
   // As the relays on the board are activated by a LOW level, set all levels HIGH at startup (Second PCF8574)
+  pcf8574.digitalWrite(FILTRATION_PUMP, HIGH);
+  pcf8574.digitalWrite(PH_PUMP, HIGH);
+  pcf8574.digitalWrite(CHL_PUMP, HIGH);
   pcf8574.digitalWrite(SALT_PUMP, HIGH);
-  pcf8574.digitalWrite(SALT_POL_1, HIGH);
-  pcf8574.digitalWrite(SALT_POL_2, HIGH);
   pcf8574.digitalWrite(HEAT_PUMP, HIGH);
   pcf8574.digitalWrite(HEAT_ON, HIGH);
-  pcf8574.digitalWrite(LIGHT_POOL, HIGH);
-  pcf8574.digitalWrite(LIGHT_ROOM, HIGH);
+  pcf8574.digitalWrite(ROBOT_PUMP, HIGH);
   pcf8574.digitalWrite(WATER_FILL, HIGH);
 
   // Initialize PIDs
@@ -303,10 +302,9 @@ void setup()
 
   //Initialize pump instances with stored config data
   FiltrationPump.SetMaxUpTime(0);     //no runtime limit for the filtration pump
-  HeatCirculatorPump.SetMaxUpTime(0); //no runtime limit for the Solar 3-way-valve
+  SolarHeatPump.SetMaxUpTime(0); //no runtime limit for the Solar 3-way-valve
   HeatPump.SetMaxUpTime(0);           //no runtime limit for the heatpump
   SaltPump.SetMaxUpTime(0);           //no runtime limit for the saltmanager
-
   RobotPump.SetMaxUpTime(0);          //no runtime limit for the robot pump
 
   PhPump.SetFlowRate(storage.pHPumpFR);
@@ -328,7 +326,7 @@ void setup()
   RobotPump.Stop();
   HeatPump.Stop();
   SaltPump.Stop();
-  HeatCirculatorPump.Stop();
+  SolarHeatPump.Stop();
 
 
   // Create queue for external commands
