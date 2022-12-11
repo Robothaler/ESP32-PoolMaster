@@ -12,7 +12,7 @@ NB: all timings are in milliseconds
 
 #ifndef PCF_PUMP_h
 #define PCF_PUMP_h
-#define PCF_PUMP_VERSION "1.0"
+#define PCF_PUMP_VERSION "1.0.1"
 
 //Constants used in some of the functions below
 #define PUMP_ON  0

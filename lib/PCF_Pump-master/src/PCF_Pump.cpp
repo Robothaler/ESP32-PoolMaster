@@ -32,18 +32,13 @@ PCF_Pump::PCF_Pump(uint8_t PumpPin, uint8_t IsRunningSensorPin, uint8_t TankLeve
   CurrMaxUpTime = MaxUpTime;
 }     
 
-/*
 //Call this in the main loop, for every loop, as often as possible
 void PCF_Pump::loop()
 {
-  if((pcf8574.digitalRead(isrunningsensorpin) == PUMP_ON) || (digitalRead(isrunningsensorpin) == PUMP_ON))
+  if(pcf8574.digitalRead(isrunningsensorpin) == PUMP_ON)
   {
     UpTime += millis() - StartTime;
     StartTime = millis();
-    Debug.print(DBG_INFO,"[PCF8574] PumpPin");
-    Serial.println(pcf8574.digitalRead(isrunningsensorpin),0);
-    Debug.print(DBG_INFO,"PumpPin");
-    Serial.println(digitalRead(isrunningsensorpin),0);
   }
 
   if((CurrMaxUpTime > 0) && (UpTime >= CurrMaxUpTime))
@@ -56,185 +51,37 @@ void PCF_Pump::loop()
 
   if(interlockpin != NO_INTERLOCK)
   {
-    if((pcf8574.digitalRead(interlockpin) == INTERLOCK_NOK) || (digitalRead(interlockpin) == INTERLOCK_NOK))
+    if(pcf8574.digitalRead(interlockpin) == INTERLOCK_NOK)
        Stop();
   }
 }
-*/
 
-
-//Call this in the main loop, for every loop, as often as possible
-void PCF_Pump::loop(){
-
-  bool value = digitalRead(pumppin);
-  bool port = pcf8574.digitalRead(pumppin);
-
-      //Debug.print(DBG_INFO,"PumpPin");
-      //Serial.println(digitalRead(pumppin),0);
-      //Serial.println(bitRead(pumppin,0));
-      //Debug.print(DBG_INFO,"[PCF8574] PumpPin ist NAN");
-      //Serial.println(pcf8574.digitalRead(pumppin),0);
-      Debug.print(DBG_INFO,"value");
-      Serial.println(value);
-      Debug.print(DBG_INFO,"port");
-      Serial.println(port);
-{
-  if (isnan(digitalRead(pumppin))){
-      Debug.print(DBG_INFO,"PumpPin ist NAN");
-      Serial.println(digitalRead(pumppin),0);
-    if(pcf8574.digitalRead(isrunningsensorpin) == PUMP_ON)
-    {
-      UpTime += millis() - StartTime;
-      StartTime = millis();
-    }
-  }else if (isnan(pcf8574.digitalRead(pumppin))){
-      Debug.print(DBG_INFO,"[PCF8574] PumpPin ist NAN");
-      Serial.println(pcf8574.digitalRead(pumppin),0);
-    if(digitalRead(isrunningsensorpin) == PUMP_ON)
-    {
-      UpTime += millis() - StartTime;
-      StartTime = millis();
-    }
-  }
-
-    if((CurrMaxUpTime > 0) && (UpTime >= CurrMaxUpTime))
-    {
-      Stop();
-      UpTimeError = true;
-    }
-
-    if(!this->PCF_Pump::TankLevel()) this->PCF_Pump::Stop();
-
-    if(interlockpin != NO_INTERLOCK)
-    {
-      if (isnan(digitalRead(pumppin))){
-        Debug.print(DBG_INFO,"[PumpPin ist NAN");
-        Serial.println(pcf8574.digitalRead(pumppin),0);
-        if(pcf8574.digitalRead(interlockpin) == INTERLOCK_NOK)
-          Stop();
-      } else if (isnan(pcf8574.digitalRead(pumppin))){
-          Debug.print(DBG_INFO,"[PCF8574] PumpPin ist NAN");
-          Serial.println(digitalRead(pumppin),0);
-        if(digitalRead(interlockpin) == INTERLOCK_NOK)
-          Stop();
-      }
-    }
-}
-}
-
-
-//Switch pump ON if over time was not reached, tank is not empty and interlock is OK
-bool PCF_Pump::Start()
-{
-  if(((pcf8574.digitalRead(isrunningsensorpin) == PUMP_OFF) || (digitalRead(isrunningsensorpin) == PUMP_OFF)) 
-    && !UpTimeError
-    && this->PCF_Pump::TankLevel()
-    && ((interlockpin == NO_INTERLOCK) || (pcf8574.digitalRead(interlockpin) == INTERLOCK_OK) || (digitalRead(interlockpin) == INTERLOCK_OK)))    //if((digitalRead(pumppin) == false))
-  {
-    pcf8574.digitalWrite(pumppin, PUMP_ON);
-    //digitalWrite(pumppin, PUMP_ON);
-    StartTime = LastStartTime = millis(); 
-    return true; 
-  }
-  else return false;
-}
-
-/*
-//Switch pump ON if over time was not reached, tank is not empty and interlock is OK
-bool PCF_Pump::Start()
-{
-  if (isnan(digitalRead(pumppin))){
-        Debug.print(DBG_INFO,"[PumpPin ist NAN");
-        Serial.println(pcf8574.digitalRead(pumppin),0);
-  if((pcf8574.digitalRead(isrunningsensorpin) == PUMP_OFF) 
-    && !UpTimeError
-    && this->PCF_Pump::TankLevel()
-    && ((interlockpin == NO_INTERLOCK) || (pcf8574.digitalRead(interlockpin) == INTERLOCK_OK)))    //if((digitalRead(pumppin) == false))
-  {
-    pcf8574.digitalWrite(pumppin, PUMP_ON);
-    StartTime = LastStartTime = millis(); 
-    return true; 
-  }
-  else return false;
-  }else if (isnan(pcf8574.digitalRead(pumppin))){
-  if((digitalRead(isrunningsensorpin) == PUMP_OFF) 
-    && !UpTimeError
-    && this->PCF_Pump::TankLevel()
-    && ((interlockpin == NO_INTERLOCK) || (digitalRead(interlockpin) == INTERLOCK_OK)))    //if((digitalRead(pumppin) == false))
-  {
-    digitalWrite(pumppin, PUMP_ON);
-    StartTime = LastStartTime = millis(); 
-    return true; 
-  }
-  else return false;
-}
-}
-*/
-
-/*
 //Switch pump ON if over time was not reached, tank is not empty and interlock is OK
 bool PCF_Pump::Start()
 {
   if((pcf8574.digitalRead(isrunningsensorpin) == PUMP_OFF) 
     && !UpTimeError
     && this->PCF_Pump::TankLevel()
-    && ((interlockpin == NO_INTERLOCK) || (pcf8574.digitalRead(interlockpin) == INTERLOCK_OK)))    //if((digitalRead(pumppin) == false))
+    && ((interlockpin == NO_INTERLOCK) || (pcf8574.digitalRead(interlockpin) == INTERLOCK_OK)))    //if((pcf8574.digitalRead(pumppin) == false))
   {
     pcf8574.digitalWrite(pumppin, PUMP_ON);
-    Debug.print(DBG_INFO,"[PCF8574] PumpPin EIN");
-    StartTime = LastStartTime = millis(); 
-    return true; 
-  }
-  else if((digitalRead(isrunningsensorpin) == PUMP_OFF) 
-    && !UpTimeError
-    && this->PCF_Pump::TankLevel()
-    && ((interlockpin == NO_INTERLOCK) || (digitalRead(interlockpin) == INTERLOCK_OK)))    //if((digitalRead(pumppin) == false))
-  {
-    digitalWrite(pumppin, PUMP_ON);
-    Debug.print(DBG_INFO,"PumpPin EIN");
     StartTime = LastStartTime = millis(); 
     return true; 
   }
   else return false;
 }
-*/
 
-//Switch pump OFF
-bool PCF_Pump::Stop()
-{
-  if((pcf8574.digitalRead(isrunningsensorpin) == PUMP_ON) || (digitalRead(isrunningsensorpin) == PUMP_ON))
-  {
-    pcf8574.digitalWrite(pumppin, PUMP_OFF);
-    //digitalWrite(pumppin, PUMP_OFF);
-    UpTime += millis() - StartTime; 
-    return true;
-  }
-  else return false;
-}
-
-/*
 //Switch pump OFF
 bool PCF_Pump::Stop()
 {
   if(pcf8574.digitalRead(isrunningsensorpin) == PUMP_ON)
   {
     pcf8574.digitalWrite(pumppin, PUMP_OFF);
-    Debug.print(DBG_INFO,"[PCF8574] PumpPin AUS");
-    UpTime += millis() - StartTime; 
-    return true;
-  }
-  else if(digitalRead(isrunningsensorpin) == PUMP_ON)
-  {
-    digitalWrite(pumppin, PUMP_OFF);
-    Debug.print(DBG_INFO,"PumpPin AUS");
     UpTime += millis() - StartTime; 
     return true;
   }
   else return false;
 }
-*/
-
-
 
 //Reset the tracking of running time
 //This is typically called every day at midnight
@@ -278,7 +125,7 @@ bool PCF_Pump::TankLevel()
   }
   else
   {
-    return ((pcf8574.digitalRead(tanklevelpin) == TANK_FULL) || (digitalRead(tanklevelpin) == TANK_FULL));
+    return (pcf8574.digitalRead(tanklevelpin) == TANK_FULL);
   } 
 }
 
@@ -323,11 +170,11 @@ void PCF_Pump::SetTankFill(double TankFill)
 //interlock status
 bool PCF_Pump::Interlock()
 {
-  return ((pcf8574.digitalRead(interlockpin) == INTERLOCK_OK) || (digitalRead(interlockpin) == INTERLOCK_OK));
+  return (pcf8574.digitalRead(interlockpin) == INTERLOCK_OK);
 }
 
 //pump status
 bool PCF_Pump::IsRunning()
 {
-  return ((pcf8574.digitalRead(isrunningsensorpin) == PUMP_ON) || (digitalRead(isrunningsensorpin) == PUMP_ON));
+  return (pcf8574.digitalRead(isrunningsensorpin) == PUMP_ON);
 }
