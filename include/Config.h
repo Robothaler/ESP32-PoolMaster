@@ -13,21 +13,22 @@
 #define OrpPID_DIRECTION DIRECT
 #define SALT_DIRECTION  DIRECT
 
-#define FILTRATION_PUMP 32
-#define ROBOT_PUMP	    33
-#define PH_PUMP         25
-#define CHL_PUMP        26
-#define RELAY_R0        27  // Projecteur
-#define RELAY_R1         4  // spare
+#define FILTRATION_PUMP P0   // Filtration-Pump
+#define PH_PUMP         P1   // PH-Pump
+#define CHL_PUMP        P2   // Chlorine-Pump
+#define SALT_PUMP       P3   // Salt-Manager
+#define HEAT_PUMP       P4   // Heat-Pump
+#define HEAT_ON         P5   // Solar, 3-way-valve for Warmwater Solarpanels
+#define ROBOT_PUMP	    P6   // Cleaningrobot
+#define WATER_FILL      P7   // Freshwater-Valve to fillup the Pool -> Needs to be combined with Levelsensors in the skimmer
 
-#define SALT_PUMP       P0  // Salt-Manager
-#define SALT_POL_1      P1  // Salt-Manager Polarity DIRECT
-#define SALT_POL_2      P2  // Salt-Manager Polarity REVERSE
-#define HEAT_PUMP       P3  // Heatpump
-#define HEAT_ON         P4  // Solar, 3-way-valve
-#define LIGHT_POOL      P5  // Pool Spotlight
-#define LIGHT_ROOM      P6  // Serviceroom light
-#define WATER_FILL      P7  // Freshwater-Valve to fillup the Pool -> Needs to be combined with Levelsensors in the skimmer
+#define SALT_POL_1      32   // Salt-Manager Polarity DIRECT
+#define SALT_POL_2      33   // Salt-Manager Polarity REVERSE
+#define LIGHT_POOL      27   // Pool Spotlight
+#define LIGHT_ROOM       4   // Serviceroom light
+#define RELAY_R0        25   // Spare I
+#define RELAY_R1        26   // Spare II
+
 
 //Digital input pins connected to Flow-Meter additional security for Filtrationpump and dosing
 #define FLOW            39   // Flow-Meter in Main-Pipe to be sure Filtrationpump is running
@@ -62,7 +63,7 @@
 
 //Version of config stored in EEPROM
 //Random value. Change this value (to any other value) to revert the config to default values
-#define CONFIG_VERSION 15
+#define CONFIG_VERSION 20
 
 //MQTT stuff including local broker/server IP address, login and pwd
 //------------------------------------------------------------------
