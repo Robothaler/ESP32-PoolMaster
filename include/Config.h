@@ -11,8 +11,12 @@
 // PID Directions (either DIRECT or REVERSE depending on Ph/Orp correction vs water properties)
 #define PhPID_DIRECTION REVERSE
 #define OrpPID_DIRECTION DIRECT
-#define SALT_DIRECTION  DIRECT
 
+// Polarity of the Electric-Connection (The polarity should be changed every 4 hours to prevent calcification of the electrolysis plates.)
+#define POLARITY_DIRECT  0
+#define POLARITY_REVERSE 1
+
+// Define RELAY-PINS for all Pumps (first PCF8574)
 #define FILTRATION_PUMP P0   // Filtration-Pump
 #define PH_PUMP         P1   // PH-Pump
 #define CHL_PUMP        P2   // Chlorine-Pump
@@ -20,15 +24,41 @@
 #define HEAT_PUMP       P4   // Heat-Pump
 #define HEAT_ON         P5   // Solar, 3-way-valve for Warmwater Solarpanels
 #define ROBOT_PUMP	    P6   // Cleaningrobot
-#define WATER_FILL      P7   // Freshwater-Valve to fillup the Pool -> Needs to be combined with Levelsensors in the skimmer
+#define SPARE           P7   // SPARE
 
-#define SALT_POL_1      32   // Salt-Manager Polarity DIRECT
-#define SALT_POL_2      33   // Salt-Manager Polarity REVERSE
+// Define RELAY-PINS for MotorValves (second PCF8574_3)
+#define ESD_TRE_OPEN    P0   // ESD-Treppe (open)
+#define ESD_TRE_CLOSE   P1   // ESD-Treppe (close)
+#define ESD_HIN_OPEN    P2   // ESD-Hinten (open)
+#define ESD_HIN_CLOSE   P3   // ESD-Hinten (close)
+#define WP_VL_OPEN      P4   // WP-Vorlauf (open)
+#define WP_VL_CLOSE     P5   // WP-Vorlauf (close)
+#define WP_M_OPEN	    P6   // WP-Mischer (open)
+#define WP_M_CLOSE      P7   // WP-Mischer (close)
+
+// Define RELAY-PINS for MotorValves (third PCF8574_4)
+#define BODEN_OPEN	    P0   // Bodenablauf (open)
+#define BODEN_CLOSE     P1   // Bodenablauf (close)
+#define SOLAR_OPEN      P2   // SOLAR (open)
+#define SOLAR_CLOSE     P3   // SOLAR (close)
+#define SPARE_I_OPEN    P4   // SPARE (open)
+#define SPARE_I_CLOSE   P5   // SPARE (close)
+#define WATER_FILL      P6   // Freshwater-Valve to fillup the Pool -> Needs to be combined with Levelsensors in the skimmer
+#define SPARE_II        P7   // SPARE
+
+#define SALT_POL        32   // Salt-Manager Polarity DIRECT / REVERSE
 #define LIGHT_POOL      27   // Pool Spotlight
 #define LIGHT_ROOM       4   // Serviceroom light
 #define RELAY_R0        25   // Spare I
 #define RELAY_R1        26   // Spare II
+#define RELAY_R2        33   // Spare II
 
+// MotorValve Constants
+#define STARTANGLE_0     0   // StartAngle for MotorValves
+#define MAX_45          45   // MaxAngle 45 degree for MotorValves
+#define MAX_90          90   // MaxAngle 90 degree for MotorValves
+#define TIMETOMAX_45    45   // Time to reach to maximum in Seconds
+#define TIMETOMAX_90    90   // Time to reach to maximum in Seconds
 
 //Digital input pins connected to Flow-Meter additional security for Filtrationpump and dosing
 #define FLOW            39   // Flow-Meter in Main-Pipe to be sure Filtrationpump is running
@@ -63,7 +93,7 @@
 
 //Version of config stored in EEPROM
 //Random value. Change this value (to any other value) to revert the config to default values
-#define CONFIG_VERSION 20
+#define CONFIG_VERSION 25
 
 //MQTT stuff including local broker/server IP address, login and pwd
 //------------------------------------------------------------------
