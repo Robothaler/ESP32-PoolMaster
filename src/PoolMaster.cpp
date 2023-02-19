@@ -26,7 +26,7 @@ void PoolMaster(void *pvParameters)
 
   bool DoneForTheDay = false;                     // Reset actions done once per day
   bool d_calc = false;                            // Filtration duration computed
-  bool cleaning_done = false;                     // daily cleaning done   
+  bool cleaning_done = false;                     // daily cleaning done 
 
   static UBaseType_t hwm=0;                       // free stack size
 
@@ -63,7 +63,15 @@ void PoolMaster(void *pvParameters)
     SaltPump.loop();
     PhPump.loop();
     ChlPump.loop();
-    RobotPump.loop();  
+    RobotPump.loop();
+
+    //update MotorValves
+    ELD_Treppe.loop();
+    ELD_Hinten.loop();
+    WP_Vorlauf.loop();
+    WP_Mischer.loop();
+    Bodenablauf.loop();
+    Solarvalve.loop();
 
     //reset time counters at midnight and send sync request to time server
     if (hour() == 0 && !DoneForTheDay)
@@ -163,16 +171,19 @@ void PoolMaster(void *pvParameters)
       if (storage.TempValue < (storage.WaterTemp_SetPoint - 0.2))
       {
         SolarHeatPump.Start();
+        Solarvalve.open();
       }
       else if (storage.TempValue > (storage.WaterTemp_SetPoint + 0.2))
       {
         SolarHeatPump.Stop();
+        Solarvalve.close();
       }
     }
     }
     else
     {
     SolarHeatPump.Stop();
+    Solarvalve.close();
     }
 
     //The circulator of the pool water heating circuit needs to run regularly to avoid blocking
@@ -180,11 +191,49 @@ void PoolMaster(void *pvParameters)
     if (storage.AutoMode && ((hour() == 12) && (minute() == 0)))
     {
     SolarHeatPump.Start();
+    Solarvalve.open();
     }
 
     if (storage.AutoMode && ((hour() == 12) && (minute() == 2)))
     {
     SolarHeatPump.Stop();
+    Solarvalve.close();
+    }
+
+    //The MotorValves should be calibrated daily, to do this we start calibration at 5 o´clock in the morning.
+    if ((hour() == 5) && (minute() == 0))
+    {
+    ELD_Treppe.calibrate();
+    ELD_Hinten.calibrate();
+    WP_Vorlauf.calibrate();
+    WP_Mischer.calibrate();
+    Bodenablauf.calibrate();
+    Solarvalve.calibrate();
+    }      
+
+    //After calibration we set the valves in to a standard position every morning.
+    if ((hour() == 5) && (minute() == 3))
+    {
+    ELD_Treppe.open();
+    ELD_Hinten.open();
+    WP_Vorlauf.close();
+    WP_Mischer.open();
+    Bodenablauf.halfOpen();
+    Solarvalve.close();
+    }   
+
+    //If Heatpump is turned on set MotorValves in correct position -> only if ValveMode is true
+    if (storage.ValveMode)
+    {
+        if (HeatPump.IsRunning())
+        {
+            WP_Vorlauf.open();
+            WP_Mischer.close();
+        } else
+        {
+            WP_Vorlauf.close();
+            WP_Mischer.open();
+        }
     }
 
     // start PIDs with delay after FiltrationStart in order to let the readings stabilize
@@ -197,6 +246,37 @@ void PoolMaster(void *pvParameters)
         //Start PIDs
         SetPhPID(true);
         SetOrpPID(true);
+    }
+
+    // start SaltPump with delay after FiltrationStart in order to let the readings stabilize
+    // start inhibited if water temperature below threshold and/or in winter mode
+    if (FiltrationPump.IsRunning() && storage.AutoMode && storage.SaltMode && storage.Salt_Chlor && !FLOW2Error && !storage.WinterMode &&
+        ((millis() - FiltrationPump.LastStartTime) / 1000 / 60 >= storage.DelayPIDs) &&
+        (hour() >= storage.FiltrationStart) && (hour() < storage.FiltrationStop) &&
+        storage.TempValue >= storage.WaterTempLowThreshold)
+    {
+        //Start SaltPump
+        SaltPump.Start();
+    }
+
+    // The polarity of the Salt electrolysis should be changed every 4 hours to prevent calcification of the electrolysis plates.
+    if (storage.Salt_Chlor)
+    {
+        int last_time = 0;
+        bool reverse = false;
+        int run_time = 0;
+        int saltpump_uptime = SaltPump.UpTime;
+        run_time += saltpump_uptime - last_time;
+        last_time = saltpump_uptime;
+        if (run_time >= 4 * 60 * 60) {
+            run_time = 0;
+            reverse = !reverse;
+        }
+        if (reverse) {
+            digitalWrite(SALT_POL, DIRECT);
+        } else {
+            digitalWrite(SALT_POL, REVERSE);
+        }
     }
 
     //stop filtration pump and PIDs as scheduled unless we are in AntiFreeze mode
@@ -233,13 +313,17 @@ void PoolMaster(void *pvParameters)
     if (FiltrationPump.IsRunning() && ((millis() - FiltrationPump.LastStartTime) > 40000) && (storage.FLOWValue < storage.FLOW_MedThreshold))
     {
         FiltrationPump.Stop();
+        SaltPump.Stop();
         FLOWError = true;
         mqttErrorPublish("{\"FLOW Error\":1}");
     }
 
-    //If filtration pump has been running for over 30secs but flow in Meassure-Pipe is still low, something is wrong, set error flag
-    if (FiltrationPump.IsRunning() && ((millis() - FiltrationPump.LastStartTime) > 30000) && (storage.FLOW2Value < storage.FLOW2_MedThreshold))
+    //If filtration pump has been running for over 60secs but flow in Meassure-Pipe is still low, something is wrong, set error flag
+    if (FiltrationPump.IsRunning() && ((millis() - FiltrationPump.LastStartTime) > 60000) && (storage.FLOW2Value < storage.FLOW2_MedThreshold))
     {
+        SetPhPID(false);
+        SetOrpPID(false);
+        SaltPump.Stop();
         FLOW2Error = true;
         mqttErrorPublish("{\"FLOW2 Error\":1}");
     }
@@ -256,7 +340,6 @@ void PoolMaster(void *pvParameters)
         // HighFlow-Rate error
     if (storage.FLOWValue > storage.FLOW_HighThreshold)
     {
-        FiltrationPump.Stop();
         FLOWError = true;
         mqttErrorPublish("{\"FLOW Error\":1}");
     } else if(storage.FLOWValue >= storage.FLOW_MedThreshold)
