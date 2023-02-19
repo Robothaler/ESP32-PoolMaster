@@ -19,17 +19,24 @@ static float orp_sensor_value;    // ORP sensor current value
 static float psi_sensor_value;    // PSI sensor current value
 
 // Setup instance for flow measurements
-volatile int flow_pulse_count;    // FLOW sensor current value
-unsigned long flow_millis         = 0;
+long flow_currentMillis = 0;
+long flow_previousMillis = 0;
+int flow_interval = 1000;
+// The hall-effect flow sensor outputs approximately 4.5 pulses per second per litre/minute of flow.
+// 13.51 is to make 100 for the full flow
+float flow_calibrationFactor;
+volatile byte flow_pulseCount;
+byte flow_pulse1Sec = 0;
 
 // Setup instance for flow2 measurements
-volatile int flow2_pulse_count;    // FLOW2 sensor current value
-unsigned long flow2_millis         = 0;
-
-// The hall-effect flow2 sensor outputs approximately 4.5 pulses per second per litre/minute of flow2.
+long flow2_currentMillis = 0;
+long flow2_previousMillis = 0;
+int flow2_interval = 1000;
+// The hall-effect flow sensor outputs approximately 4.5 pulses per second per litre/minute of flow.
 // 13.51 is to make 100 for the full flow
-const float flow_calibration_factor   = 12/13.51*60;
-const float flow2_calibration_factor  = 4.5/13.51*60;
+float flow2_calibrationFactor;
+volatile byte flow2_pulseCount;
+byte flow2_pulse1Sec = 0;
 
 
 // Signal filtering library sample buffers
@@ -54,17 +61,17 @@ void unlockI2C();
 // 11 samples returned, we take the 5 median ones and compute the mean as consolidated value.
 
 // PulseCounter for FLOW
-void IRAM_ATTR flow_pulse_counter()
+void IRAM_ATTR flow_pulseCounter()
 {
   // Increment the pulse counter
-  flow_pulse_count++;
+  flow_pulseCount++;
 }
 
 // PulseCounter for FLOW2
-void IRAM_ATTR flow2_pulse_counter()
+void IRAM_ATTR flow2_pulseCounter()
 {
   // Increment the pulse counter
-  flow2_pulse_count++;
+  flow2_pulseCount++;
 }
 
 void AnalogInit()
@@ -184,16 +191,18 @@ void AnalogPoll(void *pvParameters)
 
 void FlowInit()
 {
-flow_millis=millis();
-  flow_pulse_count  = 0;
-  attachInterrupt(digitalPinToInterrupt(FLOW), flow_pulse_counter, RISING);
+  flow_pulseCount = 0;
+  flow_previousMillis = 0;
+
+  attachInterrupt(digitalPinToInterrupt(FLOW), flow_pulseCounter, FALLING);
 }
 
 void Flow2Init()
 {
-flow2_millis=millis();
-  flow2_pulse_count  = 0;
-  attachInterrupt(digitalPinToInterrupt(FLOW2), flow2_pulse_counter, FALLING);
+  flow2_pulseCount = 0;
+  flow2_previousMillis = 0;
+
+  attachInterrupt(digitalPinToInterrupt(FLOW2), flow2_pulseCounter, RISING);
 }
 
 
@@ -357,36 +366,54 @@ void OrpRegulation(void *pvParameters)
     td = millis();
     #endif 
 
-    //do not compute PID if filtration pump is not running
-    // Set also a lower limit at 30s (a lower pump duration does'nt mean anything)
+    if (storage.Salt_Chlor && storage.SaltMode && FiltrationPump.IsRunning()) {
+          //Stop OrpPID
+          OrpPID.SetMode(MANUAL);
+          storage.Orp_RegulationOnOff = 0;
+          storage.OrpPIDOutput = 0.0;
+          ChlPump.Stop();
 
-    if (FiltrationPump.IsRunning() && (OrpPID.GetMode() == AUTOMATIC))
-    {
-      if(OrpPID.Compute()){
-        Debug.print(DBG_VERBOSE,"ORP regulation: %10.2f, %13.9f, %12.9f, %17.9f",storage.OrpPIDOutput,storage.OrpValue,storage.Orp_SetPoint,storage.Orp_Kp);
-        if(storage.OrpPIDOutput < (double)30000.) storage.OrpPIDOutput = 0.;    
-          Debug.print(DBG_INFO,"Orp regulation: %10.2f",storage.OrpPIDOutput);
-    #ifdef SIMU
-          newChlOutput = true;
-    #endif      
+        if (storage.OrpValue < (storage.Orp_SetPoint - storage.SaltDiff)) {
+          Debug.print(DBG_VERBOSE,"ORP regulation ein: %13.9f, %12.9f, %17.9f",storage.OrpValue,storage.Orp_SetPoint,storage.SaltDiff);
+          SaltPump.Start();
+        } else if (storage.OrpValue > (storage.Orp_SetPoint + storage.SaltDiff)) {
+          Debug.print(DBG_VERBOSE,"ORP regulation aus: %13.9f, %12.9f, %17.9f",storage.OrpValue,storage.Orp_SetPoint,storage.SaltDiff);
+          SaltPump.Stop();
         }
-    #ifdef SIMU
-        else newChlOutput = false;
-    #endif    
-      /************************************************
-       turn the Chl pump on/off based on pid output
-      ************************************************/
-	  unsigned long now = millis();
-      if (now - storage.OrpPIDwindowStartTime > storage.OrpPIDWindowSize)
-      {
-        //time to shift the Relay Window
-        storage.OrpPIDwindowStartTime += storage.OrpPIDWindowSize;
+      } else {
+        SaltPump.Stop();
+      
+        //do not compute PID if filtration pump is not running
+        // Set also a lower limit at 30s (a lower pump duration does'nt mean anything)
+
+        if (!storage.Salt_Chlor && FiltrationPump.IsRunning() && (OrpPID.GetMode() == AUTOMATIC))
+        {
+          if(OrpPID.Compute()){
+            Debug.print(DBG_VERBOSE,"ORP regulation: %10.2f, %13.9f, %12.9f, %17.9f",storage.OrpPIDOutput,storage.OrpValue,storage.Orp_SetPoint,storage.Orp_Kp);
+            if(storage.OrpPIDOutput < (double)30000.) storage.OrpPIDOutput = 0.;    
+              Debug.print(DBG_INFO,"Orp regulation: %10.2f",storage.OrpPIDOutput);
+        #ifdef SIMU
+              newChlOutput = true;
+        #endif      
+            }
+        #ifdef SIMU
+            else newChlOutput = false;
+        #endif    
+          /************************************************
+           turn the Chl pump on/off based on pid output
+          ************************************************/
+        unsigned long now = millis();
+          if (now - storage.OrpPIDwindowStartTime > storage.OrpPIDWindowSize)
+          {
+            //time to shift the Relay Window
+            storage.OrpPIDwindowStartTime += storage.OrpPIDWindowSize;
+          }
+          if ((unsigned long)storage.OrpPIDOutput <= now - storage.OrpPIDwindowStartTime)
+            ChlPump.Stop();
+          else
+            ChlPump.Start();
+        }
       }
-      if ((unsigned long)storage.OrpPIDOutput <= now - storage.OrpPIDwindowStartTime)
-        ChlPump.Stop();
-      else
-        ChlPump.Start();
-    }
 
     #ifdef CHRONO
     t_act = millis() - td;
@@ -426,20 +453,37 @@ void FlowMeasures(void *pvParameters)
     td = millis();
     #endif 
 
-      detachInterrupt(digitalPinToInterrupt(FLOW));
-      storage.FLOWValue = ((1000.0 / (millis() - flow_millis)) * flow_pulse_count) / flow_calibration_factor * 60;
+      flow_currentMillis = millis();
+      if (flow_currentMillis - flow_previousMillis > flow_interval) {
+        
+        flow_pulse1Sec = flow_pulseCount;
+        flow_pulseCount = 0;
+        flow_calibrationFactor = storage.FLOW_Pulse;
 
-      flow_millis=millis();
-      flow_pulse_count=0;
-      attachInterrupt(digitalPinToInterrupt(FLOW), flow_pulse_counter, RISING);
+        // Because this loop may not complete in exactly 1 second intervals we calculate
+        // the number of milliseconds that have passed since the last execution and use
+        // that to scale the output. We also apply the calibrationFactor to scale the output
+        // based on the number of pulses per second per units of measure (litres/minute in
+        // this case) coming from the sensor.
+        storage.FLOWValue = ((1000.0 / (millis() - flow_previousMillis)) * flow_pulse1Sec) / flow_calibrationFactor; //FLOWValue = liter/min.
+        flow_previousMillis = millis();
+      }
 
+      flow2_currentMillis = millis();
+      if (flow2_currentMillis - flow2_previousMillis > flow2_interval) {
+        
+        flow2_pulse1Sec = flow2_pulseCount;
+        flow2_pulseCount = 0;
+        flow2_calibrationFactor = storage.FLOW2_Pulse;
 
-      detachInterrupt(digitalPinToInterrupt(FLOW2));
-      storage.FLOWValue = ((1000.0 / (millis() - flow2_millis)) * flow2_pulse_count) / flow2_calibration_factor * 60;
-
-      flow2_millis=millis();
-      flow2_pulse_count=0;
-      attachInterrupt(digitalPinToInterrupt(FLOW2), flow2_pulse_counter, FALLING);
+        // Because this loop may not complete in exactly 1 second intervals we calculate
+        // the number of milliseconds that have passed since the last execution and use
+        // that to scale the output. We also apply the calibrationFactor to scale the output
+        // based on the number of pulses per second per units of measure (litres/minute in
+        // this case) coming from the sensor.
+        storage.FLOW2Value = ((1000.0 / (millis() - flow2_previousMillis)) * flow2_pulse1Sec) / flow2_calibrationFactor; //FLOW2Value = liter/min.
+        flow2_previousMillis = millis();
+      }
 
       Debug.print(DBG_INFO,"Flow: %4.1f l/min - Flow2: %4.1f l/min\r",
           storage.FLOWValue,storage.FLOW2Value);
