@@ -1,6 +1,6 @@
 #pragma once
 #define ARDUINOJSON_USE_DOUBLE 1  // Required to force ArduinoJSON to treat float as double
-#define DEBUG_LEVEL DBG_DEBUG      // Possible levels : NONE/ERROR/WARNING/INFO/DEBUG/VERBOSE
+#define DEBUG_LEVEL DBG_VERBOSE    // Possible levels : NONE/ERROR/WARNING/INFO/DEBUG/VERBOSE
 // #define CHRONO                    // Activate tasks timings traces for profiling
 // #define SIMU                      // Used to simulate pH/ORP sensors. Very simple simulation:
                                     // the sensor value is computed from the output of the PID 
@@ -18,6 +18,7 @@
 #include <ArduinoJson.h>          // JSON library
 //#include <Pump.h>                 // Simple library to handle home-pool filtration and peristaltic pumps
 #include <PCF_Pump.h>             // Simple library to handle home-pool filtration and peristaltic pumps
+#include <MotorValve.h>           // Simple library to handle motor valves for home-pool
 #include <DallasTemperature.h>    // Maxim (Dallas DS18B20) Temperature temperature sensor library
 #include <MQTT.h>                 // MQTT library
 #include <esp_task_wdt.h>         // ESP task management library
@@ -31,16 +32,18 @@
 #include "ADS1115.h"              // ADS1115 sensors library
 #include "PCF8574.h"              // IO-Portexpander
 #include <credentials.h>          // WIFI Credentials
+#include "RTClib.h"               // Real Time Clock library
+#include <SPI.h>
 
 // General shared data structure
 struct StoreStruct
 {
   uint8_t ConfigVersion;   // This is for testing if first time using eeprom or not
-  bool Ph_RegulationOnOff, Orp_RegulationOnOff, AutoMode, SaltMode, WinterMode, WaterHeat;
-  uint8_t FiltrationDuration, FiltrationStart, FiltrationStop, FiltrationStartMin, FiltrationStopMax, DelayPIDs;
+  bool Ph_RegulationOnOff, Orp_RegulationOnOff, AutoMode, Salt_Chlor, SaltMode, SaltPolarity, WinterMode, WaterHeat, ValveMode, CleanMode, ValveSwitch;
+  uint8_t FiltrationDuration, FiltrationStart, FiltrationStop, FiltrationStartMin, FiltrationStopMax, DelayPIDs, SolarStartMin, SolarStopMax;
   unsigned long PhPumpUpTimeLimit, ChlPumpUpTimeLimit,PublishPeriod;
   unsigned long PhPIDWindowSize, OrpPIDWindowSize, PhPIDwindowStartTime, OrpPIDwindowStartTime;
-  double Ph_SetPoint, Orp_SetPoint, PSI_HighThreshold, PSI_MedThreshold, FLOW_HighThreshold, FLOW_MedThreshold, FLOW2_HighThreshold, FLOW2_MedThreshold, WaterTempLowThreshold, WaterTemp_SetPoint, TempExternal, pHCalibCoeffs0, pHCalibCoeffs1, OrpCalibCoeffs0, OrpCalibCoeffs1, PSICalibCoeffs0, PSICalibCoeffs1;
+  double Ph_SetPoint, Orp_SetPoint, PSI_HighThreshold, PSI_MedThreshold, FLOW_Pulse, FLOW_HighThreshold, FLOW_MedThreshold, FLOW2_Pulse, FLOW2_HighThreshold, FLOW2_MedThreshold, WaterTempLowThreshold, WaterTemp_SetPoint, TempExternal, pHCalibCoeffs0, pHCalibCoeffs1, OrpCalibCoeffs0, OrpCalibCoeffs1, PSICalibCoeffs0, PSICalibCoeffs1, SaltDiff;
   double Ph_Kp, Ph_Ki, Ph_Kd, Orp_Kp, Orp_Ki, Orp_Kd, PhPIDOutput, OrpPIDOutput, TempValue, PhValue, OrpValue, PSIValue, FLOWValue, FLOW2Value;
   double AcidFill, ChlFill, pHTankVol, ChlTankVol, pHPumpFR, ChlPumpFR;
 } ;
@@ -52,10 +55,14 @@ extern StoreStruct storage;
 #define QUEUE_ITEM_SIZE 100
 extern QueueHandle_t queueIn;
 
-//Set the I2C HEX Adress for the second PCF8574A IO-Portexpander
+//Set the I2C HEX Adress for the second PCF8574A IO-Portexpander which manages the Pumps
 extern PCF8574 pcf8574;
+//Set the I2C HEX Adress for the third PCF8574A IO-Portexpander which manages the MotorValves
+extern PCF8574 pcf8574_3;
+//Set the I2C HEX Adress for the fourth PCF8574A IO-Portexpander which manages also MotorValves and Waterfill, ...
+extern PCF8574 pcf8574_4;
 
-//The six pumps of the system (instanciate the Pump class)
+//The seven pumps of the system (instanciate the Pump class)
 //In this case, all pumps start/Stop are managed by relays
 extern PCF_Pump FiltrationPump;
 extern PCF_Pump PhPump;
@@ -64,6 +71,15 @@ extern PCF_Pump RobotPump;
 extern PCF_Pump HeatPump;
 extern PCF_Pump SaltPump;
 extern PCF_Pump SolarHeatPump;
+
+//The six motor valves of the system (instanciate the MotorValve class)
+//In this case, all valves open/close are managed by relays
+extern MotorValve ELD_Treppe;
+extern MotorValve ELD_Hinten;
+extern MotorValve WP_Vorlauf;
+extern MotorValve WP_Mischer;
+extern MotorValve Bodenablauf;
+extern MotorValve Solarvalve;
 
 //PIDs instances
 //Specify the links and initial tuning parameters
