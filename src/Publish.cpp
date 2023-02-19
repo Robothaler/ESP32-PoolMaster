@@ -212,13 +212,17 @@ void SettingsPublish(void *pvParameters)
     if (mqttClient.connected())
     {
         //send a JSON to MQTT broker. /!\ Split JSON if longer than 100 bytes
-        const int capacity = JSON_OBJECT_SIZE(4);
+        const int capacity = JSON_OBJECT_SIZE(8);
         StaticJsonDocument<capacity> root;
 
+        root["FLWPL"]  = storage.FLOW_Pulse;                   //Flow Pulse = value of how many pulses are equal to 1 Liter
         root["FLWHT"]  = storage.FLOW_HighThreshold;           //Flow high threshold to trigger error
         root["FLWMT"]  = storage.FLOW_MedThreshold;            //Flow medium threshold (unused yet)
+        root["FLW2PL"] = storage.FLOW2_Pulse;                  //Flow2 Pulse = value of how many pulses are equal to 1 Liter
         root["FLW2HT"] = storage.FLOW2_HighThreshold;          //Flow2 high threshold to trigger error
         root["FLW2MT"] = storage.FLOW2_MedThreshold;           //Flow2 medium threshold (unused yet)
+        root["SStaM"]  = storage.SolarStartMin;                //Earliest Solar start hour, in the morning (hours)
+        root["SStoM"]  = storage.SolarStopMax;                 //Latest hour for the solar to run. Whatever happens, solar won't run later than this hour
 
         PublishTopic(PoolTopicSet6, root);
     }
