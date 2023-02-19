@@ -212,7 +212,242 @@ void ProcessCommand(void *pvParameters)
             storage.AutoMode = 1;
           }
           saveParam("AutoMode",storage.AutoMode);
-        }        
+        }
+        //"Salt_Chlor" command which switch between Salt desinfection or Chlor desinfection mode
+        else if (command.containsKey(F("Salt_Chlor")))
+        {
+          if ((int)command[F("Salt_Chlor")] == 1)
+          {
+            storage.Salt_Chlor = 1;
+
+            //Stop PIDs
+            SetOrpPID(false);
+          }
+          else
+          {
+            storage.Salt_Chlor = 0;
+          }
+          saveParam("Salt_Chlor",storage.Salt_Chlor);
+        }
+        //"SaltMode" command which sets regulation of Salt Chlorinator to manual or auto mode
+        else if (command.containsKey(F("SaltMode")))
+        {
+          if ((int)command[F("SaltMode")] == 0)
+          {
+            storage.SaltMode = 0;
+
+            //Stop PIDs
+            SetPhPID(false);
+            //SetOrpPID(false);
+          }
+          else
+          {
+            storage.SaltMode = 1;
+          }
+          saveParam("SaltMode",storage.SaltMode);
+        }
+        //"SaltPolarity" command which switches electrical polarity of the electrolysis cell to avoid calcification of the plates
+        else if (command.containsKey(F("SaltPolarity")))
+        {
+          if ((int)command[F("SaltPolarity")] == 0)
+          {
+            storage.SaltPolarity = 0;
+          }
+          else
+          {
+            storage.SaltPolarity = 1;
+          }
+          saveParam("SaltPolarity",storage.SaltPolarity);
+        }
+        //"ValveMode" command which sets automatic regulation of MoterValves
+        else if (command.containsKey(F("ValveMode")))
+        {
+          if ((int)command[F("ValveMode")] == 0)
+          {
+            storage.ValveMode = 0;
+          }
+          else
+          {
+            storage.ValveMode = 1;
+          }
+          saveParam("ValveMode",storage.ValveMode);
+        }
+        //"CleanMode" command which sets regulation of MotorVales for predefined position for manual pool cleaning
+        else if (command.containsKey(F("CleanMode")))
+        {
+          if ((int)command[F("CleanMode")] == 0)
+          {
+            storage.CleanMode = 0;
+          }
+          else
+          {
+            storage.CleanMode = 1;
+          }
+          saveParam("CleanMode",storage.CleanMode);
+        }
+        //"ValveSwitch" command which switches ELD-Nozzle from Treppe to Hinten
+        else if (command.containsKey(F("ValveSwitch")))
+        {
+          if ((int)command[F("ValveSwitch")] == 0)
+          {
+            storage.ValveSwitch = 0;
+          }
+          else
+          {
+            storage.ValveSwitch = 1;
+          }
+          saveParam("ValveSwitch",storage.ValveSwitch);
+        }
+        //"ELDT" command which turns the MotorValve of the ELDT-Nozzle to desired position
+        else if (command.containsKey(F("ELDT")))
+        {
+          if (command[F("ELDT")] == "open")
+          {
+            ELD_Treppe.open(); //open MotorValve
+          }
+          else if (command[F("ELDT")] == "close")
+          {
+            ELD_Treppe.close(); //close MotorValve
+          }
+          else if (command[F("ELDT")] == "halfOpen")
+          {
+            ELD_Treppe.halfOpen(); //halfOpen MotorValve
+          }
+          else if (command[F("ELDT")] == "calibrate")
+          {
+            ELD_Treppe.calibrate(); //calibrate MotorValve
+          }
+          else
+          {
+            int target = (int)command[F("ELDT")].as<int>();
+            ELD_Treppe.setTargetAngle(target);
+          }
+        }
+        //"ELDH" command which turns the MotorValve of the ELDH-Nozzle to desired position
+        else if (command.containsKey(F("ELDH")))
+        {
+          if (command[F("ELDH")] == "open")
+          {
+            ELD_Hinten.open(); //open MotorValve
+          }
+          else if (command[F("ELDH")] == "close")
+          {
+            ELD_Hinten.close(); //close MotorValve
+          }
+          else if (command[F("ELDH")] == "halfOpen")
+          {
+            ELD_Hinten.halfOpen(); //halfOpen MotorValve
+          }
+          else if (command[F("ELDH")] == "calibrate")
+          {
+            ELD_Hinten.calibrate(); //calibrate MotorValve
+          }
+          else
+          {
+            int target = (int)command[F("ELDH")].as<int>();
+            ELD_Hinten.setTargetAngle(target);
+          }
+        }
+        //"WPV" command which turns the MotorValve of the Heatpump prevalve to desired position
+        else if (command.containsKey(F("WPV")))
+        {
+          if (command[F("WPV")] == "open")
+          {
+            WP_Vorlauf.open(); //open MotorValve
+          }
+          else if (command[F("WPV")] == "close")
+          {
+            WP_Vorlauf.close(); //close MotorValve
+          }
+          else if (command[F("WPV")] == "halfOpen")
+          {
+            WP_Vorlauf.halfOpen(); //halfOpen MotorValve
+          }
+          else if (command[F("WPV")] == "calibrate")
+          {
+            WP_Vorlauf.calibrate(); //calibrate MotorValve
+          }
+          else
+          {
+            int target = (int)command[F("WPV")].as<int>();
+            WP_Vorlauf.setTargetAngle(target);
+          }
+        }
+        //"WPM" command which turns the MotorValve of the Heatpump mixing valve to desired position
+        else if (command.containsKey(F("WPM")))
+        {
+          if (command[F("WPM")] == "open")
+          {
+            WP_Mischer.open(); //open MotorValve
+          }
+          else if (command[F("WPM")] == "close")
+          {
+            WP_Mischer.close(); //close MotorValve
+          }
+          else if (command[F("WPM")] == "halfOpen")
+          {
+            WP_Mischer.halfOpen(); //halfOpen MotorValve
+          }
+          else if (command[F("WPM")] == "calibrate")
+          {
+            WP_Mischer.calibrate(); //calibrate MotorValve
+          }
+          else
+          {
+            int target = (int)command[F("WPM")].as<int>();
+            WP_Mischer.setTargetAngle(target);
+          }
+        }
+        //"BOTT" command which turns the MotorValve of the Bottom Intake valve to desired position
+        else if (command.containsKey(F("BOTT")))
+        {
+          if (command[F("BOTT")] == "open")
+          {
+            Bodenablauf.open(); //open MotorValve
+          }
+          else if (command[F("BOTT")] == "close")
+          {
+            Bodenablauf.close(); //close MotorValve
+          }
+          else if (command[F("BOTT")] == "halfOpen")
+          {
+            Bodenablauf.halfOpen(); //halfOpen MotorValve
+          }
+          else if (command[F("BOTT")] == "calibrate")
+          {
+            Bodenablauf.calibrate(); //calibrate MotorValve
+          }
+          else
+          {
+            int target = (int)command[F("BOTT")].as<int>();
+            Bodenablauf.setTargetAngle(target);
+          }
+        }
+        //"SolarValve" command which turns the MotorValve of the Solar valve to desired position
+        else if (command.containsKey(F("SOLARVALVE")))
+        {
+          if (command[F("SOLARVALVE")] == "open")
+          {
+            Solarvalve.open(); //open MotorValve
+          }
+          else if (command[F("SOLARVALVE")] == "close")
+          {
+            Solarvalve.close(); //close MotorValve
+          }
+          else if (command[F("SOLARVALVE")] == "halfOpen")
+          {
+            Solarvalve.halfOpen(); //halfOpen MotorValve
+          }
+          else if (command[F("SOLARVALVE")] == "calibrate")
+          {
+            Solarvalve.calibrate(); //calibrate MotorValve
+          }
+          else
+          {
+            int target = (int)command[F("SOLARVALVE")].as<int>();
+            Solarvalve.setTargetAngle(target);
+          }
+        }
         else if (command.containsKey(F("Heat"))) //"Heat" command which starts/stops water heating
         {
           if ((int)command[F("Heat")] == 0)
@@ -251,6 +486,14 @@ void ProcessCommand(void *pvParameters)
           saveParam("WaterTempSet",storage.WaterTemp_SetPoint);
           PublishSettings();
         }
+        /*
+        else if (command.containsKey(F("PBwMaxSetPoint"))) //"PBwMaxSetPoint" command which sets the setpoint for Water temp (currently not in use)
+        {
+          storage.BackwashMaxPressure_SetPoint = (double)command[F("PBwMaxSetPoint")];
+          saveParam("WaterTempSet",storage.BackwashMaxPressure_SetPoint);
+          PublishSettings();
+        }
+        */
         //"pHTank" command which is called when the pH tank is changed or refilled
         //First parameter is volume of tank in Liters, second parameter is percentage Fill of the tank (typically 100% when new)
         else if (command.containsKey(F("pHTank")))
@@ -295,7 +538,7 @@ void ProcessCommand(void *pvParameters)
         }
         else if (command.containsKey(F("OrpPIDParams"))) //"OrpPIDParams" command which sets the Kp, Ki and Kd values for Orp PID loop
         {
-          storage.Orp_Kp = (double)command[F("OrpPIDParams")][0];
+          storage.Orp_Kp = (double)command[F("OrpPIDParams")][0]*10000;
           storage.Orp_Ki = (double)command[F("OrpPIDParams")][1];
           storage.Orp_Kd = (double)command[F("OrpPIDParams")][2];
           saveParam("Orp_Kp",storage.Orp_Kp);
@@ -306,7 +549,7 @@ void ProcessCommand(void *pvParameters)
         }
         else if (command.containsKey(F("PhPIDParams"))) //"PhPIDParams" command which sets the Kp, Ki and Kd values for Ph PID loop
         {
-          storage.Ph_Kp = (double)command[F("PhPIDParams")][0];
+          storage.Ph_Kp = (double)command[F("PhPIDParams")][0]*10000;
           storage.Ph_Ki = (double)command[F("PhPIDParams")][1];
           storage.Ph_Kd = (double)command[F("PhPIDParams")][2];
           saveParam("Ph_Kp",storage.Ph_Kp);
@@ -347,6 +590,18 @@ void ProcessCommand(void *pvParameters)
           saveParam("FiltrStopMax",storage.FiltrationStopMax);
           PublishSettings();
         }
+        else if (command.containsKey(F("SolarT0"))) //"SolarT0" command which sets the earliest hour when starting Solar pump
+        {
+          storage.SolarStartMin = (unsigned int)command[F("SolarT0")];
+          saveParam("SolarStartMin",storage.SolarStartMin);
+          PublishSettings();
+        }
+        else if (command.containsKey(F("SolarT1"))) //"SolarT1" command which sets the latest hour for running Solar pump
+        {
+          storage.SolarStopMax = (unsigned int)command[F("SolarT1")];
+          saveParam("SolarStopMax",storage.SolarStopMax);
+          PublishSettings();
+        }
         else if (command.containsKey(F("PubPeriod"))) //"PubPeriod" command which sets the periodicity for publishing system info to MQTT broker
         {
           storage.PublishPeriod = (unsigned long)command[F("PubPeriod")] * 1000; //in secs
@@ -371,6 +626,12 @@ void ProcessCommand(void *pvParameters)
           saveParam("PSI_Med",storage.PSI_MedThreshold);
           PublishSettings();
         }
+        else if (command.containsKey(F("FLOWPulse"))) //"FLOWPulse" command which sets the pulse counter
+        {
+          storage.FLOW_Pulse = (double)command[F("FLOWPulse")];
+          saveParam("FLOW_Pulse",storage.FLOW_Pulse);
+          PublishSettings();
+        }
         else if (command.containsKey(F("FLOWHigh"))) //"FLOWHigh" command which sets the water high-pressure threshold
         {
           storage.FLOW_HighThreshold = (double)command[F("FLOWHigh")];
@@ -381,6 +642,12 @@ void ProcessCommand(void *pvParameters)
         {
           storage.FLOW_MedThreshold = (double)command[F("FLOWLow")];
           saveParam("FLOW_Med",storage.FLOW_MedThreshold);
+          PublishSettings();
+        }
+        else if (command.containsKey(F("FLOW2Pulse"))) //"FLOW2Pulse" command which sets the pulse counter
+        {
+          storage.FLOW2_Pulse = (double)command[F("FLOW2Pulse")];
+          saveParam("FLOW2_Pulse",storage.FLOW2_Pulse);
           PublishSettings();
         }
         else if (command.containsKey(F("FLOW2High"))) //"FLOW2High" command which sets the water high-pressure threshold
@@ -461,6 +728,32 @@ void ProcessCommand(void *pvParameters)
           } else {
             RobotPump.Start();   //start robot pump
           }  
+        }
+        else if (command.containsKey(F("HeatPump"))) //"HeatPumpPump" command which starts or stops the Heatpump
+        {
+          if ((int)command[F("HeatPump")] == 0){
+            HeatPump.Stop();    //stop Heatpump
+            WP_Vorlauf.close();
+            WP_Mischer.open();
+          } else {
+            HeatPump.Start();   //start Heatpump
+            WP_Vorlauf.open();
+            WP_Mischer.close();
+          }  
+        }
+        else if (command.containsKey(F("SaltPump"))) //"SaltPump" command which starts or stops the Salt pump
+        {
+          if ((int)command[F("SaltPump")] == 0){
+            SaltPump.Stop();    //stop salt pump
+          } else {
+            SaltPump.Start();   //start salt pump
+          }  
+        }
+        else if (command.containsKey(F("SaltDiff"))) //"SaltDiff" command which sets the Differenz of the ORP-Value to turn on/off the saltpump
+        {
+          storage.SaltDiff = (double)command[F("SaltDiff")];
+          saveParam("SaltDiff",storage.SaltDiff);
+          PublishSettings();
         }
         else if (command.containsKey(F("PhPump"))) //"PhPump" command which starts or stops the Acid pump
         {
