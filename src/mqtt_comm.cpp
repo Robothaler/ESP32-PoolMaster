@@ -7,6 +7,7 @@
 #include "PoolMaster.h"
 
 AsyncMqttClient mqttClient;
+extern Preferences nvs;
 
 bool MQTTConnection = false;                                    // Status of connection to broker
 static TimerHandle_t mqttReconnectTimer;                        // Reconnect timer for MQTT
@@ -66,14 +67,26 @@ void mqttErrorPublish(const char* Payload){
   {
     Debug.print(DBG_WARNING,"Unable to publish the following payload: %s",Payload);
   }
-}    
+}
 
 void connectToWiFi(){
   Debug.print(DBG_INFO,"[WiFi] Connecting to WiFi...");
-  WiFi.mode(WIFI_STA);
-  //WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE); // When using this workaround, WiFi.localIP() returns 255.255.255.255 after a successful wifi connect and the signal k server can't be found with mdns.
+  WiFi.mode(WIFI_AP_STA);
   WiFi.setHostname("PoolMaster"); 
-  WiFi.begin(WIFI_NETWORK, WIFI_PASSWORD);
+  // Load the stored credentials from NVS
+  String ssid_str = "";
+  String pass_str = "";
+  ssid_str = nvs.getString("SSID", "");
+  pass_str = nvs.getString("WIFI_PASS", "");
+  if(ssid_str != "" && pass_str != "") {
+  Debug.print(DBG_INFO,"[WiFi] Using stored credentials...");
+  WiFi.begin(ssid_str.c_str(), pass_str.c_str());
+  }
+  else
+  {
+    Debug.print(DBG_INFO, "[WiFi] Using default credentials...");
+    WiFi.begin(WIFI_NETWORK, WIFI_PASSWORD);
+  }
 }
 
 void connectToMqtt(){
