@@ -31,27 +31,28 @@ String Firmw = FIRMW;
 StoreStruct storage =
 { 
   CONFIG_VERSION,
-  1, 0, 1, 1, 1, 0, 0, 1, 1, 0, 0,
+  WIFI_NETWORK, WIFI_PASSWORD,
+  1, 0, 1, 1, 1, 0, 0, 1, 1, 0, 0, 1,
   13, 8, 21, 8, 22, 11, 18, 20,
-  2700, 2700, 30000,
-  1800000, 1800000, 0, 0,
+  2700, 2700, 900000, 0, 0, 30000,
+  1800000, 1800000, 0, 0, 0,
   7.3, 740.0, 1.8, 12.0, 90, 5880.0, 40.0, 0.4, 30.0, 7.0, 10.0, 30.0, 3.0, 3.48464236, -2.27151021, -951.822669, 2421.45966, 1.0, 0.0, 30.0,
   2700000.0, 0.0, 0.0, 18000.0, 0.0, 0.0, 0.0, 0.0, 28.0, 7.3, 720., 1.3, 70, 9,
-  60.0, 85.0, 20.0, 20.0, 1.5, 1.5,
+  60.0, 85.0, 20.0, 20.0, 1.5, 1.5, 15.0,
 };
 
 /*
 Description of above values
 
 ConfigVersion
-Ph_RegulationOnOff, Orp_RegulationOnOff, AutoMode, Salt_Chlor, SaltMode, SaltPolarity, WinterMode, WaterHeat, ValveMode, CleanMode, ValveSwitch
+SSID, WIFI_PASS
+Ph_RegulationOnOff, Orp_RegulationOnOff, AutoMode, Salt_Chlor, SaltMode, SaltPolarity, WinterMode, WaterHeat, ValveMode, CleanMode, ValveSwitch, WaterFillMode
 FiltrationDuration, FiltrationStart, FiltrationStop, FiltrationStartMin, FiltrationStopMax, SolarStartMin, SolarStopMax, DelayPIDs
-PhPumpUpTimeLimit, ChlPumpUpTimeLimit, PublishPeriod
-PhPIDWindowSize, OrpPIDWindowSize, PhPIDwindowStartTime, OrpPIDwindowStartTime
+PhPumpUpTimeLimit, ChlPumpUpTimeLimit, WaterFillUpTimeLimit, WaterFillDuration, SaltPumpRunTime, PublishPeriod
+PhPIDWindowSize, OrpPIDWindowSize, PhPIDwindowStartTime, OrpPIDwindowStartTime,  WaterFillAnCon
 Ph_SetPoint, Orp_SetPoint, PSI_HighThreshold, FLOW_Pulse, FLOW_HighThreshold, FLOW2_Pulse, FLOW2_HighThreshold, PSI_MedThreshold, FLOW_MedThreshold, FLOW2_MedThreshold, WaterTempLowThreshold, WaterTemp_SetPoint, TempExternal, pHCalibCoeffs0, pHCalibCoeffs1, OrpCalibCoeffs0, OrpCalibCoeffs1, PSICalibCoeffs0, PSICalibCoeffs1, SaltDiff,
 Ph_Kp, Ph_Ki, Ph_Kd, Orp_Kp, Orp_Ki, Orp_Kd, PhPIDOutput, OrpPIDOutput, TempValue, PhValue, OrpValue, PSIValue, FLOWValue, FLOW2Value);
-AcidFill, ChlFill, pHTankVol, ChlTankVol, pHPumpFR, ChlPumpFR);
-
+AcidFill, ChlFill, pHTankVol, ChlTankVol, pHPumpFR, ChlPumpFR, WaterFillFR);
 */
 
 tm timeinfo;
@@ -96,6 +97,7 @@ PCF_Pump RobotPump(ROBOT_PUMP, ROBOT_PUMP, NO_TANK, FILTRATION_PUMP);
 PCF_Pump SaltPump(SALT_PUMP, SALT_PUMP, NO_TANK, FILTRATION_PUMP);
 PCF_Pump HeatPump(HEAT_PUMP, HEAT_PUMP, NO_TANK, FILTRATION_PUMP);
 PCF_Pump SolarHeatPump(HEAT_ON, HEAT_ON, NO_TANK, FILTRATION_PUMP);
+PCF_Pump WaterFill(WATER_FILL, WATER_FILL, NO_TANK, FILTRATION_PUMP, storage.WaterFillFR);
 
 // Naming for six MotorValve Instances
 char Motorvalve_1[] = "ELD_TREPPE";
@@ -106,12 +108,12 @@ char Motorvalve_5[] = "BODENABLAUF";
 char Motorvalve_6[] = "SOLAR_VALVE";
 
 // The six motorvalves of the system (instanciate the MotorValve class)
-MotorValve ELD_Treppe(ESD_TRE_OPEN,ESD_TRE_CLOSE, STARTANGLE_0, MAX_90 , TIMETOMAX_90, COUNTER_CLOCKWISE, PCF8574_3, Motorvalve_1);
-MotorValve ELD_Hinten(ESD_HIN_OPEN,ESD_HIN_CLOSE, STARTANGLE_0, MAX_90 , TIMETOMAX_90, COUNTER_CLOCKWISE, PCF8574_3, Motorvalve_2);
-MotorValve WP_Vorlauf(WP_VL_OPEN,WP_VL_CLOSE, STARTANGLE_0, MAX_90 , TIMETOMAX_90, COUNTER_CLOCKWISE, PCF8574_3, Motorvalve_3);
+MotorValve ELD_Treppe(ESD_TRE_OPEN,ESD_TRE_CLOSE, STARTANGLE_0, MAX_90 , TIMETOMAX_45, COUNTER_CLOCKWISE, PCF8574_3, Motorvalve_1);
+MotorValve ELD_Hinten(ESD_HIN_OPEN,ESD_HIN_CLOSE, STARTANGLE_0, MAX_90 , TIMETOMAX_45, COUNTER_CLOCKWISE, PCF8574_3, Motorvalve_2);
+MotorValve WP_Vorlauf(WP_VL_OPEN,WP_VL_CLOSE, STARTANGLE_0, MAX_90 , TIMETOMAX_45, COUNTER_CLOCKWISE, PCF8574_3, Motorvalve_3);
 MotorValve WP_Mischer(WP_M_OPEN,WP_M_CLOSE, STARTANGLE_0, MAX_45, TIMETOMAX_45, COUNTER_CLOCKWISE, PCF8574_3, Motorvalve_4);
-MotorValve Bodenablauf(BODEN_OPEN,BODEN_CLOSE, STARTANGLE_0, MAX_90 , TIMETOMAX_90, COUNTER_CLOCKWISE, PCF8574_4, Motorvalve_5);
-MotorValve Solarvalve(SOLAR_OPEN,SOLAR_CLOSE, STARTANGLE_0, MAX_90 , TIMETOMAX_90, COUNTER_CLOCKWISE, PCF8574_4, Motorvalve_6);
+MotorValve Bodenablauf(BODEN_OPEN,BODEN_CLOSE, STARTANGLE_0, MAX_90 , TIMETOMAX_45, COUNTER_CLOCKWISE, PCF8574_4, Motorvalve_5);
+MotorValve Solarvalve(SOLAR_OPEN,SOLAR_CLOSE, STARTANGLE_0, MAX_90 , TIMETOMAX_45, COUNTER_CLOCKWISE, PCF8574_4, Motorvalve_6);
 
 // PIDs instances
 //Specify the direction and initial tuning parameters
@@ -131,6 +133,7 @@ void readLocalTime(void);
 bool loadConfig(void);
 bool saveConfig(void);
 void WiFiEvent(WiFiEvent_t);
+void onWiFiDisconnect(WiFiEvent_t event);
 void initTimers(void);
 void connectToWiFi(void);
 void mqttInit(void);                     
@@ -145,11 +148,13 @@ void FlowInit(void);
 void Flow2Init(void);
 void TempInit(void);
 bool saveParam(const char*,uint8_t );
+bool saveParam(const char*,bool );
+bool saveParam(const char*,unsigned long );
+bool saveParam(const char*,double );
+bool saveParam(const char*,String );
 unsigned stack_hwm();
 void stack_mon(UBaseType_t&);
 void info();
-void checkNTPServer(void *pvParameters);
-void getTemperature();
 
 // Functions used as Tasks
 void PoolMaster(void*);
@@ -175,10 +180,7 @@ void setup()
 
   //get board info
   info();
-
-  // check if Wifi is connected
-  bool checkWifi();
-  
+ 
   // Initialize Nextion TFT
   InitTFT();
   ResetTFT();
@@ -207,8 +209,12 @@ void setup()
     Debug.print(DBG_INFO,"New version: %d. First saving of settings",CONFIG_VERSION);      
       if(saveConfig()) Debug.print(DBG_INFO,"Config saved");  //First time use. Save new default values to NVS
 
-  }  
+  }
 
+  // Load the stored credentials from NVS
+  saveParam("SSID", storage.SSID);
+  saveParam("WIFI_PASS", storage.WIFI_PASS);
+  
   //Define pins directions
   pinMode(SALT_POL, OUTPUT);
   pinMode(LIGHT_POOL, OUTPUT);
@@ -230,8 +236,8 @@ void setup()
 // Warning: pins used here have no pull-ups, provide external ones
   pinMode(FLOW, INPUT);
   pinMode(FLOW2, INPUT);
-  pinMode(WATER_MAX_LVL, INPUT);
-  pinMode(WATER_MIN_LVL, INPUT);
+  pinMode(WATER_MAX_LVL, INPUT_PULLDOWN);
+  pinMode(WATER_MIN_LVL, INPUT_PULLDOWN);
 
   // Initialize watch-dog
   esp_task_wdt_init(WDT_TIMEOUT, true);
@@ -398,6 +404,9 @@ void setup()
   ChlPump.SetTankFill(storage.ChlFill);
   ChlPump.SetMaxUpTime(storage.ChlPumpUpTimeLimit * 1000);
 
+  WaterFill.SetFlowRate(storage.WaterFillFR);
+  WaterFill.SetMaxUpTime(storage.WaterFillUpTimeLimit * 1000);
+
   // Start filtration pump at power-on if within scheduled time slots -- You can choose not to do this and start pump manually
   if (storage.AutoMode && (hour() >= storage.FiltrationStart) && (hour() < storage.FiltrationStop))
     FiltrationPump.Start();
@@ -408,6 +417,7 @@ void setup()
   HeatPump.Stop();
   SaltPump.Stop();
   SolarHeatPump.Stop();
+  WaterFill.Stop();
 
   // Calibrate MotorValves at start
   ELD_Treppe.calibrate();
@@ -429,17 +439,6 @@ void setup()
 
   // Create I2C sharing mutex
   mutex = xSemaphoreCreateMutex();
-
-  // Check NTP-Status
-  xTaskCreatePinnedToCore(
-    checkNTPServer,
-    "NTP Checker",
-    2048,
-    NULL,
-    1,
-    nullptr,
-    app_cpu
-    );
 
   // Analog measurement polling task
   xTaskCreatePinnedToCore(
@@ -599,6 +598,8 @@ bool loadConfig()
   nvs.begin("PoolMaster",true);
 
   storage.ConfigVersion         = nvs.getUChar("ConfigVersion",0);
+  storage.SSID                  = nvs.getString("SSID", "");
+  storage.WIFI_PASS             = nvs.getString("WIFI_PASS", "");
   storage.Ph_RegulationOnOff    = nvs.getBool("Ph_RegOnOff",true);
   storage.Orp_RegulationOnOff   = nvs.getBool("Orp_RegOnOff",false);  
   storage.AutoMode              = nvs.getBool("AutoMode",true);
@@ -608,8 +609,8 @@ bool loadConfig()
   storage.WinterMode            = nvs.getBool("WinterMode",false);
   storage.WaterHeat             = nvs.getBool("Heat",false);
   storage.ValveMode             = nvs.getBool("ValveMode",true);
-  storage.CleanMode             = nvs.getBool("CleanMode",false);
   storage.ValveSwitch           = nvs.getBool("ValveSwitch",false);
+  storage.WaterFillMode         = nvs.getBool("WaterFillMode",true);
   storage.FiltrationDuration    = nvs.getUChar("FiltrDuration",12);
   storage.FiltrationStart       = nvs.getUChar("FiltrStart",8);
   storage.FiltrationStop        = nvs.getUChar("FiltrStop",20);
@@ -665,15 +666,21 @@ bool loadConfig()
   storage.ChlTankVol            = nvs.getDouble("ChlTankVol",20.);
   storage.pHPumpFR              = nvs.getDouble("pHPumpFR",1.5);
   storage.ChlPumpFR             = nvs.getDouble("ChlPumpFR",1.5);
+  storage.WaterFillFR           = nvs.getDouble("WaterFillFR",15.0);
+  storage.WaterFillAnCon        = nvs.getULong("WaterFillAnCon",0);
+  storage.WaterFillUpTimeLimit  = nvs.getULong("WaterFillUTL",900000);
+  storage.WaterFillDuration     = nvs.getULong("WaterFillDur",0);
+  storage.SaltPumpRunTime       = nvs.getULong("SaltPumpRunTime",0);
 
   nvs.end();
 
   Debug.print(DBG_INFO,"%d",storage.ConfigVersion);
-  Debug.print(DBG_INFO,"%d, %d, %d, %d, %d, %d, %d, %d, %d ,%d ,%d",storage.Ph_RegulationOnOff,storage.Orp_RegulationOnOff,storage.AutoMode,storage.Salt_Chlor,storage.SaltMode,storage.SaltPolarity,storage.WinterMode,storage.WaterHeat,storage.ValveMode,storage.CleanMode,storage.ValveSwitch);
+  Debug.print(DBG_INFO,"%d","%d",storage.SSID,storage.WIFI_PASS);
+  Debug.print(DBG_INFO,"%d, %d, %d, %d, %d, %d, %d, %d, %d ,%d ,%d, %d",storage.Ph_RegulationOnOff,storage.Orp_RegulationOnOff,storage.AutoMode,storage.Salt_Chlor,storage.SaltMode,storage.SaltPolarity,storage.WinterMode,storage.WaterHeat,storage.ValveMode,storage.CleanMode,storage.ValveSwitch, storage.WaterFillMode);
   Debug.print(DBG_INFO,"%d, %d, %d, %d, %d, %d, %d, %d",storage.FiltrationDuration,storage.FiltrationStart,storage.FiltrationStop,
               storage.FiltrationStartMin,storage.FiltrationStopMax,storage.SolarStartMin,storage.SolarStopMax,storage.DelayPIDs);
-  Debug.print(DBG_INFO,"%d, %d, %d",storage.PhPumpUpTimeLimit,storage.ChlPumpUpTimeLimit,storage.PublishPeriod);
-  Debug.print(DBG_INFO,"%d, %d, %d, %d",storage.PhPIDWindowSize,storage.OrpPIDWindowSize,storage.PhPIDwindowStartTime,storage.OrpPIDwindowStartTime);
+  Debug.print(DBG_INFO,"%d, %d, %d, %d, %d, %d",storage.PhPumpUpTimeLimit,storage.ChlPumpUpTimeLimit,storage.WaterFillUpTimeLimit,storage.WaterFillDuration,storage.WaterFillDuration,storage.PublishPeriod);
+  Debug.print(DBG_INFO,"%d, %d, %d, %d, %d",storage.PhPIDWindowSize,storage.OrpPIDWindowSize,storage.PhPIDwindowStartTime,storage.OrpPIDwindowStartTime,storage.WaterFillAnCon);
   Debug.print(DBG_INFO,"%3.1f, %4.0f, %3.1f, %3.1f, %3.1f, %3.0f, %3.0f, %3.1f, %3.0f, %3.0f, %4.1f, %8.6f, %9.6f, %11.6f, %11.6f, %3.1f, %3.1f, %3.0f",
               storage.Ph_SetPoint,storage.Orp_SetPoint,storage.PSI_HighThreshold,storage.FLOW_Pulse,storage.FLOW2_Pulse,storage.FLOW_HighThreshold,storage.FLOW2_HighThreshold,
               storage.PSI_MedThreshold,storage.FLOW_MedThreshold,storage.FLOW2_MedThreshold,storage.WaterTempLowThreshold,storage.WaterTemp_SetPoint,storage.TempExternal,
@@ -682,8 +689,8 @@ bool loadConfig()
   Debug.print(DBG_INFO,"%8.0f, %3.0f, %3.0f, %6.0f, %3.0f, %3.0f, %7.0f, %7.0f, %4.2f, %4.2f, %4.0f, %3.0f, %3.0f",
               storage.Ph_Kp,storage.Ph_Ki,storage.Ph_Kd,storage.Orp_Kp,storage.Orp_Ki,storage.Orp_Kd,
               storage.PhPIDOutput,storage.OrpPIDOutput,storage.TempValue,storage.PhValue,storage.OrpValue,storage.PSIValue,storage.FLOWValue,storage.FLOW2Value);
-  Debug.print(DBG_INFO,"%3.0f, %3.0f, %3.0f, %3.0f, %3.1f, %3.1f ",storage.AcidFill,storage.ChlFill,storage.pHTankVol,storage.ChlTankVol,
-              storage.pHPumpFR,storage.ChlPumpFR);
+  Debug.print(DBG_INFO,"%3.0f, %3.0f, %3.0f, %3.0f, %3.1f, %3.1f, %3.1f",storage.AcidFill,storage.ChlFill,storage.pHTankVol,storage.ChlTankVol,
+              storage.pHPumpFR,storage.ChlPumpFR,storage.WaterFillFR);
 
   return (storage.ConfigVersion == CONFIG_VERSION);
 }
@@ -693,6 +700,8 @@ bool saveConfig()
   nvs.begin("PoolMaster",false);
 
   size_t i = nvs.putUChar("ConfigVersion",storage.ConfigVersion);
+  i += nvs.putString("SSID",storage.SSID);
+  i += nvs.putString("WIFI_PASS",storage.WIFI_PASS); 
   i += nvs.putBool("Ph_RegOnOff",storage.Ph_RegulationOnOff);
   i += nvs.putBool("Orp_RegOnOff",storage.Orp_RegulationOnOff);  
   i += nvs.putBool("AutoMode",storage.AutoMode);
@@ -704,6 +713,7 @@ bool saveConfig()
   i += nvs.putBool("ValveMode",storage.ValveMode);
   i += nvs.putBool("CleanMode",storage.CleanMode);
   i += nvs.putBool("ValveSwitch",storage.ValveSwitch);
+  i += nvs.putBool("WaterFillMode",storage.WaterFillMode);
   i += nvs.putUChar("FiltrDuration",storage.FiltrationDuration);
   i += nvs.putUChar("FiltrStart",storage.FiltrationStart);
   i += nvs.putUChar("FiltrStop",storage.FiltrationStop);
@@ -759,6 +769,11 @@ bool saveConfig()
   i += nvs.putDouble("ChlTankVol",storage.ChlTankVol);
   i += nvs.putDouble("pHPumpFR",storage.pHPumpFR);
   i += nvs.putDouble("ChlPumpFR",storage.ChlPumpFR);
+  i += nvs.putDouble("WaterFillFR",storage.WaterFillFR);
+  i += nvs.putULong("WaterFillAnCon",storage.WaterFillAnCon);
+  i += nvs.putULong("WaterFillUTL",storage.WaterFillUpTimeLimit);
+  i += nvs.putULong("WaterFillDur",storage.WaterFillDuration);
+  i += nvs.putULong("SaltPumpRunTime",storage.SaltPumpRunTime);
 
   nvs.end();
 
@@ -767,7 +782,7 @@ bool saveConfig()
 
 }
 
-// functions to save any type of parameter (4 overloads with same name but different arguments)
+// functions to save any type of parameter (5 overloads with same name but different arguments)
 
 bool saveParam(const char* key, uint8_t val)
 {
@@ -794,6 +809,13 @@ bool saveParam(const char* key, double val)
 {
   nvs.begin("PoolMaster",false);
   size_t i = nvs.putDouble(key,val);
+  return(i == sizeof(val));
+}
+
+bool saveParam(const char* key, String val)
+{
+  nvs.begin("PoolMaster",false);
+  size_t i = nvs.putString(key,val);
   return(i == sizeof(val));
 }
 
@@ -889,21 +911,6 @@ void readLocalTime() {
   }
 }
 
-void checkNTPServer(void* parameter) {
-  while (1) {
-    vTaskDelay(24 * 60 * 60 * 1000 / portTICK_PERIOD_MS); // Wait 24 hours before checking the NTP server again
-    if (WiFi.isConnected()) {
-      if (sntp_get_sync_status() != SNTP_SYNC_STATUS_COMPLETED) {
-        Debug.print(DBG_INFO, "[NTP] NTP sync failed, retrying...");
-        Debug.print(DBG_WARNING, "[NTP] NTP sync failed, retrying...");
-        StartTime();
-      }
-    } else {
-      Debug.print(DBG_WARNING, "[NTP] WiFi not connected, cannot sync time");
-    }
-  }
-}
-
 // Notify PublishSettings task 
 void PublishSettings()
 {
@@ -928,6 +935,9 @@ void info(){
   Debug.print(DBG_INFO,"tskIDLE_PRIORITY    : %d",tskIDLE_PRIORITY);
   Debug.print(DBG_INFO,"confixMAX_PRIORITIES: %d",configMAX_PRIORITIES);
   Debug.print(DBG_INFO,"configTICK_RATE_HZ  : %d",configTICK_RATE_HZ);
+
+  Debug.print(DBG_INFO,"Free entries in nvs : %d", nvs.freeEntries());
+  nvs.end(); // end preferences library usage
 }
 
 
