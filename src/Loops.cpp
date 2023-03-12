@@ -194,7 +194,7 @@ void FlowInit()
   flow_pulseCount = 0;
   flow_previousMillis = 0;
 
-  attachInterrupt(digitalPinToInterrupt(FLOW), flow_pulseCounter, FALLING);
+  attachInterrupt(digitalPinToInterrupt(FLOW), flow_pulseCounter, RISING);
 }
 
 void Flow2Init()
