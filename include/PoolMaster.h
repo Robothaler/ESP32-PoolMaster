@@ -39,13 +39,14 @@
 struct StoreStruct
 {
   uint8_t ConfigVersion;   // This is for testing if first time using eeprom or not
-  bool Ph_RegulationOnOff, Orp_RegulationOnOff, AutoMode, Salt_Chlor, SaltMode, SaltPolarity, WinterMode, WaterHeat, ValveMode, CleanMode, ValveSwitch;
+  String SSID, WIFI_PASS;
+  bool Ph_RegulationOnOff, Orp_RegulationOnOff, AutoMode, Salt_Chlor, SaltMode, SaltPolarity, WinterMode, WaterHeat, ValveMode, CleanMode, ValveSwitch, WaterFillMode;
   uint8_t FiltrationDuration, FiltrationStart, FiltrationStop, FiltrationStartMin, FiltrationStopMax, DelayPIDs, SolarStartMin, SolarStopMax;
-  unsigned long PhPumpUpTimeLimit, ChlPumpUpTimeLimit,PublishPeriod;
-  unsigned long PhPIDWindowSize, OrpPIDWindowSize, PhPIDwindowStartTime, OrpPIDwindowStartTime;
+  unsigned long PhPumpUpTimeLimit, ChlPumpUpTimeLimit, WaterFillUpTimeLimit, WaterFillDuration, SaltPumpRunTime, PublishPeriod;
+  unsigned long PhPIDWindowSize, OrpPIDWindowSize, PhPIDwindowStartTime, OrpPIDwindowStartTime, WaterFillAnCon;
   double Ph_SetPoint, Orp_SetPoint, PSI_HighThreshold, PSI_MedThreshold, FLOW_Pulse, FLOW_HighThreshold, FLOW_MedThreshold, FLOW2_Pulse, FLOW2_HighThreshold, FLOW2_MedThreshold, WaterTempLowThreshold, WaterTemp_SetPoint, TempExternal, pHCalibCoeffs0, pHCalibCoeffs1, OrpCalibCoeffs0, OrpCalibCoeffs1, PSICalibCoeffs0, PSICalibCoeffs1, SaltDiff;
   double Ph_Kp, Ph_Ki, Ph_Kd, Orp_Kp, Orp_Ki, Orp_Kd, PhPIDOutput, OrpPIDOutput, TempValue, PhValue, OrpValue, PSIValue, FLOWValue, FLOW2Value;
-  double AcidFill, ChlFill, pHTankVol, ChlTankVol, pHPumpFR, ChlPumpFR;
+  double AcidFill, ChlFill, pHTankVol, ChlTankVol, pHPumpFR, ChlPumpFR, WaterFillFR;
 } ;
 
 extern StoreStruct storage;
@@ -71,6 +72,7 @@ extern PCF_Pump RobotPump;
 extern PCF_Pump HeatPump;
 extern PCF_Pump SaltPump;
 extern PCF_Pump SolarHeatPump;
+extern PCF_Pump WaterFill;
 
 //The six motor valves of the system (instanciate the MotorValve class)
 //In this case, all valves open/close are managed by relays
