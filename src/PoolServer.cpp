@@ -11,6 +11,7 @@ bool saveParam(const char*,uint8_t );
 bool saveParam(const char*,bool );
 bool saveParam(const char*,unsigned long );
 bool saveParam(const char*,double );
+bool saveParam(const char*,String );
 void PublishSettings(void);
 void simpLinReg(float * , float * , double & , double &, int );
 void ProcessCommand(char*);
@@ -66,6 +67,18 @@ void ProcessCommand(void *pvParameters)
         {
           storage.TempExternal = command["TempExt"].as<float>();
           Debug.print(DBG_DEBUG,"External Temperature: %4.1f°C",storage.TempExternal);
+        }
+
+        //"WIFI" command which is called when new WIFI-SSID and WIFI-Pasword was entered
+        //First parameter is WIFI-SSID, second parameter is WIFI-PASSWORD
+        else if (command.containsKey(F("WIFI")))
+        {
+          storage.SSID = command[F("WIFI")][0].as<String>();
+          storage.WIFI_PASS = command[F("WIFI")][1].as<String>();
+          // Save parameter in eeprom
+          saveParam("SSID", storage.SSID);
+          saveParam("WIFI_PASS", storage.WIFI_PASS);
+          PublishSettings();
         }
         //"PhCalib" command which computes and sets the calibration coefficients of the pH sensor response based on a multi-point linear regression
         //{"PhCalib":[4.02,3.8,9.0,9.11]}  -> multi-point linear regression calibration (minimum 1 point-couple, 6 max.) in the form [ProbeReading_0, BufferRating_0, xx, xx, ProbeReading_n, BufferRating_n]
@@ -297,6 +310,20 @@ void ProcessCommand(void *pvParameters)
             storage.ValveSwitch = 1;
           }
           saveParam("ValveSwitch",storage.ValveSwitch);
+        }
+        //"FillMode" command which sets automatic regulation of Waterlevel (switches water tap on an dof based on level switches)
+        else if (command.containsKey(F("FillMode")))
+        {
+          if ((int)command[F("FillMode")] == 0)
+          {
+            storage.WaterFillMode = 0;
+            WaterFill.Stop();
+          }
+          else
+          {
+            storage.WaterFillMode = 1;
+          }
+          saveParam("FillMode",storage.WaterFillMode);
         }
         //"ELDT" command which turns the MotorValve of the ELDT-Nozzle to desired position
         else if (command.containsKey(F("ELDT")))
@@ -536,6 +563,13 @@ void ProcessCommand(void *pvParameters)
           saveParam("ChlPumpUTL",storage.ChlPumpUpTimeLimit);                    
           PublishSettings();
         }
+        else if (command.containsKey(F("WFMaxUp"))) //"WFMaxUp" command which sets the Max UpTime for WaterFill
+          {
+          storage.WaterFillUpTimeLimit = (unsigned int)command[F("WFMaxUp")] * 60 * 1000; // minutes in milliseconds
+          WaterFill.SetMaxUpTime(storage.WaterFillUpTimeLimit);
+          saveParam("WFMaxUp", storage.WaterFillUpTimeLimit);
+          PublishSettings();
+        }
         else if (command.containsKey(F("OrpPIDParams"))) //"OrpPIDParams" command which sets the Kp, Ki and Kd values for Orp PID loop
         {
           storage.Orp_Kp = (double)command[F("OrpPIDParams")][0]*10000;
@@ -614,6 +648,12 @@ void ProcessCommand(void *pvParameters)
           saveParam("DelayPIDs",storage.DelayPIDs);
           PublishSettings();
         }
+        else if (command.containsKey(F("FillDur"))) //"FillDur" command which sets the duration from Water low level trigger to start waterfill process until it stops
+        {
+          storage.WaterFillDuration = (unsigned int)command[F("FillDur")] * 60 * 1000; // minutes in milliseconds
+          saveParam("FillDur",storage.WaterFillDuration);
+          PublishSettings();
+        }
         else if (command.containsKey(F("PSIHigh"))) //"PSIHigh" command which sets the water high-pressure threshold
         {
           storage.PSI_HighThreshold = (double)command[F("PSIHigh")];
@@ -676,6 +716,19 @@ void ProcessCommand(void *pvParameters)
           saveParam("ChlPumpFR",storage.ChlPumpFR);
           PublishSettings();
         }
+        else if (command.containsKey(F("WaterFillFR")))//"PhPumpFR" set flow rate of Ph pump
+        {
+          storage.WaterFillFR = (double)command[F("WaterFillFR")];
+          WaterFill.SetFlowRate((double)command[F("WaterFillFR")]);
+          saveParam("WaterFillFR",storage.WaterFillFR);
+          PublishSettings();
+        }
+        else if (command.containsKey(F("RstWatCons")))//"RstWatCons" reset the anualwater consumption 
+        {
+          storage.WaterFillAnCon = 0;
+          saveParam("WaterFillAnCon", storage.WaterFillAnCon);
+          PublishSettings();
+        }
         else if (command.containsKey(F("RstpHCal")))//"RstpHCal" reset the calibration coefficients of the pH probe
         {
           storage.pHCalibCoeffs0 = 4.3;
@@ -729,16 +782,20 @@ void ProcessCommand(void *pvParameters)
             RobotPump.Start();   //start robot pump
           }  
         }
-        else if (command.containsKey(F("HeatPump"))) //"HeatPumpPump" command which starts or stops the Heatpump
+        else if (command.containsKey(F("HeatPump"))) //"HeatPump" command which starts or stops the Heatpump
         {
           if ((int)command[F("HeatPump")] == 0){
             HeatPump.Stop();    //stop Heatpump
-            WP_Vorlauf.close();
-            WP_Mischer.open();
           } else {
             HeatPump.Start();   //start Heatpump
-            WP_Vorlauf.open();
-            WP_Mischer.close();
+          }  
+        }
+        else if (command.containsKey(F("WaterFill"))) //"WaterFill" command which starts or stops the WaterFill tap
+        {
+          if ((int)command[F("WaterFill")] == 0){
+            WaterFill.Stop();    //stop WaterFill tap
+          } else {
+            WaterFill.Start();   //start WaterFill tap
           }  
         }
         else if (command.containsKey(F("SaltPump"))) //"SaltPump" command which starts or stops the Salt pump
@@ -830,6 +887,9 @@ void ProcessCommand(void *pvParameters)
 
           if (ChlPump.UpTimeError)
             ChlPump.ClearErrors();
+
+          if (WaterFill.UpTimeError)
+            WaterFill.ClearErrors();
 
           //start filtration pump if within scheduled time slots
           if (!EmergencyStopFiltPump && storage.AutoMode && (hour() >= storage.FiltrationStart) && (hour() < storage.FiltrationStop))
