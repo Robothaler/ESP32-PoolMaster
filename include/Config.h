@@ -65,6 +65,7 @@
 #define FLOW2           36   // Flow-Meter in Measure-Pipe to be sure water is flowing to get accurate values of ph and orp meter
 
 //Digital input pins connected to level reed switches in pool to indicate low or high water level
+//LOW = Switch is closed / HIGH = Switch is open
 #define WATER_MAX_LVL   34
 #define WATER_MIN_LVL   35
 
