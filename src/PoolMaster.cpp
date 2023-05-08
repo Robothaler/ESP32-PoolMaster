@@ -3,7 +3,6 @@
 #include <Arduino.h>                // Arduino framework
 #include "Config.h"
 #include "PoolMaster.h"
-#include "mqtt_comm.cpp"
 
 static WiFiClient wificlient;
 
@@ -18,6 +17,7 @@ bool saveParam(const char*,double );
 void SetPhPID(bool);
 void SetOrpPID(bool);
 void mqttErrorPublish(const char*);
+void publishSolarMode(int event);
 void UpdateTFT(void);
 void stack_mon(UBaseType_t&);
 void Send_IFTTTNotif(void);
@@ -120,8 +120,9 @@ void PoolMaster(void *pvParameters)
 
     //update pumps
     FiltrationPump.loop();
-    SolarHeatPump.loop();
+    SolarPump.loop();
     HeatPump.loop();
+    WaterHeatPump.loop();
     SaltPump.loop();
     PhPump.loop();
     ChlPump.loop();
@@ -136,8 +137,8 @@ void PoolMaster(void *pvParameters)
     Bodenablauf.loop();
     Solarvalve.loop();
 
-      Debug.print(DBG_VERBOSE, "[WIFI] SSID: %s", storage.SSID.c_str());
-      Debug.print(DBG_VERBOSE, "[WIFI] PASSWORD: %s", storage.WIFI_PASS.c_str());
+      // Debug.print(DBG_VERBOSE, "[WIFI] SSID: %s", storage.SSID.c_str());
+      // Debug.print(DBG_VERBOSE, "[WIFI] PASSWORD: %s", storage.WIFI_PASS.c_str());
 
     //reset time counters at midnight and send sync request to time server
     if (hour() == 0 && !DoneForTheDay)
@@ -157,9 +158,10 @@ void PoolMaster(void *pvParameters)
         ChlPump.ResetUpTime();
         ChlPump.SetTankFill(storage.ChlFill);
         RobotPump.ResetUpTime();
-        SolarHeatPump.ResetUpTime();
+        SolarPump.ResetUpTime();
         SaltPump.ResetUpTime();
         HeatPump.ResetUpTime();
+        WaterHeatPump.ResetUpTime();
         WaterFill.ResetUpTime();
 
         EmergencyStopFiltPump = false;
@@ -186,12 +188,12 @@ void PoolMaster(void *pvParameters)
     if (hour() == 15 && (millis() - FiltrationPump.LastStartTime) > 300000 && !d_calc)
     #endif
     {
-        if (storage.TempValue < storage.WaterTempLowThreshold){
+        if (storage.WaterSTemp < storage.WaterTempLowThreshold){
             storage.FiltrationDuration = 2;}
-        else if (storage.TempValue >= storage.WaterTempLowThreshold && storage.TempValue < storage.WaterTemp_SetPoint){
-            storage.FiltrationDuration = round(storage.TempValue / 3.);}
-        else if (storage.TempValue >= storage.WaterTemp_SetPoint){
-            storage.FiltrationDuration = round(storage.TempValue / 2.);}
+        else if (storage.WaterSTemp >= storage.WaterTempLowThreshold && storage.WaterSTemp < storage.WaterTemp_SetPoint){
+            storage.FiltrationDuration = round(storage.WaterSTemp / 3.);}
+        else if (storage.WaterSTemp >= storage.WaterTemp_SetPoint){
+            storage.FiltrationDuration = round(storage.WaterSTemp / 2.);}
     
         storage.FiltrationStart = 15 - (int)round(storage.FiltrationDuration / 2.);
         if (storage.FiltrationStart < storage.FiltrationStartMin)
@@ -235,40 +237,113 @@ void PoolMaster(void *pvParameters)
         Debug.print(DBG_INFO,"Robot Stop after: %d mn",(int)(millis()-RobotPump.LastStartTime)/1000/60);
     }
 
+    // ******************************************************************************************
+    // WATERHEAT -> Requests Heat from the House Heatingsystem (WaterHeatPump)
+    // ******************************************************************************************    
+
     //If water heating is desired and filtration has been running for over 5mins (so that measured water temp is accurate), open/close the HEAT_ON relay as required
     //in order to regulate the water temp. When closing the HEAT_ON relay, my house heating system switches to a fixed water temperature mode and starts the pool water
     //circulator in order to heat-up the heat exchanger located on the pool filtration water circuit
-    if (storage.WaterHeat && FiltrationPump.IsRunning())
+    if (storage.AutoMode && storage.WaterHeat && FiltrationPump.IsRunning())
     {
     if (FiltrationPump.UpTime / 1000 / 60 > 5)
     {
-      if (storage.TempValue < (storage.WaterTemp_SetPoint - 0.2))
+      if (storage.WaterSTemp < (storage.WaterTemp_SetPoint - 0.2))
       {
-        SolarHeatPump.Start();
+        WaterHeatPump.Start();
       }
-      else if (storage.TempValue > (storage.WaterTemp_SetPoint + 0.2))
+      else if (storage.WaterSTemp > (storage.WaterTemp_SetPoint + 0.2))
       {
-        SolarHeatPump.Stop();
+        WaterHeatPump.Stop();
       }
     }
     }
     else
     {
-    SolarHeatPump.Stop();
+    WaterHeatPump.Stop();
     }
+
+    // ******************************************************************************************
+    // SOLAR HEATING LOCAL
+    // ******************************************************************************************
 
     //The circulator of the pool water heating circuit needs to run regularly to avoid blocking
     //Let it run every day at noon for 2 mins
     if (storage.AutoMode && ((hour() == 12) && (minute() == 0)))
     {
-    SolarHeatPump.Start();
+    SolarPump.Start();
     Solarvalve.open();
     }
 
     if (storage.AutoMode && ((hour() == 12) && (minute() == 2)))
     {
-    SolarHeatPump.Stop();
+    SolarPump.Stop();
     Solarvalve.close();
+    }
+
+    //If solar heating (SolarLocExt) is set to "local" and solar mode is set to "auto" mode and filtration has been running for over 5mins (so that measured water temp is accurate), open/close the solarvalve as required
+    //in order to regulate the water temp.    
+    if (!storage.SolarLocExt && storage.SolarMode && FiltrationPump.IsRunning() && 
+        FiltrationPump.UpTime / 1000 / 60 > 5 && 
+        hour() >= storage.SolarStartMin && hour() < storage.SolarStopMax) // Check if it's within time range to activate solar heating
+    {
+        // Check if the temperature difference is large enough to turn on solar pump and valve
+        if (storage.WaterSTemp < storage.WaterTemp_SetPoint && storage.SolarTemp > storage.WaterSTemp + 4)
+        {
+            SolarPump.Start();
+            Solarvalve.open();
+        }
+        else
+        {
+            SolarPump.Stop();
+            Solarvalve.close();
+        }
+    }
+
+    // ******************************************************************************************
+    // SOLAR HEATING EXTERNAL (MQTT)
+    // ******************************************************************************************
+
+    //If solar heating (SolarLocExt) is set to "external" and solar mode is set to "auto" mode and filtration has been running for over 5mins (so that measured water temp is accurate), open/close the solarvalve as required
+    //in order to regulate the water temp.    
+    if (storage.AutoMode && storage.SolarLocExt && storage.SolarMode && FiltrationPump.IsRunning() && 
+        FiltrationPump.UpTime / 1000 / 60 > 5 && 
+        hour() >= storage.SolarStartMin && hour() < storage.SolarStopMax) // Check if it's within time range to activate solar heating
+    {
+        // Check if the temperature difference is large enough to turn on solar pump and valve
+        if (storage.WaterSTemp < storage.WaterTemp_SetPoint && storage.SolarTemp > storage.WaterSTemp + 4)
+        {
+            SolarPump.Start();
+            publishSolarMode(1);
+        }
+        else if (storage.WaterSTemp >= storage.WaterTemp_SetPoint || storage.SolarRLTemp + 2 <= storage.WaterSTemp)
+        {
+            SolarPump.Stop();
+            publishSolarMode(2);
+        }
+    } else
+    {
+      publishSolarMode(3);
+    }
+
+    if (storage.SolarLocExt)
+    {
+      if (storage.AutoMode)
+      {
+            publishPoolMode(1);
+      }
+      else
+      {
+            publishPoolMode(3);
+      }
+    }
+    else if (!storage.AutoMode && SolarPump.IsRunning())
+    {
+      publishPoolMode(2);
+    }
+    else
+    {
+      publishPoolMode(3);
     }
 
     // ******************************************************************************************
@@ -368,13 +443,35 @@ void PoolMaster(void *pvParameters)
     // ******************************************************************************************
     // Mange WaterLevel and WaterFillMode
     // ******************************************************************************************
-    bool waterMaxLvl = digitalRead(WATER_MAX_LVL) == HIGH; // switch is open, Water Level is too low
-    bool waterMinLvl = digitalRead(WATER_MIN_LVL) == HIGH; // switch is open, Water level is ok
+    static unsigned long lastUpTime = 0;
+    float waterConsumption = 0.0;
+    float flowRate = storage.WaterFillFR;
+
+    bool waterMaxLvl = digitalRead(WATER_MAX_LVL) == 0; // switch is open, Water Level is above max level
+    bool waterMinLvl = digitalRead(WATER_MIN_LVL) == 0; // switch is open, Water level is ok
+    Debug.print(DBG_VERBOSE, "[WaterFill] waterMaxLvl = %d", waterMaxLvl);
+    Debug.print(DBG_VERBOSE, "[WaterFill] waterMinLvl = %d", waterMinLvl);
+    Debug.print(DBG_ERROR, "[WaterFill] WaterFill Status: WaterFillDuration: %d ms and WaterFillUpTimeLimit: %d ms", WaterFill.UpTime, storage.WaterFillUpTimeLimit);
     unsigned long levelMinHighDelay = 1; // defines the delay until the water valve opens if min level switch is reached, in minutes
 
     static unsigned long LastWaterFillStartTime = 0;
     static unsigned long LastWaterFillStopTime = 0;
     static unsigned long timeSinceMinLvl = 0; // Global variable to store time since last fill stop
+
+    // Stopp WaterFill valve in case WaterFill Error ist true
+    if (WaterFillError && WaterFill.IsRunning()) {
+        storage.WaterFillMode = 0;
+        WaterFill.Stop();
+        Debug.print(DBG_ERROR, "[WaterFill] WaterFill stopped. WaterFillError is >true<");
+    }
+
+    // Stopp WaterFill if WaterFill Duration reaches MaxUpTime
+    if (WaterFill.UpTime >= storage.WaterFillUpTimeLimit) {
+        storage.WaterFillMode = 0;
+        WaterFill.Stop();
+        WaterFillError = true;
+        Debug.print(DBG_ERROR, "[WaterFill] WaterFill stopped. MaxUpTime is reached: WaterFillDuration: %d ms and WaterFillUpTimeLimit: %d ms", WaterFill.UpTime, storage.WaterFillUpTimeLimit);
+    }
 
     // Check waterMinLvl and Timestamp since last MinLevel
     if (waterMinLvl && waterMaxLvl && timeSinceMinLvl == 0) {
@@ -382,10 +479,10 @@ void PoolMaster(void *pvParameters)
     }
 
     if (storage.WaterFillMode && FiltrationPump.IsRunning()) { // Automatic mode
-        if (waterMinLvl && waterMaxLvl && timeSinceMinLvl != 0 && !WaterFill.IsRunning()) {
+        if (waterMinLvl && waterMaxLvl && timeSinceMinLvl != 0 && !WaterFill.IsRunning() && !WaterFillError) {
             if (millis() - timeSinceMinLvl >= levelMinHighDelay * 60 * 1000) { // Check if the delay has been reached
                 WaterFill.Start();
-                Debug.print(DBG_VERBOSE, "Starting WaterFill...");
+                Debug.print(DBG_VERBOSE, "[WaterFill] Starting WaterFill...");
             }
         }
 
@@ -394,106 +491,41 @@ void PoolMaster(void *pvParameters)
         }            
 
         if (!waterMaxLvl && WaterFill.IsRunning()) { // Water level just reached maximum, stop timing the fill process
-            Debug.print(DBG_VERBOSE, "Stopping WaterFill...");
+            Debug.print(DBG_VERBOSE, "[WaterFill] Stopping WaterFill...");
             WaterFill.Stop();
             timeSinceMinLvl = 0;
             LastWaterFillStopTime = millis();
             unsigned long fillDuration = (round((LastWaterFillStopTime - LastWaterFillStartTime) / 60000.0) * 60000) - 1; // round up to the nearest minute
             storage.WaterFillDuration = fillDuration;
-            Debug.print(DBG_VERBOSE, "WaterFill stopped. Fill duration: %d ms", fillDuration);
+            Debug.print(DBG_VERBOSE, "[WaterFill] WaterFill stopped. Fill duration: %d ms", fillDuration);
             LastWaterFillStartTime = 0; // Reset the start time
             }
 
-        if (!waterMinLvl && storage.WaterFillDuration != 0 && (storage.WaterFillDuration <= millis() - LastWaterFillStartTime) && WaterFill.IsRunning()) { // Water level reached waterFillduration, stop the fill process
-            Debug.print(DBG_VERBOSE, "Stopping WaterFill bevor reaching max level");
+        if (!waterMinLvl && storage.WaterFillDuration != 0 && (storage.WaterFillDuration <= millis() - LastWaterFillStartTime) && WaterFill.IsRunning() && !WaterFillError) { // Water level reached waterFillduration, stop the fill process
+            Debug.print(DBG_VERBOSE, "[WaterFill] Stopping WaterFill bevor reaching max level");
             WaterFill.Stop();
             timeSinceMinLvl = 0;
             LastWaterFillStartTime = 0; // Reset the start time
         }        
     }
     else { // Manual mode
-        if (!waterMaxLvl && WaterFill.IsRunning())
+        if (!waterMaxLvl && WaterFill.IsRunning() || WaterFillError && WaterFill.IsRunning())
         { // Water level reached maximum, stop water filling
-            Debug.print(DBG_VERBOSE, "Stopping WaterFill in Manual mode...");
+            Debug.print(DBG_VERBOSE, "[WaterFill] Stopping WaterFill in Manual mode...");
             WaterFill.Stop();
             LastWaterFillStopTime = millis();
         }
     }
 
     // Calculate the water consumtion sice the last reset of the anual consumtion
-    static unsigned long lastUpTime = 0;
-    float waterConsumption = 0.0;
-
     if (WaterFill.UpTime != lastUpTime) { // check if WaterFill.UpTime has changed        
-        unsigned long fillDuration = WaterFill.UpTime - lastUpTime;
-        waterConsumption = storage.WaterFillFR * fillDuration / 60000.0; // calculate water consumption in liters
+        unsigned long fillDur = WaterFill.UpTime - lastUpTime;
+        Debug.print(DBG_ERROR, "[WaterFill] TimeCalc: fillDuration: %d ms and lastUpTime: %d ms", fillDur, lastUpTime);
+        waterConsumption = flowRate * fillDur / 60000.0; // calculate water consumption in liters
+        Debug.print(DBG_ERROR, "[WaterFill] Flowrate * fillDuration / 60000: FlowRate: %s and fillDuration: %d ms and lastUpTime: %d ms", flowRate, fillDur, lastUpTime);
         storage.WaterFillAnCon += waterConsumption; // add to annual water consumption
         lastUpTime = WaterFill.UpTime;
-    }
-
-
-    // ******************************************************************************************
-    // Manage SaltPump and polarity
-    // ******************************************************************************************
-
-    // start SaltPump with delay after FiltrationStart in order to let the readings stabilize
-    // start inhibited if water temperature below threshold and/or in winter mode
-    if (FiltrationPump.IsRunning() && storage.AutoMode && storage.SaltMode && storage.Salt_Chlor && !FLOW2Error && !storage.WinterMode &&
-        ((millis() - FiltrationPump.LastStartTime) / 1000 / 60 >= storage.DelayPIDs) &&
-        (hour() >= storage.FiltrationStart) && (hour() < storage.FiltrationStop) &&
-        storage.TempValue >= storage.WaterTempLowThreshold)
-    {
-        //Start SaltPump
-        SaltPump.Start();
-    }
-
-
-    // The polarity of the Salt electrolysis should be changed every 4 hours to prevent calcification of the electrolysis plates.
-    if (storage.Salt_Chlor)
-    {
-        static bool polarity_reversed = storage.SaltPolarity;
-        static unsigned long last_switch_time = 0;
-        static unsigned long lastUpTime = 0;
-        static unsigned long last_runtime = 0;
-
-        if (SaltPump.UpTime != lastUpTime) { // check if SaltPump.UpTime has changed
-            last_runtime = SaltPump.UpTime - lastUpTime;
-            storage.SaltPumpRunTime += last_runtime; // add to SaltPumpRunTime
-            lastUpTime = SaltPump.UpTime;
-        }
-
-        static unsigned long switch_polarity_time = 240; // polarity switch time in minutes
-
-        // Check if it's time to reverse polarity
-        if (storage.SaltPumpRunTime >= switch_polarity_time * 60 * 1000) {
-            storage.SaltPumpRunTime = 0;
-            polarity_reversed = !polarity_reversed;
-
-            // Stop SaltPump 200 milliseconds before switching polarity
-                if (SaltPump.IsRunning()) {
-                    SaltPump.Stop();
-                    unsigned long stop_time = millis();
-                    while (millis() - stop_time < 500) {
-                        // wait for 500 milliseconds
-                    }
-                }
-
-                // Switch polarity
-                if (polarity_reversed) {
-                    digitalWrite(SALT_POL, DIRECT);
-                    storage.SaltPolarity = 0;
-                } else {
-                    digitalWrite(SALT_POL, REVERSE);
-                    storage.SaltPolarity = 1;
-                }
-
-                // Start SaltPump 500 milliseconds after switching polarity
-                unsigned long switch_time = millis();
-                while (millis() - switch_time < 500) {
-                    // wait for 500 milliseconds
-                }
-                SaltPump.Start();
-            }
+        Debug.print(DBG_ERROR, "[WaterFill] TimeCalc: AnualCons: %d and waterConsumtion: %d and lastUpTime: %d ms", storage.WaterFillAnCon, waterConsumption, lastUpTime);
     }
 
     // ******************************************************************************************
@@ -505,7 +537,7 @@ void PoolMaster(void *pvParameters)
     if (FiltrationPump.IsRunning() && storage.AutoMode && !FLOW2Error && !storage.WinterMode && !PhPID.GetMode() &&
         ((millis() - FiltrationPump.LastStartTime) / 1000 / 60 >= storage.DelayPIDs) &&
         (hour() >= storage.FiltrationStart) && (hour() < storage.FiltrationStop) &&
-        storage.TempValue >= storage.WaterTempLowThreshold)
+        storage.WaterSTemp >= storage.WaterTempLowThreshold)
     {
         //Start PIDs
         SetPhPID(true);
@@ -521,14 +553,14 @@ void PoolMaster(void *pvParameters)
     }
 
     //Outside regular filtration hours, start filtration in case of cold Air temperatures (<-2.0deg)
-    if (!EmergencyStopFiltPump && storage.AutoMode && !PSIError && !FLOWError && !FiltrationPump.IsRunning() && ((hour() < storage.FiltrationStart) || (hour() > storage.FiltrationStop)) && (storage.TempExternal < -2.0))
+    if (!EmergencyStopFiltPump && storage.AutoMode && !PSIError && !FLOWError && !FiltrationPump.IsRunning() && ((hour() < storage.FiltrationStart) || (hour() > storage.FiltrationStop)) && (storage.AirTemp < -2.0))
     {
         FiltrationPump.Start();
         AntiFreezeFiltering = true;
     }
 
     //Outside regular filtration hours and if in AntiFreezeFiltering mode but Air temperature rose back above 2.0deg, stop filtration
-    if (storage.AutoMode && FiltrationPump.IsRunning() && ((hour() < storage.FiltrationStart) || (hour() > storage.FiltrationStop)) && AntiFreezeFiltering && (storage.TempExternal > 2.0))
+    if (storage.AutoMode && FiltrationPump.IsRunning() && ((hour() < storage.FiltrationStart) || (hour() > storage.FiltrationStop)) && AntiFreezeFiltering && (storage.AirTemp > 2.0))
     {
         FiltrationPump.Stop();
         AntiFreezeFiltering = false;
@@ -584,7 +616,15 @@ void PoolMaster(void *pvParameters)
         FLOW2Error = true;
         mqttErrorPublish("{\"FLOW2 Error\":1}");
     } else if(storage.FLOW2Value >= storage.FLOW2_MedThreshold)
-        FLOW2Error = false;   
+        FLOW2Error = false;
+
+    // WaterFill error
+    if (storage.WaterFillDuration > storage.WaterFillUpTimeLimit || waterMaxLvl == 0 && waterMinLvl == 1)
+    {
+        WaterFillError = true;
+        mqttErrorPublish("{\"WATERFILL Error\":1}");
+    } else if(storage.WaterFillDuration >= storage.WaterFillUpTimeLimit)
+        WaterFillError = false;
     
     //UPdate Nextion TFT
     UpdateTFT();
