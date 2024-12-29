@@ -17,25 +17,15 @@ static uint8_t BitMap1 = 0;
 static uint8_t BitMap2 = 0;
 static uint8_t BitMap3 = 0;
 
-#ifdef DEVT
-static const char* PoolTopicMeas1 = "Home/Pool6/Meas1";
-static const char* PoolTopicMeas2 = "Home/Pool6/Meas2";
-static const char* PoolTopicSet1  = "Home/Pool6/Set1";
-static const char* PoolTopicSet2  = "Home/Pool6/Set2";
-static const char* PoolTopicSet3  = "Home/Pool6/Set3";
-static const char* PoolTopicSet4  = "Home/Pool6/Set4";
-static const char* PoolTopicSet5  = "Home/Pool6/Set5";
-static const char* PoolTopicSet6  = "Home/Pool6/Set6";
-#else
-static const char* PoolTopicMeas1 = "Home/Pool/Meas1";
-static const char* PoolTopicMeas2 = "Home/Pool/Meas2";
-static const char* PoolTopicSet1  = "Home/Pool/Set1";
-static const char* PoolTopicSet2  = "Home/Pool/Set2";
-static const char* PoolTopicSet3  = "Home/Pool/Set3";
-static const char* PoolTopicSet4  = "Home/Pool/Set4";
-static const char* PoolTopicSet5  = "Home/Pool/Set5";
-static const char* PoolTopicSet6  = "Home/Pool/Set6";
-#endif
+static const char* PoolTopicMeas1 = POOLTOPIC"Meas1";
+static const char* PoolTopicMeas2 = POOLTOPIC"Meas2";
+static const char* PoolTopicSet1  = POOLTOPIC"Set1";
+static const char* PoolTopicSet2  = POOLTOPIC"Set2";
+static const char* PoolTopicSet3  = POOLTOPIC"Set3";
+static const char* PoolTopicSet4  = POOLTOPIC"Set4";
+static const char* PoolTopicSet5  = POOLTOPIC"Set5";
+static const char* PoolTopicSet6  = POOLTOPIC"Set6";
+static const char* PoolTemp       = POOLTOPIC"POOL/temperature";
 
 int freeRam(void);
 void stack_mon(UBaseType_t&);
@@ -90,7 +80,7 @@ void PublishTopic(const char* topic, JsonDocument& root)
 void SettingsPublish(void *pvParameters)
 {
   while(!startTasks);
-  vTaskDelay(DT10);                                // Scheduling offset 
+  vTaskDelay(DT12);                                // Scheduling offset 
 
   uint32_t mod1 = xTaskGetTickCount() % 1000;     // This is the offset to respect for future resume
   uint32_t mod2;
@@ -261,7 +251,7 @@ void SettingsPublish(void *pvParameters)
 void MeasuresPublish(void *pvParameters)
 { 
   while(!startTasks);
-  vTaskDelay(DT9);                                // Scheduling offset 
+  vTaskDelay(DT11);                                // Scheduling offset 
   uint32_t mod1 = xTaskGetTickCount() % 1000;     // This is the offset to respect for future resume
 
   TickType_t WaitTimeOut;
@@ -313,8 +303,8 @@ void MeasuresPublish(void *pvParameters)
         const int capacity = JSON_OBJECT_SIZE(9);
         StaticJsonDocument<capacity> root;
 
-        root["TE"]      = storage.TempExternal * 100;        // /!\ x100
-        root["Tmp"]     = storage.TempValue * 100;
+        root["TE"]      = storage.AirTemp * 100;        // /!\ x100
+        root["Tmp"]     = storage.WaterSTemp * 100;
         root["pH"]      = storage.PhValue * 100;
         root["PSI"]     = storage.PSIValue * 100;
         root["FLOW"]    = storage.FLOWValue;
@@ -326,7 +316,7 @@ void MeasuresPublish(void *pvParameters)
         root["FUpT"]   = FiltrationPump.UpTime / 1000;          // Uptime of filtrationpump
         root["HPUpT"]  = HeatPump.UpTime / 1000;                // Uptime of heatpump
         root["SLUpT"]  = SaltPump.UpTime / 1000;                // Uptime of saltmanager
-        root["HPUpT"]  = SolarHeatPump.UpTime / 1000;      // Uptime of Solar-3-Way-Valve
+        root["SolPUpT"]= SolarPump.UpTime / 1000;                // Uptime of solarpump
         
 
         PublishTopic(PoolTopicMeas1, root);
@@ -349,6 +339,16 @@ void MeasuresPublish(void *pvParameters)
         root["IO3"]   = BitMap3;
 
         PublishTopic(PoolTopicMeas2, root);
+    }
+    else
+        Debug.print(DBG_ERROR,"Failed to connect to the MQTT broker");
+
+    //Third MQTT publish which publishes the water temperature measured in the skimmer
+    if (mqttClient.connected())
+    {
+    char temperatureString[6];
+    dtostrf(storage.WaterSTemp, 5, 2, temperatureString);
+    mqttClient.publish(PoolTemp, 1, false, temperatureString);
     }
     else
         Debug.print(DBG_ERROR,"Failed to connect to the MQTT broker");

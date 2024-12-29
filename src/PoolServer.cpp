@@ -8,10 +8,14 @@
 
 // Functions prototypes
 bool saveParam(const char*,uint8_t );
+bool saveParam(const char*,uint16_t );
+bool saveParam(const char*,IPAddress );
 bool saveParam(const char*,bool );
 bool saveParam(const char*,unsigned long );
 bool saveParam(const char*,double );
 bool saveParam(const char*,String );
+bool saveParam(const char* key, const uint8_t* val, size_t size);
+void saveSensorMapping(const char* sensorMapping[], uint8_t ds18b20Mapping[], uint8_t numSensors);
 void PublishSettings(void);
 void simpLinReg(float * , float * , double & , double &, int );
 void ProcessCommand(char*);
@@ -20,6 +24,18 @@ void PublishMeasures();
 void SetPhPID(bool);
 void SetOrpPID(bool);
 void stack_mon(UBaseType_t&);
+void connectToWiFi();
+void readLocalTime();
+void TempInit(void);
+
+extern Preferences nvs;
+
+// Definition von numSensors_A und DS18B20_New vor der Verwendung
+uint8_t DS18B20_A_New[MAX_ADDRESSES][8];
+uint8_t DS18B20_W_New[MAX_ADDRESSES][8];
+extern int numSensors_A;
+extern int numSensors_W;
+
 
 void ProcessCommand(void *pvParameters)
 {
@@ -65,9 +81,34 @@ void ProcessCommand(void *pvParameters)
         //Provide the external temperature. Should be updated regularly and will be used to start filtration for 10mins every hour when temperature is negative
         if (command.containsKey(F("TempExt")))
         {
-          storage.TempExternal = command["TempExt"].as<float>();
-          Debug.print(DBG_DEBUG,"External Temperature: %4.1f°C",storage.TempExternal);
+          storage.AirTemp = command["TempExt"].as<float>();
+          Debug.print(DBG_DEBUG,"External Temperature: %4.1f°C",storage.AirTemp);
         }
+
+        //Provide the external solar temperature.
+        if (command.containsKey(F("TempSolar")))
+        {
+          storage.SolarTemp = command["TempSolar"].as<float>();
+          Debug.print(DBG_DEBUG,"External Solar Temperature: %4.1f°C",storage.SolarTemp);
+        }
+
+        //"WIFI_OnOff" command which switches WiFi On or Off
+        else if (command.containsKey(F("WIFI_OnOff")))
+        {
+          if ((int)command[F("WIFI_OnOff")] == 0)
+          {
+            storage.WIFI_OnOff = 0;
+            connectToWiFi();
+          }
+          else
+          {
+            storage.WIFI_OnOff = 1;
+            connectToWiFi();
+            readLocalTime();
+            setTime(timeinfo.tm_hour,timeinfo.tm_min,timeinfo.tm_sec,timeinfo.tm_mday,timeinfo.tm_mon+1,timeinfo.tm_year-100);
+          }
+          saveParam("WIFI_OnOff",storage.WIFI_OnOff);
+        }        
 
         //"WIFI" command which is called when new WIFI-SSID and WIFI-Pasword was entered
         //First parameter is WIFI-SSID, second parameter is WIFI-PASSWORD
@@ -80,6 +121,151 @@ void ProcessCommand(void *pvParameters)
           saveParam("WIFI_PASS", storage.WIFI_PASS);
           PublishSettings();
         }
+
+        //"MqttLogin" command which switches MQTT_Login with crdentials On or Off
+        else if (command.containsKey(F("MqttLogin")))
+        {
+          if ((int)command[F("MqttLogin")] == 0)
+          {
+            storage.MQTTLOGIN_OnOff = 0;
+          }
+          else
+          {
+            storage.MQTTLOGIN_OnOff = 1;
+          }
+          saveParam("MQTTLOGIN_OnOff",storage.MQTTLOGIN_OnOff);
+          PublishSettings();
+        } 
+
+        //"MqttPort" command which is called when new MQTT-PORT was entered
+        else if (command.containsKey(F("MqttPort")))
+        {
+          storage.MQTT_PORT = (unsigned int)command[F("MqttPort")];
+          // Save parameter in eeprom
+          saveParam("MQTT_PORT", storage.MQTT_PORT);
+          PublishSettings();
+        }
+
+        //"MqttIP" command which is called when new MQTT-SERVER IP-Address was entered
+        else if (command.containsKey(F("MqttIP")))
+        {
+          String ipAddressString = "";
+          for (int i = 0; i < 4; i++) {
+            ipAddressString += String(command[F("MqttIP")][i].as<int>());
+            if (i < 3) ipAddressString += ".";
+          }
+          IPAddress ipAddress;
+          if (ipAddress.fromString(ipAddressString))
+          {
+            uint32_t ipAddressLong = ipAddress;
+            storage.MQTT_IP = ipAddressLong;
+            // Save parameter in nvs
+            saveParam("MQTT_IP", storage.MQTT_IP);
+            PublishSettings();
+            Debug.print(DBG_DEBUG, "[MQTT] MQTT server IP address set to: %s", ipAddressString.c_str());
+          }
+          else
+          {
+            // Handle invalid IP address
+            Debug.print(DBG_DEBUG, "Invalid IP address");
+            uint32_t oldIpAddress = nvs.getULong("MQTT_IP", 0);
+            storage.MQTT_IP = oldIpAddress;
+          }
+        }
+
+        //"MQTTLOGIN" command which is called when new MQTT-USER, Password and Name was entered
+        //First parameter is MQTT-USER, second parameter is MQTT-PASSWORD, third parameter is MQTT-NAME
+        else if (command.containsKey(F("MQTTLOGIN")))
+        {
+          storage.MQTT_USER = command[F("MQTTLOGIN")][0].as<String>();
+          storage.MQTT_PASS = command[F("MQTTLOGIN")][1].as<String>();
+          storage.MQTT_NAME = command[F("MQTTLOGIN")][2].as<String>();
+          // Save parameter in eeprom
+          saveParam("MQTT_USER", storage.MQTT_USER);
+          saveParam("MQTT_PASS", storage.MQTT_PASS);
+          saveParam("MQTT_NAME", storage.MQTT_NAME);
+          PublishSettings();
+        }
+
+        //"Bus_A_B" command which switches the DS18B20 Bus-Switch from A to B or visa versa
+        else if (command.containsKey(F("Bus_A_B")))
+        {
+          if ((int)command[F("Bus_A_B")] == 0)
+          {
+            storage.BUS_A_B = 0;
+          }
+          else
+          {
+            storage.BUS_A_B = 1;
+          }
+          saveParam("BUS_A_B",storage.BUS_A_B);
+          PublishSettings();
+        }
+
+        // "DS18B20A" command which is called when new Array for DS18B20A Sensor was entered
+        else if (command.containsKey(F("DS18B20A")))
+        {
+          Debug.print(DBG_DEBUG, "DS18B20A command received");
+          const JsonArray &jsonArray = command[F("DS18B20A")].as<JsonArray>();
+          uint8_t newArray[MAX_ADDRESSES] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+          int i = 0;
+          for (auto value : jsonArray)
+          {
+            if (i > (MAX_ADDRESSES - 1))
+              break; // Maximum of 5 sensors allowed
+            int index = value.as<int>();
+            if ((index >= 0) && (index <= (MAX_ADDRESSES - 1)))
+            {
+              newArray[i] = storage.Array_A[index];
+              Debug.print(DBG_DEBUG, "New mapping for DS18B20_A sensor %d: %d", index, newArray[i]);
+            }
+            i++;
+          }
+          for (int i = 0; i < MAX_ADDRESSES; i++)
+          {
+            storage.Array_A[i] = newArray[i];
+          }
+          saveParam("Array_A", storage.Array_A, MAX_ADDRESSES);
+          storage.SolarTemp = 0.0;
+          storage.SolarVLTemp = 0.0;
+          storage.SolarRLTemp = 0.0;
+          storage.AirInTemp = 0.0;
+          storage.AirTemp = 0.0;
+          PublishSettings();
+        }
+
+        // "DS18B20W" command which is called when new Array for DS18B20W Sensor was entered
+        else if (command.containsKey(F("DS18B20W")))
+        {
+          Debug.print(DBG_DEBUG, "DS18B20W command received");
+          const JsonArray &jsonArray = command[F("DS18B20W")].as<JsonArray>();
+          uint8_t newArray[MAX_ADDRESSES] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+          int i = 0;
+          for (auto value : jsonArray)
+          {
+            if (i > (MAX_ADDRESSES - 1))
+              break; // Maximum of 5 sensors allowed
+            int index = value.as<int>();
+            if ((index >= 0) && (index <= (MAX_ADDRESSES - 1)))
+            {
+              newArray[i] = storage.Array_W[index];
+              Debug.print(DBG_DEBUG, "New mapping for DS18B20_W sensor %d: %d", index, newArray[i]);
+            }
+            i++;
+          }
+          for (int i = 0; i < MAX_ADDRESSES; i++)
+          {
+            storage.Array_W[i] = newArray[i];
+          }
+          saveParam("Array_W", storage.Array_W, MAX_ADDRESSES);
+          storage.WaterSTemp = 0.0;
+          storage.WaterITemp = 0.0;
+          storage.WaterBTemp = 0.0;
+          storage.WaterWPTemp = 0.0;
+          storage.WaterWTTemp = 0.0;
+          PublishSettings();
+        }
+
         //"PhCalib" command which computes and sets the calibration coefficients of the pH sensor response based on a multi-point linear regression
         //{"PhCalib":[4.02,3.8,9.0,9.11]}  -> multi-point linear regression calibration (minimum 1 point-couple, 6 max.) in the form [ProbeReading_0, BufferRating_0, xx, xx, ProbeReading_n, BufferRating_n]
         else if (command.containsKey(F("PhCalib")))
@@ -225,6 +411,32 @@ void ProcessCommand(void *pvParameters)
             storage.AutoMode = 1;
           }
           saveParam("AutoMode",storage.AutoMode);
+        }
+        //"SolarLocExt" command which sets regulation of Solar to Local or Extern 
+        else if (command.containsKey(F("SolarLocExt")))
+        {
+          if ((int)command[F("SolarLocExt")] == 0)
+          {
+            storage.SolarLocExt = 0;
+          }
+          else
+          {
+            storage.SolarLocExt = 1;
+          }
+          saveParam("SolarLocExt",storage.SolarLocExt);
+        }
+        //"SolarMode" command which sets regulation of Solar Mode to manual or auto mode
+        else if (command.containsKey(F("SolarMode")))
+        {
+          if ((int)command[F("SolarMode")] == 0)
+          {
+            storage.SolarMode = 0;
+          }
+          else
+          {
+            storage.SolarMode = 1;
+          }
+          saveParam("SolarMode",storage.SolarMode);
         }
         //"Salt_Chlor" command which switch between Salt desinfection or Chlor desinfection mode
         else if (command.containsKey(F("Salt_Chlor")))
@@ -480,7 +692,7 @@ void ProcessCommand(void *pvParameters)
           if ((int)command[F("Heat")] == 0)
           {
             storage.WaterHeat = false;
-            SolarHeatPump.Stop();
+            WaterHeatPump.Stop();
           }
           else
           {
@@ -529,7 +741,6 @@ void ProcessCommand(void *pvParameters)
           PhPump.SetTankVolume(storage.pHTankVol);
           storage.AcidFill = (double)command[F("pHTank")][1];
           PhPump.SetTankFill(storage.AcidFill);
-        //  PhPump.ResetUpTime();
           saveParam("pHTankVol",storage.pHTankVol);
           saveParam("AcidFill",storage.AcidFill);               
           PublishSettings();
@@ -542,7 +753,6 @@ void ProcessCommand(void *pvParameters)
           ChlPump.SetTankVolume(storage.ChlTankVol);
           storage.ChlFill = (double)command[F("ChlTank")][1];
           ChlPump.SetTankFill(storage.ChlFill);
-        //  ChlPump.ResetUpTime();
           saveParam("ChlTankVol",storage.ChlTankVol);
           saveParam("ChlFill",storage.ChlFill);
           PublishSettings();
@@ -555,10 +765,10 @@ void ProcessCommand(void *pvParameters)
         }
         else if (command.containsKey(F("PumpsMaxUp"))) //"PumpsMaxUp" command which sets the Max UpTime for pumps
         {
-          storage.PhPumpUpTimeLimit = (unsigned int)command[F("PumpsMaxUp")];
-          PhPump.SetMaxUpTime(storage.PhPumpUpTimeLimit * 1000);
-          storage.ChlPumpUpTimeLimit = (unsigned int)command[F("PumpsMaxUp")];
-          ChlPump.SetMaxUpTime(storage.ChlPumpUpTimeLimit * 1000);
+          storage.PhPumpUpTimeLimit = (unsigned int)command[F("PumpsMaxUp")] * 60 * 1000; // minutes in milliseconds
+          PhPump.SetMaxUpTime(storage.PhPumpUpTimeLimit);
+          storage.ChlPumpUpTimeLimit = (unsigned int)command[F("PumpsMaxUp")] * 60 * 1000; // minutes in milliseconds
+          ChlPump.SetMaxUpTime(storage.ChlPumpUpTimeLimit);
           saveParam("PhPumpUTL",storage.PhPumpUpTimeLimit);
           saveParam("ChlPumpUTL",storage.ChlPumpUpTimeLimit);                    
           PublishSettings();
@@ -567,7 +777,7 @@ void ProcessCommand(void *pvParameters)
           {
           storage.WaterFillUpTimeLimit = (unsigned int)command[F("WFMaxUp")] * 60 * 1000; // minutes in milliseconds
           WaterFill.SetMaxUpTime(storage.WaterFillUpTimeLimit);
-          saveParam("WFMaxUp", storage.WaterFillUpTimeLimit);
+          saveParam("WFMaxUp",storage.WaterFillUpTimeLimit);
           PublishSettings();
         }
         else if (command.containsKey(F("OrpPIDParams"))) //"OrpPIDParams" command which sets the Kp, Ki and Kd values for Orp PID loop
@@ -594,7 +804,7 @@ void ProcessCommand(void *pvParameters)
         }
         else if (command.containsKey(F("OrpPIDWSize"))) //"OrpPIDWSize" command which sets the window size of the Orp PID loop
         {
-          storage.OrpPIDWindowSize = (unsigned long)command[F("OrpPIDWSize")]*60*1000;
+          storage.OrpPIDWindowSize = (unsigned long)command[F("OrpPIDWSize")] * 60 * 1000; // minutes in milliseconds
           saveParam("OrpPIDWSize",storage.OrpPIDWindowSize);
           OrpPID.SetSampleTime((int)storage.OrpPIDWindowSize);
           OrpPID.SetOutputLimits(0, storage.OrpPIDWindowSize);  //Whatever happens, don't allow continuous injection of Chl for more than a PID Window
@@ -602,7 +812,7 @@ void ProcessCommand(void *pvParameters)
         }
         else if (command.containsKey(F("PhPIDWSize"))) //"PhPIDWSize" command which sets the window size of the Ph PID loop
         {
-          storage.PhPIDWindowSize = (unsigned long)command[F("PhPIDWSize")]*60*1000;
+          storage.PhPIDWindowSize = (unsigned long)command[F("PhPIDWSize")] * 60 * 1000; // minutes in milliseconds
           saveParam("PhPIDWSize",storage.PhPIDWindowSize);
           PhPID.SetSampleTime((int)storage.PhPIDWindowSize);
           PhPID.SetOutputLimits(0, storage.PhPIDWindowSize);    //Whatever happens, don't allow continuous injection of Acid for more than a PID Window
@@ -731,24 +941,24 @@ void ProcessCommand(void *pvParameters)
         }
         else if (command.containsKey(F("RstpHCal")))//"RstpHCal" reset the calibration coefficients of the pH probe
         {
-          storage.pHCalibCoeffs0 = 4.3;
-          storage.pHCalibCoeffs1 = -2.63;
+          storage.pHCalibCoeffs0 = 3.51;
+          storage.pHCalibCoeffs1 = -2.73;
           saveParam("pHCalibCoeffs0",storage.pHCalibCoeffs0);
           saveParam("pHCalibCoeffs1",storage.pHCalibCoeffs1);
           PublishSettings();
         }
         else if (command.containsKey(F("RstOrpCal")))//"RstOrpCal" reset the calibration coefficients of the Orp probe
         {
-          storage.OrpCalibCoeffs0 = (double)-1189.;
-          storage.OrpCalibCoeffs1 = (double)2564.;
+          storage.OrpCalibCoeffs0 = (double)-930.;
+          storage.OrpCalibCoeffs1 = (double)2455.;
           saveParam("OrpCalibCoeffs0",storage.OrpCalibCoeffs0);
           saveParam("OrpCalibCoeffs1",storage.OrpCalibCoeffs1);
           PublishSettings();
         }
         else if (command.containsKey(F("RstPSICal")))//"RstPSICal" reset the calibration coefficients of the pressure sensor
         {
-          storage.PSICalibCoeffs0 = (double)1.11;
-          storage.PSICalibCoeffs1 = (double)0;
+          storage.PSICalibCoeffs0 = (double)1.31;
+          storage.PSICalibCoeffs1 = (double)-0.1;
           saveParam("PSICalibCoeffs0",storage.PSICalibCoeffs0);
           saveParam("PSICalibCoeffs1",storage.PSICalibCoeffs1);
           PublishSettings();
@@ -778,8 +988,10 @@ void ProcessCommand(void *pvParameters)
         {
           if ((int)command[F("RobotPump")] == 0){
             RobotPump.Stop();    //stop robot pump
+            cleaning_done = true;
           } else {
             RobotPump.Start();   //start robot pump
+            cleaning_done = false;
           }  
         }
         else if (command.containsKey(F("HeatPump"))) //"HeatPump" command which starts or stops the Heatpump
@@ -796,6 +1008,16 @@ void ProcessCommand(void *pvParameters)
             WaterFill.Stop();    //stop WaterFill tap
           } else {
             WaterFill.Start();   //start WaterFill tap
+          }  
+        }
+        else if (command.containsKey(F("SolarPump"))) //"SolarPump" command which starts or stops the Solar pump
+        {
+          if ((int)command[F("SolarPump")] == 0){
+            SolarPump.Stop();    //stop solar pump
+            publishSolarMode(2); //sets SolarControl to "puffer" mode
+          } else {
+            SolarPump.Start();   //start solar pump
+            publishSolarMode(1); //sets SolarControl to "pool" mode
           }  
         }
         else if (command.containsKey(F("SaltPump"))) //"SaltPump" command which starts or stops the Salt pump
@@ -881,6 +1103,9 @@ void ProcessCommand(void *pvParameters)
 
           if (FLOW2Error)
             FLOW2Error = false;
+          
+          if (WaterFillError)
+            WaterFillError = false;
 
           if (PhPump.UpTimeError)
             PhPump.ClearErrors();

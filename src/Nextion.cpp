@@ -5,6 +5,8 @@
   (c) Loic74 <loic74650@gmail.com> 2018-2020
 
   Modified to implement display sleep mode.
+  Remove every usages of String in order to avoid duplication, fragmentation and random crashes.
+  Note usage of snprintf_P which uses a fmt string that resides in program memory.
 */
 
 #include <Arduino.h>
@@ -22,7 +24,11 @@ static char HourBuffer[9];
 
 static uint8_t debounceCount = 2;
 static uint8_t debounceM     = 0;
+static uint8_t debounceB     = 0;
 static uint8_t debounceSM    = 0;
+static uint8_t debounceSolM  = 0;
+static uint8_t debounceSolP  = 0;
+static uint8_t debounceSolLE = 0;
 static uint8_t debounceVM    = 0;
 static uint8_t debounceCM    = 0;
 static uint8_t debounceVS    = 0;
@@ -40,44 +46,68 @@ static uint8_t debouncepHP   = 0;
 static uint8_t debounceChlP  = 0;
 static uint8_t debounceWFM   = 0;
 static uint8_t debounceWF    = 0;
+static uint8_t debounceWiFi  = 0;
+static uint8_t debounceMQL   = 0;
 
 
 // Structure holding the measurement values to display on the Nextion display
 // Used to refresh only modified values
 static struct TFTStruct
 {
-  float pH, Orp, pHSP, OrpSP, WT, WTSP, AT, PSI, flow, flow2, F1H, F1L, F2H, F2L, PsiH, PsiL, WTLow, pHPumpFR, ChlPumpFR, WaterFillFR, Ph_Kp, Ph_Ki, Ph_Kd, Orp_Kp, Orp_Ki, Orp_Kd;
+  float pH, Orp, pHSP, OrpSP, WST, WIT, WBT, WWPT, WWTT, WTSP, AT, AH, AP, AIT, ST, SVLT, SRLT, PSI, flow, flow2, F1H, F1L, F2H, F2L, PsiH, PsiL, WTLow, pHPumpFR, ChlPumpFR, WaterFillFR, Ph_Kp, Ph_Ki, Ph_Kd, Orp_Kp, Orp_Ki, Orp_Kd;
   uint8_t FSta, FSto, FStaT0, FStoT1, SStaT0, SStoT1, pHTkFill, OrpTkFill, PIDpH, PIDChl, PubInt, PumpMaxUp, WFMaxUp, FillDur, WFMinLvl, WFMaxLvl, DelayPID, pHPIDW, OrpPIDW, FLOW_Pulse, FLOW2_Pulse, SaltDiff;
-  boolean Mode, WaterFillMode, SaltMode, NetW, Filt, Robot, R0, R1, R2, pHUTErr, ChlUTErr, WFUTErr, PSIErr, FLOWErr, FLOW2Err, pHTLErr, ChlTLErr, PhPump, ChlPump, Heat, HeatPump, SaltPump, Salt_Chlor, SaltPolarity, ValveMode, CleanMode, ValveSwitch, WaterFill;
-  unsigned long pHPpRT, OrpPpRT, SHRT, HPRT, SPUT, SPRT, FLRT, WFRT, WFAC;
-  String FW, SSID, PASSW;
-  std::string ELDTstate, ELDHstate, WPVstate, WPMstate, BOTTstate;
+  uint16_t MQTT_PORT;
+  boolean WIFI_OnOff, MqttLogin, BUSA_B, Mode, SolarLoEx, SolarMode, WaterFillMode, SaltMode, NetW, Filt, Robot, R0, R1, R2, pHUTErr, ChlUTErr, WFUTErr, WFErr, PSIErr, FLOWErr, FLOW2Err, pHTLErr, ChlTLErr, PhPump, ChlPump, Heat, HeatPump, SaltPump, SolarPump ,Salt_Chlor, SaltPolarity, ValveMode, CleanMode, ValveSwitch, WaterFill;
+  unsigned long pHPpRT, OrpPpRT, SHRT, HPRT, SPUT, SPRT, SolPRT, FLRT, WFRT, WFAC;
+  IPAddress MQTT_IP;
+  DeviceAddress TW_Adr_1, TW_Adr_2, TW_Adr_3, TW_Adr_4, TW_Adr_5, TA_Adr_1, TA_Adr_2, TA_Adr_3, TA_Adr_4, TA_Adr_5;
+  String FW, SSID, PASSW, MQTT_USER, MQTT_PASS, MQTT_NAME;
+  std::string ELDTstate, ELDHstate, WPVstate, WPMstate, BOTTstate, SOLARstate;
 } TFTStruc =
 { //default values to force update on next refresh
-  -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1.,
+  -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1.,
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-  99, 99, 99, 99, 99, 99, 99, 99, 99,
-  "", "", "",
-  "", "", "", "", "",
+  0,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+  99,
+  "", "", "", "", "", "",
+  "", "", "", "", "", "",
 };
 
-
+extern Preferences nvs;
 
 //Nextion TFT object. Choose which ever Serial port
 //you wish to connect to (not "Serial" which is used for debug), here Serial2 UART
-static EasyNex myNex(Serial2);
+static EasyNex myNex(Serial1);
 
 // Functions prototypes
 void InitTFT(void);
 void ResetTFT(void);
 void UpdateTFT(void);
 void UpdateWiFi(bool);
+void getAddressString(DeviceAddress addr, char* temp, size_t tempSize);
 
+void getAddressString(DeviceAddress addr, char* temp, size_t tempSize) {
+    size_t index = 0;
+    for (int i = 0; i < 8; i++) {
+        if (index >= tempSize - 1) break; // Sicherheitsprüfung, um Überläufe zu vermeiden
+        if (addr[i] < 16) {
+            temp[index++] = '0'; // Eine führende Null hinzufügen
+        }
+        if (index >= tempSize - 1) break;
+        index += snprintf(&temp[index], tempSize - index, "%x", addr[i]); // Hexadezimale Zeichen hinzufügen
+        if (i < 7 && index < tempSize - 1) {
+            temp[index++] = ':'; // Doppelpunkte zwischen den Adressteilen
+        }
+    }
+    temp[index] = '\0'; // Null-Terminierung
+}
 
 void InitTFT()
 {
   myNex.begin(9600);
+  //myNex.begin(9600, SERIAL_8N1, 44, 43);
 }
 
 //reset TFT at start of controller - Change transmission rate to 115200 bauds on both side (Nextion then ESP)
@@ -124,14 +154,60 @@ void UpdateTFT()
     myNex.writeStr(F("page0.vaMCFW.txt"), TFTStruc.FW);
   }
 
-  if (storage.SSID != TFTStruc.SSID || !refresh)
+  if (storage.WIFI_OnOff != TFTStruc.WIFI_OnOff || !refresh)
+  {
+    if ((debounceWiFi == 0) || (debounceWiFi > debounceCount))
     {
-      TFTStruc.SSID = storage.SSID;
-      temp = String(TFTStruc.SSID);
-      myNex.writeStr(F("page0.vaWifiSSID.txt"), temp);
-      Debug.print(DBG_DEBUG, "Updating TFT SSID: %s", temp.c_str());
-      if (CurrentPage == 24)  myNex.writeStr(F("ssid.txt"), temp);
+      debounceWiFi = 0;
+      TFTStruc.WIFI_OnOff = storage.WIFI_OnOff;
+      myNex.writeNum(F("page18.vabWiFi_OnOff.val"), TFTStruc.WIFI_OnOff);
+      if (CurrentPage == 18)
+      {
+        if (TFTStruc.WIFI_OnOff == 1)
+        myNex.writeStr(F("bWiFi_OnOff.picc=52"));
+        else
+        myNex.writeStr(F("bWiFi_OnOff.picc=51"));
+      }
+      else if (CurrentPage == 11)
+      {
+        if (TFTStruc.WIFI_OnOff == 1)
+        myNex.writeStr(F("b5.picc=43"));
+        else
+        myNex.writeStr(F("b5.picc=42"));
+      }
     }
+    else
+      debounceWiFi++;
+  }
+
+  if (storage.MQTTLOGIN_OnOff != TFTStruc.MqttLogin || !refresh)
+  {
+    if ((debounceMQL == 0) || (debounceMQL > debounceCount))
+    {
+      debounceMQL = 0;
+      TFTStruc.MqttLogin = storage.MQTTLOGIN_OnOff;
+      myNex.writeNum(F("page19.vabMqttLogin.val"), TFTStruc.MqttLogin);
+      if (CurrentPage == 19)
+      {
+        if (TFTStruc.MqttLogin == 1)
+        myNex.writeStr(F("bMqttLogin.picc=50"));
+        else
+        myNex.writeStr(F("bMqttLogin.picc=49"));
+      }
+    }
+    else
+      debounceMQL++;
+  }
+  
+  if (storage.SSID != TFTStruc.SSID || !refresh)
+      {
+        TFTStruc.SSID = storage.SSID;
+        temp = String(TFTStruc.SSID);
+        myNex.writeStr(F("page0.vaWifiSSID.txt"), temp);
+        Debug.print(DBG_DEBUG, "Updating TFT SSID: %s", temp.c_str());
+        if (CurrentPage == 24)  myNex.writeStr(F("ssid.txt"), temp);
+      }
+
 
   if (storage.WIFI_PASS != TFTStruc.PASSW || !refresh)
     {
@@ -145,6 +221,9 @@ void UpdateTFT()
   if (MQTTConnection != TFTStruc.NetW || !refresh) {
   TFTStruc.NetW = MQTTConnection;
   myNex.writeNum(F("page1.vabNetW.val"), TFTStruc.NetW);
+  temp = TFTStruc.NetW ? F("ONLINE") : F("OFFLINE");
+  myNex.writeStr(F("page0.vaMqttState.txt"), temp);
+  myNex.writeStr(F("page19.MqttState.txt"), temp);
 
   switch (CurrentPage) {
     case 0:
@@ -182,6 +261,8 @@ void UpdateTFT()
       break;
     case 11:
       myNex.writeStr(TFTStruc.NetW == 1 ? F("p11NetW.pic=5") : F("p11NetW.pic=6"));
+      myNex.writeStr(TFTStruc.NetW == 1 ? F("b6.picc=43") : F("b6.picc=42"));
+      myNex.writeStr(TFTStruc.NetW == 1 ? F("b6.picc2=42") : F("b6.picc2=43"));
       break;
     case 12:
       myNex.writeStr(TFTStruc.NetW == 1 ? F("p12NetW.pic=5") : F("p12NetW.pic=6"));
@@ -201,8 +282,56 @@ void UpdateTFT()
     case 17:
       myNex.writeStr(TFTStruc.NetW == 1 ? F("p17NetW.pic=5") : F("p17NetW.pic=6"));
       break;
+    case 18:
+      myNex.writeStr(TFTStruc.NetW == 1 ? F("p18NetW.pic=5") : F("p18NetW.pic=6"));
+      break;
+    case 19:
+      myNex.writeStr(TFTStruc.NetW == 1 ? F("p19NetW.pic=5") : F("p19NetW.pic=6"));
+      myNex.writeStr(F("MqttState.txt"), temp);
+      break;
     }
   }
+
+  if (storage.MQTT_NAME != TFTStruc.MQTT_NAME || !refresh)
+    {
+      TFTStruc.MQTT_NAME = storage.MQTT_NAME;
+      temp = String(TFTStruc.MQTT_NAME);
+      myNex.writeStr(F("page0.vaMqttName.txt"), temp);
+      if (CurrentPage == 19)  myNex.writeStr(F("MqttName.txt"), temp);
+    }
+
+  if (storage.MQTT_USER != TFTStruc.MQTT_USER || !refresh)
+    {
+      TFTStruc.MQTT_USER = storage.MQTT_USER;
+      temp = String(TFTStruc.MQTT_USER);
+      myNex.writeStr(F("page0.vaMqttUser.txt"), temp);
+      if (CurrentPage == 19)  myNex.writeStr(F("MqttUser.txt"), temp);
+    }
+
+  if (storage.MQTT_PASS != TFTStruc.MQTT_PASS || !refresh)
+    {
+      TFTStruc.MQTT_PASS = storage.MQTT_PASS;
+      temp = String(TFTStruc.MQTT_PASS);
+      myNex.writeStr(F("page0.vaMqttPass.txt"), temp);
+      if (CurrentPage == 19)  myNex.writeStr(F("MqttPass.txt"), temp);
+    }
+
+  if (storage.MQTT_PORT != TFTStruc.MQTT_PORT || !refresh)
+    {
+      TFTStruc.MQTT_PORT = storage.MQTT_PORT;
+      temp = String(TFTStruc.MQTT_PORT);
+      myNex.writeStr(F("page0.vaMqttPort.txt"), temp);
+      if (CurrentPage == 19)  myNex.writeStr(F("MqttPort.txt"), temp);
+    }
+  
+  if (storage.MQTT_IP != TFTStruc.MQTT_IP || !refresh)
+    {
+      TFTStruc.MQTT_IP = storage.MQTT_IP;
+      temp = TFTStruc.MQTT_IP.toString();
+      myNex.writeStr(F("page0.vaMqttIP.txt"), temp);
+      Debug.print(DBG_DEBUG, "[MQTT / NEXTION] MQTT server IP address: %s", storage.MQTT_IP.toString().c_str());
+      if (CurrentPage == 19)  myNex.writeStr(F("MqttIP.txt"), temp);
+    }   
 
   if (storage.PhValue != TFTStruc.pH || !refresh)
   {
@@ -340,15 +469,189 @@ void UpdateTFT()
       debounceChlP++;
   }
 
-  if (storage.TempValue != TFTStruc.WT || !refresh)
+  if (storage.BUS_A_B != TFTStruc.BUSA_B || !refresh)
   {
-    TFTStruc.WT = storage.TempValue;
-    temp = String(TFTStruc.WT, 1);
+    if ((debounceB == 0) || (debounceB > debounceCount))
+    {
+      debounceB = 0;
+      TFTStruc.BUSA_B = storage.BUS_A_B;
+      myNex.writeNum(F("pageTempArray.vabBUSA_B.val"), TFTStruc.BUSA_B);
+      if (CurrentPage == 27)
+      {
+        if (TFTStruc.BUSA_B == 1)
+        myNex.writeStr(F("b2.pic=58"));
+        else
+        myNex.writeStr(F("b2.pic=59"));
+      }
+    }
+    else
+      debounceB++;
+  }
+
+  /*
+  if (storage.BUS_A_B != TFTStruc.BUSA_B || !refresh) {
+  TFTStruc.BUSA_B = storage.BUS_A_B;
+  if (CurrentPage == 27)
+      {
+        if (TFTStruc.BUSA_B == 1)
+        // Display data for Sensor W
+        for (int i = 0; i < MAX_ADDRESSES; i++)
+        {
+          DeviceAddress addr;
+          memcpy(&addr, &DS18B20_W[i], sizeof(DeviceAddress));
+          String name = NV_STORAGE_MAPPING_W[DS18B20_Mapping_W[i]];
+          String num = String(i + 1);
+          String pos = String(DS18B20_Mapping_W[i]);
+          myNex.writeStr("pageTempArray.s" + num + ".txt", getAddressString(addr) + " | " + name);
+          myNex.writeStr("pageTempArray.a" + num + ".txt", num);
+          myNex.writeStr("pageTempArray.t" + pos + ".txt", pos);
+
+          Debug.print(DBG_VERBOSE, "Address %d for Sensor W: %s, Name: %s, Number: %s, Position: %s", i+1, getAddressString(addr).c_str(), name.c_str(), num.c_str(), pos.c_str());
+        }
+        else
+        // Display data for Sensor A
+        for (int i = 0; i < MAX_ADDRESSES; i++)
+        {
+            DeviceAddress addr;
+            memcpy(&addr, &DS18B20_A[i], sizeof(DeviceAddress));
+            String name = NV_STORAGE_MAPPING_A[DS18B20_Mapping_A[i]];
+            String num = String(i + 1);
+            String pos = String(DS18B20_Mapping_A[i]);
+            myNex.writeStr("pageTempArray.s" + num + ".txt", getAddressString(addr) + " | " + name);
+            myNex.writeStr("pageTempArray.a" + num + ".txt", num);
+            myNex.writeStr("pageTempArray.t" + pos + ".txt", pos);
+
+            Debug.print(DBG_VERBOSE, "Address %d for Sensor A: %s, Name: %s, Number: %s, Position: %s", i+1, getAddressString(addr).c_str(), name.c_str(), num.c_str(), pos.c_str());
+        }
+    }
+  } */
+
+  if (storage.BUS_A_B != TFTStruc.BUSA_B || !refresh)
+  {
+    TFTStruc.BUSA_B = storage.BUS_A_B;
+    if (CurrentPage == 27)
+    {
+      if (TFTStruc.BUSA_B == 1)
+      {
+        // Display data for Sensor W
+        for (int i = 0; i < MAX_ADDRESSES; i++)
+        {
+        String name = NV_STORAGE_MAPPING_W[storage.Array_W[i]];
+        char addressStr_W[18];                                                // Array to hold the formatted address string
+        byte storedAddress_W[8];                                              // ByteArray to hold the stored address
+        nvs.getBytes(("address_W_" + String(i)).c_str(), storedAddress_W, 8); // Read the stored address from NVS
+        sprintf(addressStr_W, "%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X",
+                storedAddress_W[0], storedAddress_W[1], storedAddress_W[2], storedAddress_W[3],
+                storedAddress_W[4], storedAddress_W[5], storedAddress_W[6], storedAddress_W[7]); // Format the address string
+        String address = String(addressStr_W);
+        String num = String(i + 1);
+        String pos = String(storage.Array_W[i]);
+        myNex.writeStr("pageTempArray.s" + num + ".txt", address + " | " + name);
+        myNex.writeStr("pageTempArray.a" + num + ".txt", num);
+        myNex.writeStr("pageTempArray.t" + pos + ".txt", pos);
+        Debug.print(DBG_VERBOSE, "Address %d for Sensor W: %s, Name: %s, Number: %s, Position: %s", i + 1, address.c_str(), name.c_str(), num.c_str(), pos.c_str());
+        }
+      }
+      else
+      {
+        // Display data for Sensor A
+        for (int i = 0; i < MAX_ADDRESSES; i++)
+        {
+        String name = NV_STORAGE_MAPPING_A[storage.Array_A[i]];
+        char addressStr_A[18];                                                // Array to hold the formatted address string
+        byte storedAddress_A[8];                                              // ByteArray to hold the stored address
+        nvs.getBytes(("address_A_" + String(i)).c_str(), storedAddress_A, 8); // Read the stored address from NVS
+        sprintf(addressStr_A, "%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X",
+                storedAddress_A[0], storedAddress_A[1], storedAddress_A[2], storedAddress_A[3],
+                storedAddress_A[4], storedAddress_A[5], storedAddress_A[6], storedAddress_A[7]); // Format the address string
+        String address = String(addressStr_A);                                             // Convert the char array to a String
+        String num = String(i + 1);
+        String pos = String(storage.Array_A[i]);
+        myNex.writeStr("pageTempArray.s" + num + ".txt", address + " | " + name);
+        myNex.writeStr("pageTempArray.a" + num + ".txt", num);
+        myNex.writeStr("pageTempArray.t" + pos + ".txt", pos);
+        Debug.print(DBG_VERBOSE, "Address %d for Sensor A: %s, Name: %s, Number: %s, Position: %s", i + 1, address.c_str(), name.c_str(), num.c_str(), pos.c_str());
+        }
+      }
+    }
+  }
+
+  if (storage.WaterSTemp != TFTStruc.WST || !refresh)
+  {
+    TFTStruc.WST = storage.WaterSTemp;
+    temp = String(TFTStruc.WST, 1);
     myNex.writeStr(F("page0.vaWT.txt"), temp);
-    if (CurrentPage == 0)  myNex.writeStr(F("W.txt"), temp);
-    else if (CurrentPage == 2)  myNex.writeStr(F("W.txt"), temp);
-    else if (CurrentPage == 3)  myNex.writeStr(F("W.txt"), temp);
-    else if (CurrentPage == 7)  myNex.writeStr(F("W.txt"), temp);
+    if (CurrentPage == 0)
+      myNex.writeStr(F("W.txt"), temp);
+    else if (CurrentPage == 2)
+      myNex.writeStr(F("W.txt"), temp);
+    else if (CurrentPage == 3)
+      myNex.writeStr(F("W.txt"), temp);
+    else if (CurrentPage == 7)
+      myNex.writeStr(F("W.txt"), temp);
+  }
+
+  if (storage.WaterITemp != TFTStruc.WIT || !refresh)
+  {
+    TFTStruc.WIT = storage.WaterITemp;
+    temp = String(TFTStruc.WIT, 1);
+    myNex.writeStr(F("page0.vaWIT.txt"), temp);
+    if (CurrentPage == 0)  myNex.writeStr(F("WIT.txt"), temp);
+    else if (CurrentPage == 7)  myNex.writeStr(F("WIT.txt"), temp);
+  }
+
+  if (storage.WaterBTemp != TFTStruc.WBT || !refresh)
+  {
+    TFTStruc.WBT = storage.WaterBTemp;
+    temp = String(TFTStruc.WBT, 1);
+    myNex.writeStr(F("page0.vaWBT.txt"), temp);
+    if (CurrentPage == 0)  myNex.writeStr(F("WBT.txt"), temp);
+    else if (CurrentPage == 7)  myNex.writeStr(F("WBT.txt"), temp);
+  }
+
+  if (storage.WaterWPTemp != TFTStruc.WWPT || !refresh)
+  {
+    TFTStruc.WWPT = storage.WaterWPTemp;
+    temp = String(TFTStruc.WWPT, 1);
+    myNex.writeStr(F("page0.vaWWPT.txt"), temp);
+    if (CurrentPage == 0)  myNex.writeStr(F("WWPT.txt"), temp);
+    else if (CurrentPage == 7)  myNex.writeStr(F("WWPT.txt"), temp);
+  }
+
+  if (storage.WaterWTTemp != TFTStruc.WWTT || !refresh)
+  {
+    TFTStruc.WWTT = storage.WaterWTTemp;
+    temp = String(TFTStruc.WWTT, 1);
+    myNex.writeStr(F("page0.vaWWTT.txt"), temp);
+    if (CurrentPage == 0)  myNex.writeStr(F("WWTT.txt"), temp);
+    else if (CurrentPage == 7)  myNex.writeStr(F("WWTT.txt"), temp);
+  }
+
+  if (storage.AirInTemp != TFTStruc.AIT || !refresh)
+  {
+    TFTStruc.AIT = storage.AirInTemp;
+    temp = String(TFTStruc.AIT, 1);
+    myNex.writeStr(F("page0.vaAIT.txt"), temp);
+    if (CurrentPage == 0)  myNex.writeStr(F("AIT.txt"), temp);
+    else if (CurrentPage == 7)  myNex.writeStr(F("AIT.txt"), temp);
+  }
+
+  if (storage.SolarVLTemp != TFTStruc.SVLT || !refresh)
+  {
+    TFTStruc.SVLT = storage.SolarVLTemp;
+    temp = String(TFTStruc.SVLT, 1);
+    myNex.writeStr(F("page0.vaSVLT.txt"), temp);
+    if (CurrentPage == 0)  myNex.writeStr(F("SVLT.txt"), temp);
+    else if (CurrentPage == 7)  myNex.writeStr(F("SVLT.txt"), temp);
+  }
+
+  if (storage.SolarRLTemp != TFTStruc.SRLT || !refresh)
+  {
+    TFTStruc.SRLT = storage.SolarRLTemp;
+    temp = String(TFTStruc.SRLT, 1);
+    myNex.writeStr(F("page0.vaSRLT.txt"), temp);
+    if (CurrentPage == 0)  myNex.writeStr(F("SRLT.txt"), temp);
+    else if (CurrentPage == 7)  myNex.writeStr(F("SRLT.txt"), temp);
   }
 
   if (storage.WaterTemp_SetPoint != TFTStruc.WTSP || !refresh)
@@ -367,14 +670,42 @@ void UpdateTFT()
     if (CurrentPage == 14)  myNex.writeStr(F("WTempLow.txt"), temp);
   }
 
-  if (storage.TempExternal != TFTStruc.AT || !refresh)
+  if (storage.AirTemp != TFTStruc.AT || !refresh)
   {
-    TFTStruc.AT = storage.TempExternal;
+    TFTStruc.AT = storage.AirTemp;
     temp = String(TFTStruc.AT, 1);
     myNex.writeStr(F("page0.vaAT.txt"), temp);
     if (CurrentPage == 0)  myNex.writeStr(F("A.txt"), temp);
     else if (CurrentPage == 3)  myNex.writeStr(F("A.txt"), temp);
     else if (CurrentPage == 7)  myNex.writeStr(F("A.txt"), temp);
+  }
+
+  if (storage.AirHum != TFTStruc.AH || !refresh)
+  {
+    TFTStruc.AH = storage.AirHum;
+    temp = String(TFTStruc.AH, 1);
+    myNex.writeStr(F("page0.vaAH.txt"), temp);
+    if (CurrentPage == 0)  myNex.writeStr(F("AH.txt"), temp);
+    else if (CurrentPage == 7)  myNex.writeStr(F("AH.txt"), temp);
+  }
+
+  if (storage.AirPress != TFTStruc.AP || !refresh)
+  {
+    TFTStruc.AP = storage.AirPress;
+    temp = String(TFTStruc.AP, 1);
+    myNex.writeStr(F("page0.vaAP.txt"), temp);
+    if (CurrentPage == 0)  myNex.writeStr(F("AP.txt"), temp);
+    else if (CurrentPage == 7)  myNex.writeStr(F("AP.txt"), temp);
+  }
+
+  if (storage.SolarTemp != TFTStruc.ST || !refresh)
+  {
+    TFTStruc.ST = storage.SolarTemp;
+    temp = String(TFTStruc.ST, 1);
+    myNex.writeStr(F("page0.vaST.txt"), temp);
+    if (CurrentPage == 0)  myNex.writeStr(F("S.txt"), temp);
+    else if (CurrentPage == 2)  myNex.writeStr(F("S.txt"), temp);
+    else if (CurrentPage == 7)  myNex.writeStr(F("S.txt"), temp);
   }
 
   if (storage.PSIValue != TFTStruc.PSI || !refresh)
@@ -537,6 +868,8 @@ if (storage.FLOW2_Pulse != TFTStruc.FLOW2_Pulse || !refresh)
     else if (CurrentPage == 15)  myNex.writeStr(F("p15StaSto.txt"), temp);
     else if (CurrentPage == 16)  myNex.writeStr(F("p16StaSto.txt"), temp);
     else if (CurrentPage == 17)  myNex.writeStr(F("p17StaSto.txt"), temp);
+    else if (CurrentPage == 18)  myNex.writeStr(F("p18StaSto.txt"), temp);
+    else if (CurrentPage == 19)  myNex.writeStr(F("p19StaSto.txt"), temp);
   }
 
   if (storage.FiltrationStartMin != TFTStruc.FStaT0 || !refresh)
@@ -646,6 +979,8 @@ if (storage.FLOW2_Pulse != TFTStruc.FLOW2_Pulse || !refresh)
       else if (CurrentPage == 15) myNex.writeStr(F("p15Mode.txt"), temp);
       else if (CurrentPage == 16) myNex.writeStr(F("p16Mode.txt"), temp);
       else if (CurrentPage == 17) myNex.writeStr(F("p17Mode.txt"), temp);
+      else if (CurrentPage == 18) myNex.writeStr(F("p18Mode.txt"), temp);
+      else if (CurrentPage == 19) myNex.writeStr(F("p19Mode.txt"), temp);
     }
     else
       debounceM++;
@@ -670,6 +1005,44 @@ if (storage.FLOW2_Pulse != TFTStruc.FLOW2_Pulse || !refresh)
       debounceF++;
   }
 
+  if (storage.SolarLocExt != TFTStruc.SolarLoEx || !refresh)
+  {
+    if ((debounceSolLE == 0) || (debounceSolLE > debounceCount))
+    {
+      debounceSolLE = 0;
+      TFTStruc.SolarLoEx = storage.SolarLocExt;
+      myNex.writeNum(F("page4.vabSolLoEx.val"), TFTStruc.SolarLoEx);
+      if (CurrentPage == 18)
+      {
+        if (TFTStruc.SolarLoEx == 1)
+        myNex.writeStr(F("bSolMode.picc=11"));
+        else
+        myNex.writeStr(F("bSolMode.picc=10"));
+      }
+    }
+    else
+      debounceSolLE++;
+  }
+
+  if (storage.SolarMode != TFTStruc.SolarMode || !refresh)
+  {
+    if ((debounceSolM == 0) || (debounceSolM > debounceCount))
+    {
+      debounceSolM = 0;
+      TFTStruc.SolarMode = storage.SolarMode;
+      myNex.writeNum(F("page4.vabSolMode.val"), TFTStruc.SolarMode);
+      if (CurrentPage == 2)
+      {
+        if (TFTStruc.SolarMode == 1)
+        myNex.writeStr(F("bSolMode.picc=11"));
+        else
+        myNex.writeStr(F("bSolMode.picc=10"));
+      }
+    }
+    else
+      debounceSolM++;
+  }
+
   if (storage.ValveMode != TFTStruc.ValveMode || !refresh)
   {
     if ((debounceVM == 0) || (debounceVM > debounceCount))
@@ -679,8 +1052,9 @@ if (storage.FLOW2_Pulse != TFTStruc.FLOW2_Pulse || !refresh)
       myNex.writeNum(F("page4.vabValveMode.val"), TFTStruc.ValveMode);
       if (CurrentPage == 4)
       {
+        if (TFTStruc.ValveMode == 1)
         myNex.writeStr(F("bValveMode.picc=15"));
-      } else {
+        else
         myNex.writeStr(F("bValveMode.picc=14"));
       }
     }
@@ -697,8 +1071,9 @@ if (storage.FLOW2_Pulse != TFTStruc.FLOW2_Pulse || !refresh)
       myNex.writeNum(F("page4.vabCleanMode.val"), TFTStruc.CleanMode);
       if (CurrentPage == 4)
       {
+        if (TFTStruc.CleanMode == 1)
         myNex.writeStr(F("bCleanMode.picc=15"));
-      } else {
+        else
         myNex.writeStr(F("bCleanMode.picc=14"));
       }
     }
@@ -715,8 +1090,9 @@ if (storage.FLOW2_Pulse != TFTStruc.FLOW2_Pulse || !refresh)
       myNex.writeNum(F("page4.vabCleanDir.val"), TFTStruc.ValveSwitch);
       if (CurrentPage == 4)
       {
+        if (TFTStruc.ValveSwitch == 1)
         myNex.writeStr(F("bCleanDir.picc=15"));
-      } else {
+        else
         myNex.writeStr(F("bCleanDir.picc=14"));
       }
     }
@@ -733,8 +1109,9 @@ if (storage.FLOW2_Pulse != TFTStruc.FLOW2_Pulse || !refresh)
       myNex.writeNum(F("page10.vabFillMode.val"), TFTStruc.WaterFillMode);
       if (CurrentPage == 10)
       {
+        if (TFTStruc.WaterFillMode == 1)
         myNex.writeStr(F("bFillMode.picc=27"));
-      } else {
+        else
         myNex.writeStr(F("bFillMode.picc=26"));
       }
     }
@@ -747,7 +1124,58 @@ if (storage.FLOW2_Pulse != TFTStruc.FLOW2_Pulse || !refresh)
     TFTStruc.ELDTstate = ELD_Treppe.getStatus();
     temp = String(TFTStruc.ELDTstate.c_str());
     myNex.writeStr(F("page4.vaELDTstate.txt"), temp);
-    if (CurrentPage == 4)  myNex.writeStr(F("ELDTstate.txt"), temp);
+    if (CurrentPage == 4)
+    {
+      myNex.writeStr(F("ELDTstate.txt"), temp);
+      if (temp == "AUF")
+      {
+        myNex.writeStr(F("bValNoT.picc=14"));
+        myNex.writeStr(F("ELDTstate.picc=14"));
+        myNex.writeStr(F("ELDTstate.pco=65535")); 
+      }
+      else if (temp == "HALB")
+      {
+        myNex.writeStr(F("bValNoT.picc=16"));
+        myNex.writeStr(F("ELDTstate.picc=16"));
+        myNex.writeStr(F("ELDTstate.pco=0"));
+      }
+      else if (temp == "ZU")
+      {
+        myNex.writeStr(F("bValNoT.picc=15"));
+        myNex.writeStr(F("ELDTstate.picc=15"));
+        myNex.writeStr(F("ELDTstate.pco=0")); 
+      }
+      else if (temp == "öffne" || "schließe")
+      {
+        myNex.writeStr(F("bValNoT.picc=14"));
+        myNex.writeStr(F("ELDTstate.picc=14"));
+        myNex.writeStr(F("ELDTstate.pco=2016"));  
+      }
+      else if (temp == "calibr...")
+      {
+        myNex.writeStr(F("bValNoT.picc=14"));
+        myNex.writeStr(F("ELDTstate.picc=14"));
+        myNex.writeStr(F("ELDTstate.pco=63488"));
+      }
+      else if (ELD_Treppe.CurrentAngle() <= (ELD_Treppe.StartAngle() + 5))
+      {
+        myNex.writeStr(F("bValNoT.picc=15"));
+        myNex.writeStr(F("ELDTstate.picc=15"));
+        myNex.writeStr(F("ELDTstate.pco=0"));
+      }
+      else if (ELD_Treppe.CurrentAngle() >= (ELD_Treppe.StartAngle() + 5) && ELD_Treppe.CurrentAngle() <= (ELD_Treppe.HalfAngle() + ((ELD_Treppe.MaxAngle() - ELD_Treppe.HalfAngle())) / 2))
+      {
+        myNex.writeStr(F("bValNoT.picc=16"));
+        myNex.writeStr(F("ELDTstate.picc=16"));
+        myNex.writeStr(F("ELDTstate.pco=0"));
+      }
+      else if (ELD_Treppe.CurrentAngle() >= (ELD_Treppe.HalfAngle() + ((ELD_Treppe.MaxAngle() - ELD_Treppe.HalfAngle())) / 2))
+      {
+        myNex.writeStr(F("bValNoT.picc=14"));
+        myNex.writeStr(F("ELDTstate.picc=14"));
+        myNex.writeStr(F("ELDTstate.pco=65535"));
+      }
+    }
   }
 
 if (ELD_Hinten.getStatus() != TFTStruc.ELDHstate || !refresh)
@@ -755,7 +1183,58 @@ if (ELD_Hinten.getStatus() != TFTStruc.ELDHstate || !refresh)
     TFTStruc.ELDHstate = ELD_Hinten.getStatus();
     temp = String(TFTStruc.ELDHstate.c_str());
     myNex.writeStr(F("page4.vaELDHstate.txt"), temp);
-    if (CurrentPage == 4)  myNex.writeStr(F("ELDHstate.txt"), temp);
+    if (CurrentPage == 4)
+    {
+      myNex.writeStr(F("ELDHstate.txt"), temp);
+      if (temp == "AUF")
+      {
+        myNex.writeStr(F("bValNoH.picc=14"));
+        myNex.writeStr(F("ELDHstate.picc=14"));
+        myNex.writeStr(F("ELDHstate.pco=65535")); 
+      }
+      else if (temp == "HALB")
+      {
+        myNex.writeStr(F("bValNoH.picc=16"));
+        myNex.writeStr(F("ELDHstate.picc=16"));
+        myNex.writeStr(F("ELDHstate.pco=0"));
+      }
+      else if (temp == "ZU")
+      {
+        myNex.writeStr(F("bValNoH.picc=15"));
+        myNex.writeStr(F("ELDHstate.picc=15"));
+        myNex.writeStr(F("ELDHstate.pco=0")); 
+      }
+      else if (temp == "öffne" || "schließe")
+      {
+        myNex.writeStr(F("bValNoH.picc=14"));
+        myNex.writeStr(F("ELDHstate.picc=14"));
+        myNex.writeStr(F("ELDHstate.pco=2016"));  
+      }
+      else if (temp == "calibr...")
+      {
+        myNex.writeStr(F("bValNoH.picc=14"));
+        myNex.writeStr(F("ELDHstate.picc=14"));
+        myNex.writeStr(F("ELDHstate.pco=63488"));
+      }
+      else if (ELD_Hinten.CurrentAngle() <= (ELD_Hinten.StartAngle() + 5))
+      {
+        myNex.writeStr(F("bValNoH.picc=15"));
+        myNex.writeStr(F("ELDHstate.picc=15"));
+        myNex.writeStr(F("ELDHstate.pco=0"));
+      }
+      else if (ELD_Hinten.CurrentAngle() >= (ELD_Hinten.StartAngle() + 5) && ELD_Hinten.CurrentAngle() <= (ELD_Hinten.HalfAngle() + ((ELD_Hinten.MaxAngle() - ELD_Hinten.HalfAngle())) / 2))
+      {
+        myNex.writeStr(F("bValNoH.picc=16"));
+        myNex.writeStr(F("ELDHstate.picc=16"));
+        myNex.writeStr(F("ELDHstate.pco=0"));
+      }
+      else if (ELD_Hinten.CurrentAngle() >= (ELD_Hinten.HalfAngle() + ((ELD_Hinten.MaxAngle() - ELD_Hinten.HalfAngle())) / 2))
+      {
+        myNex.writeStr(F("bValNoH.picc=14"));
+        myNex.writeStr(F("ELDHstate.picc=14"));
+        myNex.writeStr(F("ELDHstate.pco=65535"));
+      }
+    }
   }
 
   if ((WP_Vorlauf.getStatus() != TFTStruc.WPVstate) || !refresh)
@@ -764,7 +1243,58 @@ if (ELD_Hinten.getStatus() != TFTStruc.ELDHstate || !refresh)
 
     temp = String(TFTStruc.WPVstate.c_str());
     myNex.writeStr(F("page4.vaWPVstate.txt"), temp);
-    if (CurrentPage == 4)  myNex.writeStr(F("WPVstate.txt"), temp);
+    if (CurrentPage == 4)
+    {
+      myNex.writeStr(F("WPVstate.txt"), temp);
+      if (temp == "AUF")
+      {
+        myNex.writeStr(F("bValWPV.picc=14"));
+        myNex.writeStr(F("WPVstate.picc=14"));
+        myNex.writeStr(F("WPVstate.pco=65535")); 
+      }
+      else if (temp == "HALB")
+      {
+        myNex.writeStr(F("bValWPV.picc=16"));
+        myNex.writeStr(F("WPVstate.picc=16"));
+        myNex.writeStr(F("WPVstate.pco=0"));
+      }
+      else if (temp == "ZU")
+      {
+        myNex.writeStr(F("bValWPV.picc=15"));
+        myNex.writeStr(F("WPVstate.picc=15"));
+        myNex.writeStr(F("WPVstate.pco=0")); 
+      }
+      else if (temp == "öffne" || "schließe")
+      {
+        myNex.writeStr(F("bValWPV.picc=14"));
+        myNex.writeStr(F("WPVstate.picc=14"));
+        myNex.writeStr(F("WPVstate.pco=2016"));  
+      }
+      else if (temp == "calibr...")
+      {
+        myNex.writeStr(F("bValWPV.picc=14"));
+        myNex.writeStr(F("WPVstate.picc=14"));
+        myNex.writeStr(F("WPVstate.pco=63488"));
+      }
+      else if (WP_Vorlauf.CurrentAngle() <= (WP_Vorlauf.StartAngle() + 5))
+      {
+        myNex.writeStr(F("bValWPV.picc=15"));
+        myNex.writeStr(F("WPVstate.picc=15"));
+        myNex.writeStr(F("WPVstate.pco=0"));
+      }
+      else if (WP_Vorlauf.CurrentAngle() >= (WP_Vorlauf.StartAngle() + 5) && WP_Vorlauf.CurrentAngle() <= (WP_Vorlauf.HalfAngle() + ((WP_Vorlauf.MaxAngle() - WP_Vorlauf.HalfAngle())) / 2))
+      {
+        myNex.writeStr(F("bValWPV.picc=16"));
+        myNex.writeStr(F("WPVstate.picc=16"));
+        myNex.writeStr(F("WPVstate.pco=0"));
+      }
+      else if (WP_Vorlauf.CurrentAngle() >= (WP_Vorlauf.HalfAngle() + ((WP_Vorlauf.MaxAngle() - WP_Vorlauf.HalfAngle())) / 2))
+      {
+        myNex.writeStr(F("bValWPV.picc=14"));
+        myNex.writeStr(F("WPVstate.picc=14"));
+        myNex.writeStr(F("WPVstate.pco=65535"));
+      }
+    }
   }
 
   if ((WP_Mischer.getStatus() != TFTStruc.WPMstate) || !refresh)
@@ -773,7 +1303,58 @@ if (ELD_Hinten.getStatus() != TFTStruc.ELDHstate || !refresh)
 
     temp = String(TFTStruc.WPMstate.c_str());
     myNex.writeStr(F("page4.vaWPMstate.txt"), temp);
-    if (CurrentPage == 4)  myNex.writeStr(F("WPMstate.txt"), temp);
+    if (CurrentPage == 4)
+    {
+      myNex.writeStr(F("WPMstate.txt"), temp);
+      if (temp == "AUF")
+      {
+        myNex.writeStr(F("bValWPM.picc=14"));
+        myNex.writeStr(F("WPMstate.picc=14"));
+        myNex.writeStr(F("WPMstate.pco=65535")); 
+      }
+      else if (temp == "HALB")
+      {
+        myNex.writeStr(F("bValWPM.picc=16"));
+        myNex.writeStr(F("WPMstate.picc=16"));
+        myNex.writeStr(F("WPMstate.pco=0"));
+      }
+      else if (temp == "ZU")
+      {
+        myNex.writeStr(F("bValWPM.picc=15"));
+        myNex.writeStr(F("WPMstate.picc=15"));
+        myNex.writeStr(F("WPMstate.pco=0")); 
+      }
+      else if (temp == "öffne" || "schließe")
+      {
+        myNex.writeStr(F("bValWPM.picc=14"));
+        myNex.writeStr(F("WPMstate.picc=14"));
+        myNex.writeStr(F("WPMstate.pco=2016"));  
+      }
+      else if (temp == "calibr...")
+      {
+        myNex.writeStr(F("bValWPM.picc=14"));
+        myNex.writeStr(F("WPMstate.picc=14"));
+        myNex.writeStr(F("WPMstate.pco=63488"));
+      }
+      else if (WP_Mischer.CurrentAngle() <= (WP_Mischer.StartAngle() + 5))
+      {
+        myNex.writeStr(F("bValWPM.picc=15"));
+        myNex.writeStr(F("WPMstate.picc=15"));
+        myNex.writeStr(F("WPMstate.pco=0"));
+      }
+      else if (WP_Mischer.CurrentAngle() >= (WP_Mischer.StartAngle() + 5) && WP_Mischer.CurrentAngle() <= (WP_Mischer.HalfAngle() + ((WP_Mischer.MaxAngle() - WP_Mischer.HalfAngle())) / 2))
+      {
+        myNex.writeStr(F("bValWPM.picc=16"));
+        myNex.writeStr(F("WPMstate.picc=16"));
+        myNex.writeStr(F("WPMstate.pco=0"));
+      }
+      else if (WP_Mischer.CurrentAngle() >= (WP_Mischer.HalfAngle() + ((WP_Mischer.MaxAngle() - WP_Mischer.HalfAngle())) / 2))
+      {
+        myNex.writeStr(F("bValWPM.picc=14"));
+        myNex.writeStr(F("WPMstate.picc=14"));
+        myNex.writeStr(F("WPMstate.pco=65535"));
+      }
+    }
   }
 
   if ((Bodenablauf.getStatus() != TFTStruc.BOTTstate) || !refresh)
@@ -783,6 +1364,66 @@ if (ELD_Hinten.getStatus() != TFTStruc.ELDHstate || !refresh)
     temp = String(TFTStruc.BOTTstate.c_str());
     myNex.writeStr(F("page4.vaBOTTstate.txt"), temp);
     if (CurrentPage == 4)  myNex.writeStr(F("BOTTstate.txt"), temp);
+    {
+      myNex.writeStr(F("BOTTstate.txt"), temp);
+      if (temp == "AUF")
+      {
+        myNex.writeStr(F("bValBott.picc=14"));
+        myNex.writeStr(F("BOTTstate.picc=14"));
+        myNex.writeStr(F("BOTTstate.pco=65535")); 
+      }
+      else if (temp == "HALB")
+      {
+        myNex.writeStr(F("bValBott.picc=16"));
+        myNex.writeStr(F("BOTTstate.picc=16"));
+        myNex.writeStr(F("BOTTstate.pco=0"));
+      }
+      else if (temp == "ZU")
+      {
+        myNex.writeStr(F("bValBott.picc=15"));
+        myNex.writeStr(F("BOTTstate.picc=15"));
+        myNex.writeStr(F("BOTTstate.pco=0")); 
+      }
+      else if (temp == "öffne" || "schließe")
+      {
+        myNex.writeStr(F("bValBott.picc=14"));
+        myNex.writeStr(F("BOTTstate.picc=14"));
+        myNex.writeStr(F("BOTTstate.pco=2016"));  
+      }
+      else if (temp == "calibr...")
+      {
+        myNex.writeStr(F("bValBott.picc=14"));
+        myNex.writeStr(F("BOTTstate.picc=14"));
+        myNex.writeStr(F("BOTTstate.pco=63488"));
+      }
+      else if (Bodenablauf.CurrentAngle() <= (Bodenablauf.StartAngle() + 5))
+      {
+        myNex.writeStr(F("bValBott.picc=15"));
+        myNex.writeStr(F("BOTTstate.picc=15"));
+        myNex.writeStr(F("BOTTstate.pco=0"));
+      }
+      else if (Bodenablauf.CurrentAngle() >= (Bodenablauf.StartAngle() + 5) && Bodenablauf.CurrentAngle() <= (Bodenablauf.HalfAngle() + ((Bodenablauf.MaxAngle() - Bodenablauf.HalfAngle())) / 2))
+      {
+        myNex.writeStr(F("bValBott.picc=16"));
+        myNex.writeStr(F("BOTTstate.picc=16"));
+        myNex.writeStr(F("WPMstate.pco=0"));
+      }
+      else if (Bodenablauf.CurrentAngle() >= (Bodenablauf.HalfAngle() + ((Bodenablauf.MaxAngle() - Bodenablauf.HalfAngle())) / 2))
+      {
+        myNex.writeStr(F("bValBott.picc=14"));
+        myNex.writeStr(F("BOTTstate.picc=14"));
+        myNex.writeStr(F("BOTTstate.pco=65535"));
+      }
+    }
+  }
+
+  if ((Solarvalve.getStatus() != TFTStruc.SOLARstate) || !refresh)
+  {
+    TFTStruc.SOLARstate = Solarvalve.getStatus();
+
+    temp = String(TFTStruc.SOLARstate.c_str());
+    myNex.writeStr(F("page2.vaSOLVstate.txt"), temp);
+    if (CurrentPage == 2)  myNex.writeStr(F("SOLARstate.txt"), temp);
   }
 
   if (storage.Salt_Chlor != TFTStruc.Salt_Chlor || !refresh)
@@ -794,8 +1435,9 @@ if (ELD_Hinten.getStatus() != TFTStruc.ELDHstate || !refresh)
       myNex.writeNum(F("page13.vabSaltMode.val"), TFTStruc.Salt_Chlor);
       if (CurrentPage == 0)
       {
+        if (TFTStruc.Salt_Chlor == 1)
         myNex.writeStr(F("b14.picc=5"));
-      } else {
+        else
         myNex.writeStr(F("b14.picc=6"));
       }
       if (CurrentPage == 13)
@@ -819,8 +1461,9 @@ if (ELD_Hinten.getStatus() != TFTStruc.ELDHstate || !refresh)
       myNex.writeNum(F("page13.vabSaltMode.val"), TFTStruc.SaltMode);
       if (CurrentPage == 0)
       {
+        if (TFTStruc.SaltMode == 1)
         myNex.writeStr(F("b14.picc=5"));
-      } else {
+        else
         myNex.writeStr(F("b14.picc=6"));
       }
       if (CurrentPage == 13)
@@ -852,6 +1495,25 @@ if (ELD_Hinten.getStatus() != TFTStruc.ELDHstate || !refresh)
     }
     else
       debounceSP++;
+  }
+
+  if (SolarPump.IsRunning() != TFTStruc.SolarPump || !refresh)
+  {
+    if ((debounceSolP == 0) || (debounceSolP > debounceCount))
+    {
+      debounceSolP = 0;
+      TFTStruc.SolarPump = SolarPump.IsRunning();
+      myNex.writeNum(F("page2.vabSolPum.val"), TFTStruc.SolarPump);
+      if (CurrentPage == 2)
+      {
+        if (TFTStruc.SolarPump == 1)
+          myNex.writeStr(F("bSolPum.picc=11"));
+        else
+          myNex.writeStr(F("bSolPum.picc=10"));
+      }
+    }
+    else
+      debounceSolP++;
   }
 
   if (storage.SaltPolarity != TFTStruc.SaltPolarity || !refresh)
@@ -1013,7 +1675,7 @@ if (ELD_Hinten.getStatus() != TFTStruc.ELDHstate || !refresh)
         if (TFTStruc.HeatPump == 1)
           myNex.writeStr(F("bHeatPum.picc=13"));
         else
-          myNex.writeStr(F("bHeatPum.pic=12"));
+          myNex.writeStr(F("bHeatPum.picc=12"));
       }
     }
     else
@@ -1032,7 +1694,7 @@ if (ELD_Hinten.getStatus() != TFTStruc.ELDHstate || !refresh)
         if (TFTStruc.WaterFill == 1)
           myNex.writeStr(F("bTap.picc=27"));
         else
-          myNex.writeStr(F("bTap.pic=26"));
+          myNex.writeStr(F("bTap.picc=26"));
       }
     }
     else
@@ -1053,9 +1715,9 @@ if (ELD_Hinten.getStatus() != TFTStruc.ELDHstate || !refresh)
     if (CurrentPage == 3)  myNex.writeStr(F("WPDur.txt"), temp);
   }
 
-  if ((SolarHeatPump.UpTime != TFTStruc.SHRT) || !refresh)
+  if ((SolarPump.UpTime != TFTStruc.SHRT) || !refresh)
   {
-    TFTStruc.SHRT = SolarHeatPump.UpTime;
+    TFTStruc.SHRT = SolarPump.UpTime;
     int Sec = TFTStruc.SHRT/1000;
     int Min = Sec/60; Sec%=60;
     int Std = Min/60; Min%=60;
@@ -1077,9 +1739,9 @@ if (ELD_Hinten.getStatus() != TFTStruc.ELDHstate || !refresh)
       if (CurrentPage == 1)
       {
         if (TFTStruc.R0 == 0)
-          myNex.writeStr(F("bR0.pic=8"));
+          myNex.writeStr(F("bR0.picc=8"));
         else
-          myNex.writeStr(F("bR0.pic=7"));
+          myNex.writeStr(F("bR0.picc=7"));
       }
     }
     else
@@ -1096,9 +1758,9 @@ if (ELD_Hinten.getStatus() != TFTStruc.ELDHstate || !refresh)
       if (CurrentPage == 1)
       {
         if (TFTStruc.R1 == 0)
-          myNex.writeStr(F("bR1.pic=8"));
+          myNex.writeStr(F("bR1.picc=8"));
         else
-          myNex.writeStr(F("bR1.pic=7"));
+          myNex.writeStr(F("bR1.picc=7"));
       }
     }
     else
@@ -1169,7 +1831,7 @@ if (ELD_Hinten.getStatus() != TFTStruc.ELDHstate || !refresh)
       myNex.writeStr(F("page0.vaPSIErr.val=0"));
   }
 
-    if (FLOWError != TFTStruc.FLOWErr || !refresh)
+  if (FLOWError != TFTStruc.FLOWErr || !refresh)
   {
     TFTStruc.FLOWErr = FLOWError;
     if (TFTStruc.FLOWErr)
@@ -1180,7 +1842,7 @@ if (ELD_Hinten.getStatus() != TFTStruc.ELDHstate || !refresh)
       myNex.writeStr(F("page0.vaFLOWErr.val=0"));
   }
 
-      if (FLOW2Error != TFTStruc.FLOW2Err || !refresh)
+  if (FLOW2Error != TFTStruc.FLOW2Err || !refresh)
   {
     TFTStruc.FLOW2Err = FLOW2Error;
     if (TFTStruc.FLOW2Err)
@@ -1211,6 +1873,17 @@ if (ELD_Hinten.getStatus() != TFTStruc.ELDHstate || !refresh)
     }
     else
       myNex.writeStr(F("page0.vapHUTErr.val=0"));
+  }
+
+  if (WaterFillError != TFTStruc.WFErr || !refresh)
+  {
+    TFTStruc.WFErr = WaterFillError;
+    if (TFTStruc.WFErr)
+    {
+      myNex.writeStr(F("page0.vaWFErr.val=1"));
+    }
+    else
+      myNex.writeStr(F("page0.vaWFErr.val=0"));
   }
 
   if (WaterFill.UpTimeError != TFTStruc.WFUTErr || !refresh)
@@ -1263,7 +1936,7 @@ if (ELD_Hinten.getStatus() != TFTStruc.ELDHstate || !refresh)
   if (storage.PhPIDWindowSize != TFTStruc.pHPIDW || !refresh)
   {
     TFTStruc.pHPIDW = storage.PhPIDWindowSize;
-    temp = String(float(TFTStruc.pHPIDW), 0);
+    temp = String(float(TFTStruc.pHPIDW)/1000./60., 0);
     myNex.writeStr(F("page0.vapHPIDW.txt"), temp);
     if (CurrentPage == 15)  myNex.writeStr(F("pHPIDW.txt"), temp);
   }
@@ -1271,7 +1944,7 @@ if (ELD_Hinten.getStatus() != TFTStruc.ELDHstate || !refresh)
   if (storage.OrpPIDWindowSize != TFTStruc.OrpPIDW || !refresh)
   {
     TFTStruc.OrpPIDW = storage.OrpPIDWindowSize;
-    temp = String(float(TFTStruc.OrpPIDW), 0);
+    temp = String(float(TFTStruc.OrpPIDW)/1000./60., 0);
     myNex.writeStr(F("page0.vaOrpPIDW.txt"), temp);
     if (CurrentPage == 16)  myNex.writeStr(F("OrpPIDW.txt"), temp);
   }
@@ -1294,7 +1967,7 @@ if (ELD_Hinten.getStatus() != TFTStruc.ELDHstate || !refresh)
 
   if (storage.PhPumpUpTimeLimit != TFTStruc.PumpMaxUp || !refresh)
   {
-    TFTStruc.PumpMaxUp = storage.PhPumpUpTimeLimit;
+    TFTStruc.PumpMaxUp = storage.PhPumpUpTimeLimit / 60000; // milliseconds in minutes
     temp = String(TFTStruc.PumpMaxUp);
     myNex.writeStr(F("page0.vaPumpsMaxUp.txt"), temp);
     if (CurrentPage == 14)  myNex.writeStr(F("PumpsMaxUp.txt"), temp);
@@ -1322,6 +1995,11 @@ if (ELD_Hinten.getStatus() != TFTStruc.ELDHstate || !refresh)
     temp = String(TFTStruc.FillDur);
     myNex.writeStr(F("page0.vaFillDur.txt"), temp);
     if (CurrentPage == 17)  myNex.writeStr(F("FillDur.txt"), temp);
+  }
+
+  if(CurrentPage == 2) {
+    myNex.writeStr(F("page0.vapH.txt"), String(storage.PhValue, 2));
+    myNex.writeStr(F("page0.vaOrp.txt"), String(storage.OrpValue, 0));
   }
 
   //update time at top of displayed page
@@ -1399,9 +2077,17 @@ if (ELD_Hinten.getStatus() != TFTStruc.ELDHstate || !refresh)
         myNex.writeStr(F("p17Time.txt"), HourBuffer);      
         break;
       }
+    case 18: {
+        myNex.writeStr(F("p18Time.txt"), HourBuffer);      
+        break;
+      }
+    case 19: {
+        myNex.writeStr(F("p19Time.txt"), HourBuffer);      
+        break;
+      }
   }
   //put TFT in sleep mode with wake up on touch and force page 0 load to trigger an event
-  if((unsigned long)(millis() - LastAction) >= TFT_SLEEP && TFT_ON)
+  if((unsigned long)(millis() - LastAction) >= TFT_SLEEP && TFT_ON && CurrentPage != 2)
   {
     myNex.writeStr("thup=1");
     myNex.writeStr("wup=0");
@@ -1587,7 +2273,7 @@ void trigger14()
 //printh 23 02 54 0F
 void trigger15()
 {
-  TFTStruc.Heat = (boolean)myNex.readNumber(F("vabSolMode.val"));
+  TFTStruc.Heat = (boolean)myNex.readNumber(F("vabHeatMode.val"));
   debounceH = 1;
   Debug.print(DBG_VERBOSE,"HEAT MODE button");
   char Cmd[100] = "{\"Heat\":0}";
@@ -1913,10 +2599,110 @@ void trigger45()
   LastAction = millis();
 }
 
-//Page 24 has finished loading
+//Page 18 has finished loading
 //printh 23 02 54 2E
 void trigger46()
 {
-  CurrentPage = 24;
+  CurrentPage = 18;
+  LastAction = millis();
+}
+
+//WIFIOnOff button was toggled
+//printh 23 02 54 2F
+void trigger47()
+{
+  TFTStruc.WIFI_OnOff = (boolean)myNex.readNumber(F("vabWiFi_OnOff.val"));
+  debounceWiFi = 1;
+  Debug.print(DBG_VERBOSE,"WIFI_OnOff button");
+  char Cmd[100] = "{\"WIFI_OnOff\":0}";
+  if(TFTStruc.WIFI_OnOff) Cmd[14] = '1';
+  xQueueSendToBack(queueIn,&Cmd,0);
+  Debug.print(DBG_VERBOSE,"Nextion WIFI_OnOff command: %s",Cmd);
+  LastAction = millis();
+}
+
+//SOLAR MODE button was toggled
+//printh 23 02 54 30
+void trigger48()
+{
+  TFTStruc.SolarMode = (boolean)myNex.readNumber(F("vabSolMode.val"));
+  debounceSolM = 1;
+  Debug.print(DBG_VERBOSE,"SOLAR MODE button");
+  char Cmd[100] = "{\"SolarMode\":0}";
+  if(TFTStruc.SolarMode) Cmd[13] = '1';
+  xQueueSendToBack(queueIn,&Cmd,0);
+  Debug.print(DBG_VERBOSE,"Nextion SolarMode cmd: %s",Cmd);
+  LastAction = millis();
+}
+
+//SolarPump button was toggled
+//printh 23 02 54 31
+void trigger49()
+{
+  TFTStruc.SolarPump = (boolean)myNex.readNumber(F("vabSolPum.val"));
+  debounceSolP = 1;
+  Debug.print(DBG_VERBOSE,"SolarPump button");
+  char Cmd[100] = "{\"SolarPump\":0}";
+  if(TFTStruc.SolarPump) Cmd[13] = '1';
+  xQueueSendToBack(queueIn,&Cmd,0);
+  Debug.print(DBG_VERBOSE,"Nextion SolarPump command: %s",Cmd);
+  LastAction = millis();
+}
+
+//SOLAR LOKAL EXTERN button was toggled
+//printh 23 02 54 32
+void trigger50()
+{
+  TFTStruc.SolarLoEx = (boolean)myNex.readNumber(F("vabSolLoEx.val"));
+  debounceSolLE = 1;
+  Debug.print(DBG_VERBOSE,"SOLAR LOKAL EXTERN button");
+  char Cmd[100] = "{\"SolarLocExt\":0}";
+  if(TFTStruc.SolarLoEx) Cmd[15] = '1';
+  xQueueSendToBack(queueIn,&Cmd,0);
+  Debug.print(DBG_VERBOSE,"Nextion SolarLocExt cmd: %s",Cmd);
+  LastAction = millis();
+}
+
+//Page 19 has finished loading
+//printh 23 02 54 33
+void trigger51()
+{
+  CurrentPage = 19;
+  LastAction = millis();
+}
+
+//MQTT Login button was toggled
+//printh 23 02 54 34
+void trigger52()
+{
+  TFTStruc.MqttLogin = (boolean)myNex.readNumber(F("vabMqttLogin.val"));
+  debounceMQL = 1;
+  Debug.print(DBG_VERBOSE,"MQTT Login button");
+  char Cmd[100] = "{\"MqttLogin\":0}";
+  if(TFTStruc.MqttLogin) Cmd[13] = '1';
+  xQueueSendToBack(queueIn,&Cmd,0);
+  Debug.print(DBG_VERBOSE,"Nextion MqttLogin cmd: %s",Cmd);
+  LastAction = millis();
+}
+
+//BUS_AB button was toggled
+//printh 23 02 54 35
+void trigger53()
+{
+  TFTStruc.BUSA_B = (boolean)myNex.readNumber(F("vabBUSA_B.val"));
+  debounceB = 1;
+  Debug.print(DBG_VERBOSE,"BUSA_B button");
+  char Cmd[100] = "{\"Bus_A_B\":0}";
+  if(TFTStruc.BUSA_B) Cmd[11] = '1';
+  xQueueSendToBack(queueIn,&Cmd,0);
+  Debug.print(DBG_VERBOSE,"Nextion BUSA_B cmd: %s",Cmd);
+  LastAction = millis();
+}
+
+//Page 27 has finished loading
+//printh 23 02 54 36
+void trigger54()
+{
+  CurrentPage = 27;
   LastAction = millis();
 }

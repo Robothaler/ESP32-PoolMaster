@@ -24,9 +24,9 @@ NB: all timings are in milliseconds
 #define OFF 1
 
 #define NO_PCF 0
-#define PCF8574_2 1
-#define PCF8574_3 2
-#define PCF8574_4 3
+#define PCF8574_I 1
+#define PCF8574_II 2
+#define PCF8574_III 3
 
 #include <Arduino.h>
 
@@ -56,6 +56,9 @@ public:
     boolean isOpen();
     boolean isClosed();
     boolean isHalfOpen();
+    boolean StartAngle();
+    boolean HalfAngle();
+    boolean MaxAngle();
     boolean CurrentAngle();
     boolean isOpening();
     boolean isClosing();
@@ -70,6 +73,7 @@ private:
 
     // Starting and maximum angle of the valve
     int startAngle;
+    int halfAngle;
     int maxAngle;
 
     // Time required to reach the maximum angle

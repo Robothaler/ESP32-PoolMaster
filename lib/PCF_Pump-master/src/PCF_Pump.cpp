@@ -35,7 +35,7 @@ PCF_Pump::PCF_Pump(uint8_t PumpPin, uint8_t IsRunningSensorPin, uint8_t TankLeve
 //Call this in the main loop, for every loop, as often as possible
 void PCF_Pump::loop()
 {
-  if(pcf8574.digitalRead(isrunningsensorpin) == PUMP_ON)
+  if(pcf8574_I.digitalRead(isrunningsensorpin) == PUMP_ON)
   {
     UpTime += millis() - StartTime;
     StartTime = millis();
@@ -51,7 +51,7 @@ void PCF_Pump::loop()
 
   if(interlockpin != NO_INTERLOCK)
   {
-    if(pcf8574.digitalRead(interlockpin) == INTERLOCK_NOK)
+    if(pcf8574_I.digitalRead(interlockpin) == INTERLOCK_NOK)
        Stop();
   }
 }
@@ -59,12 +59,12 @@ void PCF_Pump::loop()
 //Switch pump ON if over time was not reached, tank is not empty and interlock is OK
 bool PCF_Pump::Start()
 {
-  if((pcf8574.digitalRead(isrunningsensorpin) == PUMP_OFF) 
+  if((pcf8574_I.digitalRead(isrunningsensorpin) == PUMP_OFF) 
     && !UpTimeError
     && this->PCF_Pump::TankLevel()
-    && ((interlockpin == NO_INTERLOCK) || (pcf8574.digitalRead(interlockpin) == INTERLOCK_OK)))    //if((pcf8574.digitalRead(pumppin) == false))
+    && ((interlockpin == NO_INTERLOCK) || (pcf8574_I.digitalRead(interlockpin) == INTERLOCK_OK)))    //if((pcf8574.digitalRead(pumppin) == false))
   {
-    pcf8574.digitalWrite(pumppin, PUMP_ON);
+    pcf8574_I.digitalWrite(pumppin, PUMP_ON);
     StartTime = LastStartTime = millis(); 
     return true; 
   }
@@ -74,9 +74,9 @@ bool PCF_Pump::Start()
 //Switch pump OFF
 bool PCF_Pump::Stop()
 {
-  if(pcf8574.digitalRead(isrunningsensorpin) == PUMP_ON)
+  if(pcf8574_I.digitalRead(isrunningsensorpin) == PUMP_ON)
   {
-    pcf8574.digitalWrite(pumppin, PUMP_OFF);
+    pcf8574_I.digitalWrite(pumppin, PUMP_OFF);
     UpTime += millis() - StartTime; 
     return true;
   }
@@ -125,7 +125,7 @@ bool PCF_Pump::TankLevel()
   }
   else
   {
-    return (pcf8574.digitalRead(tanklevelpin) == TANK_FULL);
+    return (pcf8574_I.digitalRead(tanklevelpin) == TANK_FULL);
   } 
 }
 
@@ -170,11 +170,11 @@ void PCF_Pump::SetTankFill(double TankFill)
 //interlock status
 bool PCF_Pump::Interlock()
 {
-  return (pcf8574.digitalRead(interlockpin) == INTERLOCK_OK);
+  return (pcf8574_I.digitalRead(interlockpin) == INTERLOCK_OK);
 }
 
 //pump status
 bool PCF_Pump::IsRunning()
 {
-  return (pcf8574.digitalRead(isrunningsensorpin) == PUMP_ON);
+  return (pcf8574_I.digitalRead(isrunningsensorpin) == PUMP_ON);
 }

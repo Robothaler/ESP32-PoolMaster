@@ -16,6 +16,7 @@ MotorValve::MotorValve(uint8_t OpenPin, uint8_t ClosePin, int StartAngle, int Ma
     this->closePin = ClosePin;
     this->startAngle = StartAngle;
     this->maxAngle = MaxAngle;
+    this->halfAngle = startAngle + (maxAngle - startAngle) / 2;
     this->timeToMaxAngle = TimeToMaxAngle; //in seconds
     this->calibrationDirection = CalibrationDirection; //CLOCKWISE or COUNTER_CLOCKWISE
     this->pcftyp = PcfTyp; //NO_PCF = 0 / PCF8574 = 1 / PCF8574_3 = 2 / PCF8574_4 = 3
@@ -90,7 +91,7 @@ void MotorValve::loop()
         if ((millis() - calibrationStartTime) >= (timeToMaxAngle + 2) * 1000) {
             setSignal(openPin, OFF);
             setSignal(closePin, OFF);
-            Debug.print(DBG_DEBUG,"[MotorValve] %s calibration stopped.", instanceName);
+            Debug.print(DBG_DEBUG,"[MotorValve] %s calibration finished.", instanceName);
             calibrating = false;
             /*if(calibrationDirection == CLOCKWISE) {
                 currentAngle = maxAngle;
@@ -139,12 +140,12 @@ void MotorValve::calibrate() {
 void MotorValve::setSignal(int pin, int state) {
     if (pcftyp == NO_PCF) {
         digitalWrite(pin, state);
-    } else if (pcftyp == PCF8574_2) {
-        pcf8574.digitalWrite(pin, state);
-    } else if (pcftyp == PCF8574_3) {
-        pcf8574_3.digitalWrite(pin, state);
-    } else if (pcftyp == PCF8574_4) {
-        pcf8574_4.digitalWrite(pin, state);
+    } else if (pcftyp == PCF8574_I) {
+        pcf8574_I.digitalWrite(pin, state);
+    } else if (pcftyp == PCF8574_II) {
+        pcf8574_II.digitalWrite(pin, state);
+    } else if (pcftyp == PCF8574_III) {
+        pcf8574_III.digitalWrite(pin, state);
     }
 }
 
@@ -173,6 +174,24 @@ boolean MotorValve::isHalfOpen()
     return true;
   else
     return false;
+}
+
+// returns the start angle of the valve
+boolean MotorValve::StartAngle() 
+{
+  return startAngle;
+}
+
+// returns the maximum angle of the valve
+boolean MotorValve::HalfAngle()
+{
+  return halfAngle;
+}
+
+// returns the maximum angle of the valve
+boolean MotorValve::MaxAngle() 
+{
+  return maxAngle;
 }
 
 // returns the current angle of the valve
