@@ -7,6 +7,10 @@
 
 static WiFiClient wificlient;
 
+extern bool lockI2C();
+extern void unlockI2C();
+extern Arduino_DebugUtils Debug;
+
 // SMTPSession smtp;
 // Session_Config config;
 // SMTP_Message message;
@@ -15,26 +19,27 @@ static WiFiClient wificlient;
 void ProcessCommand(char*);
 void StartTime(void);
 void readLocalTime(void);
-bool saveParam(const char*,uint8_t );
-bool saveParam(const char*,bool );
-bool saveParam(const char*,unsigned long );
-bool saveParam(const char*,double );
+bool saveParam(const char* key, uint8_t val);
+bool saveParam(const char* key, bool val);
+bool saveParam(const char* key, unsigned long val);
+bool saveParam(const char* key, String val);
+bool saveParam(const char* key, const uint8_t* val, size_t size);
+bool saveParam(const char* key, double val);
 void SetPhPID(bool);
 void SetOrpPID(bool);
 void mqttErrorPublish(const char*);
 void publishSolarMode(int event);
 void UpdateTFT(void);
 void stack_mon(UBaseType_t&);
-// void smtpCallback(SMTP_Status);
-// bool SMTP_Connect(void);
-// void Send_Email(void);
 void Send_IFTTTNotif(void);
 void calibrateMotorValves();
 void setStandardMotorValvePositions();
 void setStandardHeatPumpMotorValvePositions();
 void setMotorValvePositionsForHeatPump();
 void setMotorValvePositionsForCleanMode();
-
+// void smtpCallback(SMTP_Status);
+// bool SMTP_Connect(void);
+// void Send_Email(void);
 
 void calibrateMotorValves() {
   ELD_Treppe.calibrate();
@@ -120,11 +125,12 @@ void PoolMaster(void *pvParameters)
   message.priority = esp_mail_smtp_priority_low;
   message.response.notify = esp_mail_smtp_notify_success | esp_mail_smtp_notify_failure | esp_mail_smtp_notify_delay;
 */
-
+Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID());
   while(!startTasks);
+  Debug.print(DBG_DEBUG, "[TASKS] PoolMaster running...");
   vTaskDelay(DT3);                                // Scheduling offset 
 
-  esp_task_wdt_add(nullptr);
+  esp_task_wdt_add(NULL);
   TickType_t period = PT3;  
   TickType_t ticktime = xTaskGetTickCount(); 
 
@@ -470,7 +476,7 @@ void PoolMaster(void *pvParameters)
     }
 
     // ******************************************************************************************
-    // Mange WaterLevel and WaterFillMode
+    // Manage WaterLevel and WaterFillMode
     // ******************************************************************************************
     unsigned long lastUpTime = 0;
     float waterConsumption = 0.0;
@@ -487,14 +493,14 @@ void PoolMaster(void *pvParameters)
     static unsigned long LastWaterFillStopTime = 0;
     static unsigned long timeSinceMinLvl = 0; // Global variable to store time since last fill stop
 
-    // Stopp WaterFill valve in case WaterFill Error ist true
+    // Stop WaterFill valve if WaterFillError is true
     if (WaterFillError && WaterFill.IsRunning()) {
         storage.WaterFillMode = 0;
         WaterFill.Stop();
         Debug.print(DBG_ERROR, "[WaterFill] WaterFill stopped. WaterFillError is >true<");
     }
 
-    // Stopp WaterFill if WaterFill Duration reaches MaxUpTime
+    // Stop WaterFill if WaterFill Duration reaches MaxUpTime
     if (WaterFill.UpTime >= storage.WaterFillUpTimeLimit) {
         storage.WaterFillMode = 0;
         WaterFill.Stop();
@@ -515,44 +521,57 @@ void PoolMaster(void *pvParameters)
             }
         }
 
-        if (!waterMinLvl && waterMaxLvl && timeSinceMinLvl != 0 && LastWaterFillStartTime ==0) {
+        if (!waterMinLvl && waterMaxLvl && timeSinceMinLvl != 0 && LastWaterFillStartTime == 0) {
             LastWaterFillStartTime = millis();
+            Debug.print(DBG_VERBOSE, "[WaterFill] Started timing fill process at: %lu", LastWaterFillStartTime);
         }            
 
-        if (!waterMaxLvl && WaterFill.IsRunning()) { // Water level just reached maximum, stop timing the fill process
+        if (!waterMaxLvl && WaterFill.IsRunning()) {
             Debug.print(DBG_VERBOSE, "[WaterFill] Stopping WaterFill...");
             WaterFill.Stop();
             timeSinceMinLvl = 0;
             LastWaterFillStopTime = millis();
-            unsigned long fillDuration = (round((LastWaterFillStopTime - LastWaterFillStartTime) / 60000.0) * 60000) - 1; // round up to the nearest minute
-            storage.WaterFillDuration = fillDuration;
-            Debug.print(DBG_VERBOSE, "[WaterFill] WaterFill stopped. Fill duration: %d ms", fillDuration);
-            LastWaterFillStartTime = 0; // Reset the start time
-            }
+            
+            if (LastWaterFillStartTime > 0) {  // Only calculate if we have a valid start time
+                unsigned long fillDuration = getDurationSafe(LastWaterFillStartTime, LastWaterFillStopTime);
+                storage.WaterFillDuration = fillDuration;
+                Debug.print(DBG_VERBOSE, "[WaterFill] Fill duration: %lu ms", fillDuration);
 
-        if (!waterMinLvl && storage.WaterFillDuration != 0 && (storage.WaterFillDuration <= millis() - LastWaterFillStartTime) && WaterFill.IsRunning() && !WaterFillError) { // Water level reached waterFillduration, stop the fill process
-            Debug.print(DBG_VERBOSE, "[WaterFill] Stopping WaterFill bevor reaching max level");
+                // Calculate water consumption in liters
+                float fillDurationMinutes = fillDuration / 60000.0; // Convert milliseconds to minutes
+                waterConsumption = flowRate * fillDurationMinutes; // flowRate in liters per minute
+                storage.WaterFillAnCon += waterConsumption; // Accumulate annual consumption in liters
+                Debug.print(DBG_VERBOSE, "[WaterFill] Added consumption: %.2f L (duration: %lu ms)", waterConsumption, fillDuration);
+            }
+            LastWaterFillStartTime = 0;
+        }
+
+        if (!waterMinLvl && storage.WaterFillDuration != 0 && (storage.WaterFillDuration <= millis() - LastWaterFillStartTime) && WaterFill.IsRunning() && !WaterFillError) { // Water level reached waterFillDuration, stop the fill process
+            Debug.print(DBG_VERBOSE, "[WaterFill] Stopping WaterFill before reaching max level");
             WaterFill.Stop();
             timeSinceMinLvl = 0;
             LastWaterFillStartTime = 0; // Reset the start time
         }        
     }
     else { // Manual mode
-        if (!waterMaxLvl && WaterFill.IsRunning() || WaterFillError && WaterFill.IsRunning())
-        { // Water level reached maximum, stop water filling
+        if (!waterMaxLvl && WaterFill.IsRunning() || WaterFillError && WaterFill.IsRunning()) { // Water level reached maximum, stop water filling
             Debug.print(DBG_VERBOSE, "[WaterFill] Stopping WaterFill in Manual mode...");
             WaterFill.Stop();
             LastWaterFillStopTime = millis();
         }
     }
 
-    // Calculate the water consumtion sice the last reset of the anual consumtion
-    if (WaterFill.UpTime != lastUpTime) { // check if WaterFill.UpTime has changed        
-        unsigned long fillDur = WaterFill.UpTime - lastUpTime;
+    // Calculate the water consumption since the last reset of the annual consumption
+    if (WaterFill.UpTime != lastUpTime) { // Check if WaterFill.UpTime has changed        
+        unsigned long fillDur = getDurationSafe(lastUpTime, WaterFill.UpTime);
         Debug.print(DBG_ERROR, "[WaterFill] TimeCalc: fillDuration: %d ms and lastUpTime: %d ms", fillDur, lastUpTime);
-        waterConsumption = flowRate * fillDur / 60000.0; // calculate water consumption in liters
-        Debug.print(DBG_ERROR, "[WaterFill] Flowrate * fillDuration / 60000: FlowRate: %s and fillDuration: %d ms and lastUpTime: %d ms", flowRate, fillDur, lastUpTime);
-        storage.WaterFillAnCon += waterConsumption; // add to annual water consumption
+        
+        // Calculate water consumption in liters
+        float fillDurMinutes = fillDur / 60000.0; // Convert milliseconds to minutes
+        waterConsumption = flowRate * fillDurMinutes; // flowRate in liters per minute
+        storage.WaterFillAnCon += waterConsumption; // Add to annual water consumption in liters
+        Debug.print(DBG_VERBOSE, "[WaterFill] Added consumption: %.2f L (duration: %lu ms)", waterConsumption, fillDur);
+        
         lastUpTime = WaterFill.UpTime;
     }
 
@@ -673,9 +692,12 @@ void PoolMaster(void *pvParameters)
     #endif 
 
     stack_mon(hwm);
-    vTaskDelayUntil(&ticktime,period);
-  }
+    Debug.print(DBG_DEBUG, "[stack_mon] %s: %u bytes", pcTaskGetName(NULL), uxTaskGetStackHighWaterMark(NULL));
+
+        vTaskDelayUntil(&ticktime, period);
+    }
 }
+
 
 //Enable/Disable pH PID
 void SetPhPID(bool Enable)
@@ -977,4 +999,3 @@ void smtpCallback(SMTP_Status status){
   }
 }
 */
-

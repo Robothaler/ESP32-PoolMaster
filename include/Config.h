@@ -1,12 +1,12 @@
 // Firmware revision
-#define FIRMW           "ESP-3.5"
+#define FIRMW           "ESP-3.0"
 #define TFT_FIRMW       "TFT-2.0"
 
 //Version of config stored in EEPROM
 //Random value. Change this value (to any other value) to revert the config to default values
-#define CONFIG_VERSION  12
+#define CONFIG_VERSION  25
 
-#define DEBUG_LEVEL     DBG_INFO     // Possible levels : NONE/ERROR/WARNING/INFO/DEBUG/VERBOSE
+#define DEBUG_LEVEL     DBG_INFO    // Possible levels : NONE/ERROR/WARNING/INFO/DEBUG/VERBOSE
 
 // WiFi credentials
 // ------  Credentials are stored in include/credentials.h
@@ -72,28 +72,28 @@
 #define HEAT_ON           P7   // Switch for Heatdemand
 
 
-#define LIGHT_POOL         7   // (WAR 27)    Pool Spotlight
-#define LIGHT_ROOM        10   // (WAR 4)     Serviceroom light
-#define RELAY_R0          13   // (WAR 25)    Spare I
-#define RELAY_R1          14   // (WAR 26)    Spare II
-#define RELAY_R2          21   // (WAR 33)    Spare III
-//#define RELAY_R3        38   // (WAR 32)    Spare IV
-//#define RELAY_R4        45   // (ist NEU)   Spare V
-//#define RELAY_R5        37   // (ist NEU)   Spare VI
+#define LIGHT_POOL         7   // Pool Spotlight
+#define LIGHT_ROOM        10   // Serviceroom light
+#define RELAY_R0          13   // Spare I
+#define RELAY_R1          14   // Spare II
+#define RELAY_R2          21   // Spare III
+#define RELAY_R3          38   // Spare IV
+#define RELAY_R4          45   // Spare V
+#define RELAY_R5           6   // Spare VI
 
 //Digital input pins connected to Flow-Meter additional security for Filtrationpump and dosing
-#define FLOW              11   // (WAR 39)    Flow-Meter in Main-Pipe to be sure Filtrationpump is running
-#define FLOW2              6   // (WAR 36)    Flow-Meter in Measure-Pipe to be sure water is flowing to get accurate values of ph and orp meter
+#define FLOW              39   // war 39 // Flow-Meter in Main-Pipe to be sure Filtrationpump is running
+#define FLOW2             40   // war 40 // Flow-Meter in Measure-Pipe to be sure water is flowing to get accurate values of ph and orp meter
 
 //Digital input pins connected to level reed switches in pool to indicate low or high water level
 //LOW = Switch is closed / HIGH = Switch is open
-#define WATER_MAX_LVL     38  // (WAR 34)
-#define WATER_MIN_LVL     45  // (WAR 35)
+#define WATER_MAX_LVL     41  
+#define WATER_MIN_LVL     42   
 
 //Digital input pins connected to level reed switches in canister indicate low pH or Chlorine level
 //LOW = Switch is open
-#define PH_LVL            15   // (WAR 34)
-#define CHL_LVL           16   // (WAR 35)
+#define PH_LVL            15   // 
+#define CHL_LVL           16   //
 
 //One wire bus for the air/water temperature measurement
 #define ONE_WIRE_BUS_A     4   //  (WAR 18)
@@ -104,21 +104,23 @@
 //and status LED through PCF8574A 
 #define I2C_SDA			       8  //  (WAR 21)
 #define I2C_SCL			       9  //  (WAR 22)
-#define PCF8574_ADR       0x38 // for Status-LEDs
-#define PCF8574_I_ADR     0x3F // for External Relais for 230V Apliances
+#define PCF8574_ADR       0x24 // for Status-LEDs (SOLL 0x3A)
+#define PCF8574_I_ADR     0x3F // for External Relais for 230V Apliances (soll 0x3F)
 #define PCF8574_II_ADR    0x3D // for Motorvalves
-#define PCF8574_III_ADR   0x3E // for additional Motorvalves and Waterfillvalve
+#define PCF8574_III_ADR   0x3B // for additional Motorvalves and Waterfillvalve
+
+#define NUM_PCF_DEVICES    3  // Number of PCF8574 devices - important for the I2C polling task
 
 //Type of pH and Orp sensors acquisition :
 //INT_ADS1115 : single ended signal with internal ADS1115 ADC (default)
 //EXT_ADS1115 : differential signal with external ADS1115 ADC (Loulou74 board)
 #define EXT_ADS1115
-#define INT_ADS1115_ADDR  ADS1115ADDRESS+1 // 0x49 is default address -> ADS1115ADDRESS+1
+#define INT_ADS1115_ADDR  ADS1115ADDRESS // 0x48 is default address -> ADS1115ADDRESS // 0x49 address -> ADS1115ADDRESS+1
 #define PH_ADS1115_ADDR   ADS1115ADDRESS+2 // 0x4A is default address -> ADS1115ADDRESS+2
 #define ORP_ADS1115_ADDR  ADS1115ADDRESS+3 // 0x4B is default address -> ADS1115ADDRESS+3
 
 // Buzzer
-#define BUZZER             2  //  (WAR 2)
+#define BUZZER             2  //
 
 // MotorValve Constants
 #define STARTANGLE_0       0   // StartAngle for MotorValves
@@ -176,7 +178,7 @@
 // Loop tasks scheduling parameters
 //---------------------------------
 // T1:  AnalogPoll
-// T2:  PoolServer
+// T2:  ProcessCommand (previously PoolServer)
 // T3:  PoolMaster
 // T4:  getTemp
 // T5:  readBME280
@@ -186,10 +188,12 @@
 // T9:  FlowMeasures
 // T10: StatusLights
 // T11: PublishMeasures
-// T12: PublishSettings 
+// T12: PublishSettings
+// T13: I2C Polling Task for PCF8574-devices
+// T14: OTATask (for Nextion display OTA updates)
 
-//Periods 
-// Task11 period is initialized with PUBLISHINTERVAL and can be changed dynamically
+// Periods 
+// Task12 period is initialized with PUBLISHINTERVAL and can be changed dynamically
 #define PT1               125
 #define PT2               500
 #define PT3               500
@@ -200,23 +204,63 @@
 #define PT8               1000
 #define PT9               1000
 #define PT10              3000
-#define PT11              30000 
+#define PT11              30000
+#define PT13              100 
+#define PT14              1000  // Period for OTA task (symbolic, as it mainly waits for uploads)
 
-//Start offsets to spread tasks along time
-// Task1 has no delay
+// Start offsets to spread tasks along time
+#define DT1               0/portTICK_PERIOD_MS
 #define DT2               190/portTICK_PERIOD_MS
 #define DT3               310/portTICK_PERIOD_MS
 #define DT4               440/portTICK_PERIOD_MS
-#define DT5               500/portTICK_PERIOD_MS
+#define DT5               520/portTICK_PERIOD_MS
 #define DT6               560/portTICK_PERIOD_MS
-#define DT7               565/portTICK_PERIOD_MS  //-> Timing is similar to ORP Regulation because just one loop is running
+#define DT7               565/portTICK_PERIOD_MS
 #define DT8               920/portTICK_PERIOD_MS
 #define DT9               1060/portTICK_PERIOD_MS
 #define DT10              100/portTICK_PERIOD_MS
 #define DT11              570/portTICK_PERIOD_MS
 #define DT12              940/portTICK_PERIOD_MS
+#define DT13              100/portTICK_PERIOD_MS
+#define DT14              980/portTICK_PERIOD_MS  // Start offset for OTA task to avoid overlap
 
-//#define CHRONO                    // Activate tasks timings traces for profiling
+// Task stack sizes (in bytes)
+#define STACK_T1          4096  // AnalogPoll
+#define STACK_T2          8192  // ProcessCommand
+#define STACK_T3          5120  // PoolMaster
+#define STACK_T4          4096  // getTemp
+#define STACK_T5          3072  // readBME280
+#define STACK_T6          3072  // OrpRegulation
+#define STACK_T7          3072  // SaltRegulation
+#define STACK_T8          3072  // pHRegulation
+#define STACK_T9          3072  // FlowMeasures
+#define STACK_T10         4096  // StatusLights
+#define STACK_T11         4096  // PublishMeasures
+#define STACK_T12         5120  // PublishSettings
+#define STACK_T13         4096  // I2CPollingTask
+#define STACK_T14         3072  // OTATask (increased to 12 KB and placed in PSRAM if possible)
+
+// Task priorities (all currently set to 1, but defined for consistency)
+#define PRIORITY_T1       1
+#define PRIORITY_T2       1
+#define PRIORITY_T3       1
+#define PRIORITY_T4       1
+#define PRIORITY_T5       1
+#define PRIORITY_T6       1
+#define PRIORITY_T7       1
+#define PRIORITY_T8       1
+#define PRIORITY_T9       1
+#define PRIORITY_T10      1
+#define PRIORITY_T11      1
+#define PRIORITY_T12      1
+#define PRIORITY_T13      1
+#define PRIORITY_T14      1         // Priority for OTA task
+
+// OTA-specific settings
+#define OTA_NEXTION_PORT  80        // Port for Nextion OTA web server
+#define OTA_NEXTION_PATH  "/upload" // Endpoint for Nextion OTA uploads
+
+#define CHRONO                    // Activate tasks timings traces for profiling
 //#define SIMU                      // Used to simulate pH/ORP sensors. Very simple simulation:
                                     // the sensor value is computed from the output of the PID 
                                     // loop to reach linearly the theorical value produced by this

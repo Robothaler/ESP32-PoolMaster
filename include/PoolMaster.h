@@ -1,9 +1,9 @@
 #pragma once
 #define ARDUINOJSON_USE_DOUBLE 1  // Required to force ArduinoJSON to treat float as double
 
-#include "Arduino_DebugUtils.h"   // Debug.print
+#include <Arduino_DebugUtils.h>   // Debug.print
 #include <time.h>                 // Struct and function declarations for dealing with time
-#include "TimeLib.h"              // Low level time and date functions
+#include <TimeLib.h>              // Low level time and date functions
 #include <RunningMedian.h>        // Determine the running median by means of a circular buffer
 #include <PID_v1.h>               // PID regulation loop
 #include "OneWire.h"              // Onewire communication
@@ -21,7 +21,8 @@
 #include <WiFiClient.h>           // Base class that provides Client
 #include <WiFiUdp.h>              // UDP support
 #include <ESPmDNS.h>              // mDNS
-#include <ArduinoOTA.h>           // Over The Air WiFi update 
+#include <ArduinoOTA.h>           // Over The Air WiFi update
+#include <ESPAsyncWebServer.h>    // Asynchronous Web Server 
 #include "AsyncMqttClient.h"      // Async. MQTT client
 #include "ADS1115.h"              // ADS1115 sensors library
 #include "PCF8574.h"              // IO-Portexpander
@@ -30,6 +31,7 @@
 #include <SPI.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
+#include "I2CConfig.h"
 
 // General shared data structure
 /*
@@ -38,7 +40,7 @@ struct StoreStruct
   uint8_t ConfigVersion;   // This is for testing if first time using eeprom or not
   String SSID, WIFI_PASS, MQTT_USER, MQTT_PASS, MQTT_NAME;
   IPAddress MQTT_IP;
-  uint16_t MQTT_PORT;
+  uint32_t MQTT_PORT;
   bool WIFI_OnOff, MQTTLOGIN_OnOff, BUS_A_B, Ph_RegulationOnOff, Orp_RegulationOnOff, AutoMode, SolarLocExt, SolarMode, Salt_Chlor, SaltMode, SaltPolarity, WinterMode, WaterHeat, ValveMode, CleanMode, ValveSwitch, WaterFillMode;
   uint8_t FiltrationDuration, FiltrationStart, FiltrationStop, FiltrationStartMin, FiltrationStopMax, DelayPIDs, SolarStartMin, SolarStopMax;
   uint8_t address_A_0[8], address_A_1[8], address_A_2[8], address_A_3[8], address_A_4[8], Array_A[5];
@@ -57,7 +59,7 @@ struct StoreStruct
     uint8_t ConfigVersion;
     String SSID, WIFI_PASS, MQTT_USER, MQTT_PASS, MQTT_NAME;
     IPAddress MQTT_IP;
-    uint16_t MQTT_PORT;
+    uint32_t MQTT_PORT;
     bool WIFI_OnOff, MQTTLOGIN_OnOff, BUS_A_B, Ph_RegulationOnOff, Orp_RegulationOnOff, AutoMode, SolarLocExt, SolarMode, Salt_Chlor, SaltMode, SaltPolarity, WinterMode, WaterHeat, ValveMode, CleanMode, ValveSwitch, WaterFillMode;
     uint8_t FiltrationDuration, FiltrationStart, FiltrationStop, FiltrationStartMin, FiltrationStopMax, DelayPIDs, SolarStartMin, SolarStopMax;
     uint8_t address_A_0[8], address_A_1[8], address_A_2[8], address_A_3[8], address_A_4[8], Array_A[5]; // Array for DS18B20-adress A
@@ -71,6 +73,15 @@ struct StoreStruct
 };
 
 extern StoreStruct storage;
+
+extern I2CDeviceStates i2cStates;
+extern const PCFDevice pcfDevices[NUM_PCF_DEVICES];
+
+extern SemaphoreHandle_t mutex; // Mutex for I2C access
+
+bool lockI2C(); // Declaration of the lockI2C function
+void unlockI2C(); // Declaration of the unlockI2C function
+unsigned long getDurationSafe(unsigned long start, unsigned long current);
 
 //Queue object to store incoming JSON commands (up to 10)
 #define QUEUE_ITEMS_NBR 10
@@ -118,9 +129,16 @@ extern bool FLOWError;
 extern bool FLOW2Error;
 extern bool WaterFillError;
 
+void createTasks(int app_cpu, TaskHandle_t* pubSetTaskHandle, TaskHandle_t* pubMeasTaskHandle);
 bool saveParam(const char* key, const uint8_t* val, size_t size);
 void publishPoolMode(int event);
 void publishSolarMode(int event);
+void mqttInit();
+void mqttErrorPublish(const char* Payload);
+void publishPoolMode(int event);
+void publishSolarMode(int event);
+void connectToWiFi();
+void connectToMqtt();
 
 // DS18B20 SENSOR-Mapping to save the sensoradress and Indexnumber to nvs
 extern const char* NV_STORAGE_MAPPING_A[];

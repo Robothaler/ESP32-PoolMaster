@@ -12,7 +12,7 @@ NB: all timings are in milliseconds
 
 #ifndef PCF_PUMP_h
 #define PCF_PUMP_h
-#define PCF_PUMP_VERSION "1.0.1"
+#define PCF_PUMP_VERSION "1.0.2"
 
 //Constants used in some of the functions below
 #define PUMP_ON  0
@@ -25,12 +25,18 @@ NB: all timings are in milliseconds
 #define NO_TANK 255            // Pump without tank
 #define NO_INTERLOCK 255  
 
-#define DefaultMaxUpTime 30*60*1000 //default value is 30mins  
+#define DefaultMaxUpTime 30*60*1000 //default value is 30mins
+
+extern bool lockI2C();
+extern void unlockI2C();
  
 class PCF_Pump{
   public:
 
-    PCF_Pump(uint8_t, uint8_t, uint8_t = NO_TANK, uint8_t = NO_INTERLOCK, double = 0., double = 0., double =100.);    
+  PCF_Pump(uint8_t startPin, uint8_t statePin, uint8_t levelPin, uint8_t interlockPin,
+    float flowRate, float tankVolume, float tankFill, uint8_t address,
+    uint8_t interlockAddress = 0xFF, bool activeLow = true);
+    void setExternalMutexControl(bool useExternal);    
     void loop();
     bool Start();
     bool Stop();
@@ -55,12 +61,23 @@ class PCF_Pump{
     unsigned long LastStartTime;
     unsigned long StopTime; 
     double flowrate, tankvolume, tankfill;          
+    
   private:
-     
-    uint8_t pumppin; 
-    uint8_t isrunningsensorpin;
-    uint8_t tanklevelpin;
-    uint8_t interlockpin;
+  uint8_t getPCFState(uint8_t address);
+  bool writePCFState(uint8_t address, uint8_t state);
+  uint8_t _startPin;
+  uint8_t _statePin;
+  uint8_t _levelPin;
+  uint8_t _interlockPin;
+  uint8_t _address;             // Adress for startPin/statePin
+  uint8_t _interlockAddress;    // Adress for interlockPin
+  bool _activeLow;
+  unsigned long _lastStartTime;
+  unsigned long _upTime;
+  unsigned long _maxUpTime;
+  float _flowRate;
+  float _tankVolume;
+  float _tankFill;
 
 };
 #endif

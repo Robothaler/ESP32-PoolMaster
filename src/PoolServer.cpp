@@ -7,14 +7,12 @@
 #include "PoolMaster.h"
 
 // Functions prototypes
-bool saveParam(const char*,uint8_t );
-bool saveParam(const char*,uint16_t );
-bool saveParam(const char*,IPAddress );
-bool saveParam(const char*,bool );
-bool saveParam(const char*,unsigned long );
-bool saveParam(const char*,double );
-bool saveParam(const char*,String );
+bool saveParam(const char* key, uint8_t val);
+bool saveParam(const char* key, bool val);
+bool saveParam(const char* key, unsigned long val);
+bool saveParam(const char* key, String val);
 bool saveParam(const char* key, const uint8_t* val, size_t size);
+bool saveParam(const char* key, double val);
 void saveSensorMapping(const char* sensorMapping[], uint8_t ds18b20Mapping[], uint8_t numSensors);
 void PublishSettings(void);
 void simpLinReg(float * , float * , double & , double &, int );
@@ -42,8 +40,9 @@ void ProcessCommand(void *pvParameters)
   //Json Document
   StaticJsonDocument<200> command;
   char JSONCommand[150] = "";                     // JSON command to process  
-
+  Debug.print(DBG_INFO, "[TASKS] ProcessCommand started on core %d", xPortGetCoreID());
   while (!startTasks) ;
+  Debug.print(DBG_DEBUG, "[TASKS] ProcessCommand running...");
   vTaskDelay(DT2);                                // Scheduling offset   
 
   TickType_t period = PT2;  
@@ -122,7 +121,7 @@ void ProcessCommand(void *pvParameters)
           PublishSettings();
         }
 
-        //"MqttLogin" command which switches MQTT_Login with crdentials On or Off
+        //"MqttLogin" command which switches MQTT_Login with credentials On or Off
         else if (command.containsKey(F("MqttLogin")))
         {
           if ((int)command[F("MqttLogin")] == 0)
@@ -147,32 +146,32 @@ void ProcessCommand(void *pvParameters)
         }
 
         //"MqttIP" command which is called when new MQTT-SERVER IP-Address was entered
-        else if (command.containsKey(F("MqttIP")))
-        {
+        else if (command.containsKey(F("MqttIP"))) {
           String ipAddressString = "";
           for (int i = 0; i < 4; i++) {
             ipAddressString += String(command[F("MqttIP")][i].as<int>());
             if (i < 3) ipAddressString += ".";
           }
           IPAddress ipAddress;
-          if (ipAddress.fromString(ipAddressString))
-          {
+          if (ipAddress.fromString(ipAddressString)) {
             uint32_t ipAddressLong = ipAddress;
             storage.MQTT_IP = ipAddressLong;
-            // Save parameter in nvs
             saveParam("MQTT_IP", storage.MQTT_IP);
+            mqttClient.setServer(storage.MQTT_IP, storage.MQTT_PORT);
+            if (mqttClient.connected()) {
+              mqttClient.disconnect();
+              connectToMqtt();
+            }
             PublishSettings();
-            Debug.print(DBG_DEBUG, "[MQTT] MQTT server IP address set to: %s", ipAddressString.c_str());
-          }
-          else
-          {
-            // Handle invalid IP address
-            Debug.print(DBG_DEBUG, "Invalid IP address");
+            Debug.print(DBG_INFO, "[MQTT] MQTT server IP address updated to: %s", ipAddressString.c_str());
+          } else {
+            Debug.print(DBG_ERROR, "[MQTT] Invalid IP address: %s", ipAddressString.c_str());
+            mqttErrorPublish("{\"error\":\"Invalid MQTT IP address\"}");
             uint32_t oldIpAddress = nvs.getULong("MQTT_IP", 0);
             storage.MQTT_IP = oldIpAddress;
+            Debug.print(DBG_INFO, "[MQTT] Reverted to previous IP: %s", storage.MQTT_IP.toString().c_str());
           }
         }
-
         //"MQTTLOGIN" command which is called when new MQTT-USER, Password and Name was entered
         //First parameter is MQTT-USER, second parameter is MQTT-PASSWORD, third parameter is MQTT-NAME
         else if (command.containsKey(F("MQTTLOGIN")))
@@ -1122,6 +1121,7 @@ void ProcessCommand(void *pvParameters)
         }
         //Publish Update on the MQTT broker the status of our variables
         PublishMeasures();
+        Debug.print(DBG_DEBUG, "[stack_mon] %s: %u bytes", pcTaskGetName(NULL), uxTaskGetStackHighWaterMark(NULL));
       }
     }
     #ifdef CHRONO

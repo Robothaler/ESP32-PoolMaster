@@ -67,7 +67,7 @@ static struct TFTStruct
 { //default values to force update on next refresh
   -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1.,
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-  0,
+  MQTT_SERVER_PORT,
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
   99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
   99,
@@ -324,14 +324,14 @@ void UpdateTFT()
       if (CurrentPage == 19)  myNex.writeStr(F("MqttPort.txt"), temp);
     }
   
-  if (storage.MQTT_IP != TFTStruc.MQTT_IP || !refresh)
+    if (storage.MQTT_IP != TFTStruc.MQTT_IP || !refresh)
     {
       TFTStruc.MQTT_IP = storage.MQTT_IP;
       temp = TFTStruc.MQTT_IP.toString();
       myNex.writeStr(F("page0.vaMqttIP.txt"), temp);
       Debug.print(DBG_DEBUG, "[MQTT / NEXTION] MQTT server IP address: %s", storage.MQTT_IP.toString().c_str());
       if (CurrentPage == 19)  myNex.writeStr(F("MqttIP.txt"), temp);
-    }   
+    }  
 
   if (storage.PhValue != TFTStruc.pH || !refresh)
   {

@@ -79,7 +79,9 @@ void PublishTopic(const char* topic, JsonDocument& root)
 // Publishes system settings to MQTT broker
 void SettingsPublish(void *pvParameters)
 {
+  Debug.print(DBG_INFO, "[TASKS] SettingsPublish started on core %d", xPortGetCoreID());
   while(!startTasks);
+  Debug.print(DBG_DEBUG, "[TASKS] SettingsPublish running...");
   vTaskDelay(DT12);                                // Scheduling offset 
 
   uint32_t mod1 = xTaskGetTickCount() % 1000;     // This is the offset to respect for future resume
@@ -250,7 +252,9 @@ void SettingsPublish(void *pvParameters)
 
 void MeasuresPublish(void *pvParameters)
 { 
+  Debug.print(DBG_INFO,"[TASKS] PublishMeasures started on core %d", xPortGetCoreID());
   while(!startTasks);
+  Debug.print(DBG_DEBUG,"[TASKS] PublishMeasures running...");
   vTaskDelay(DT11);                                // Scheduling offset 
   uint32_t mod1 = xTaskGetTickCount() % 1000;     // This is the offset to respect for future resume
 

@@ -1,0 +1,7 @@
+{
+  "name": "MotorValve",
+  "version": "1.0.0",
+  "description": "Custom MotorValve library",
+  "frameworks": "arduino",
+  "platforms": "espressif32"
+}

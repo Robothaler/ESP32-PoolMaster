@@ -1,0 +1,7 @@
+{
+    "name": "PCF_Pump",
+    "version": "1.0.0",
+    "description": "Custom PCF Pump library",
+    "frameworks": "arduino",
+    "platforms": "espressif32"
+  }

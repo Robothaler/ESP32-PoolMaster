@@ -22,7 +22,7 @@ EasyNex::EasyNex(HardwareSerial& serial){  // Constructor's parameter is the Ser
 }
 
 void EasyNex::begin(unsigned long baud){
-  _serial->begin(baud);  // We pass the initialization data to the objects (baud rate) default: 9600
+  _serial->begin(baud, SERIAL_8N1, 17, 18);  // We pass the initialization data to the objects (baud rate) default: 9600
   
   delay(100);            // Wait for the Serial to initialize
   
