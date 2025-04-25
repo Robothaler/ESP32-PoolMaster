@@ -6,7 +6,7 @@
 //Random value. Change this value (to any other value) to revert the config to default values
 #define CONFIG_VERSION  25
 
-#define DEBUG_LEVEL     DBG_INFO    // Possible levels : NONE/ERROR/WARNING/INFO/DEBUG/VERBOSE
+#define DEBUG_LEVEL     DBG_VERBOSE    // Possible levels : NONE/ERROR/WARNING/INFO/DEBUG/VERBOSE
 
 // WiFi credentials
 // ------  Credentials are stored in include/credentials.h
@@ -104,12 +104,10 @@
 //and status LED through PCF8574A 
 #define I2C_SDA			       8  //  (WAR 21)
 #define I2C_SCL			       9  //  (WAR 22)
-#define PCF8574_ADR       0x24 // for Status-LEDs (SOLL 0x3A)
-#define PCF8574_I_ADR     0x3F // for External Relais for 230V Apliances (soll 0x3F)
+#define PCF8574_ADR       0x24 // for Status-LEDs
+#define PCF8574_I_ADR     0x3F // for External Relais for 230V Apliances
 #define PCF8574_II_ADR    0x3D // for Motorvalves
 #define PCF8574_III_ADR   0x3B // for additional Motorvalves and Waterfillvalve
-
-#define NUM_PCF_DEVICES    3  // Number of PCF8574 devices - important for the I2C polling task
 
 //Type of pH and Orp sensors acquisition :
 //INT_ADS1115 : single ended signal with internal ADS1115 ADC (default)
@@ -177,7 +175,7 @@
 
 // Loop tasks scheduling parameters
 //---------------------------------
-// T1:  AnalogPoll
+// T1:  CombinedPolling (previously AnaloPoll)
 // T2:  ProcessCommand (previously PoolServer)
 // T3:  PoolMaster
 // T4:  getTemp
@@ -189,8 +187,7 @@
 // T10: StatusLights
 // T11: PublishMeasures
 // T12: PublishSettings
-// T13: I2C Polling Task for PCF8574-devices
-// T14: OTATask (for Nextion display OTA updates)
+// T13: OTATask (for Nextion display OTA updates)
 
 // Periods 
 // Task12 period is initialized with PUBLISHINTERVAL and can be changed dynamically
@@ -198,15 +195,15 @@
 #define PT2               500
 #define PT3               500
 #define PT4               1000 / (1 << (12 - TEMPERATURE_RESOLUTION))
-#define PT5               1000
+#define PT5               2000
 #define PT6               1000
 #define PT7               1000
 #define PT8               1000
 #define PT9               1000
 #define PT10              3000
 #define PT11              30000
-#define PT13              100 
-#define PT14              1000  // Period for OTA task (symbolic, as it mainly waits for uploads)
+#define PT12              PUBLISHINTERVAL  // Period for MQTT publish of settings
+#define PT13              1000  // Period for OTA task (symbolic, as it mainly waits for uploads)
 
 // Start offsets to spread tasks along time
 #define DT1               0/portTICK_PERIOD_MS
@@ -221,11 +218,10 @@
 #define DT10              100/portTICK_PERIOD_MS
 #define DT11              570/portTICK_PERIOD_MS
 #define DT12              940/portTICK_PERIOD_MS
-#define DT13              100/portTICK_PERIOD_MS
-#define DT14              980/portTICK_PERIOD_MS  // Start offset for OTA task to avoid overlap
+#define DT13              980/portTICK_PERIOD_MS  // Start offset for OTA task to avoid overlap
 
 // Task stack sizes (in bytes)
-#define STACK_T1          4096  // AnalogPoll
+#define STACK_T1          4096  // CombinedPolling
 #define STACK_T2          8192  // ProcessCommand
 #define STACK_T3          5120  // PoolMaster
 #define STACK_T4          4096  // getTemp
@@ -237,11 +233,10 @@
 #define STACK_T10         4096  // StatusLights
 #define STACK_T11         4096  // PublishMeasures
 #define STACK_T12         5120  // PublishSettings
-#define STACK_T13         4096  // I2CPollingTask
-#define STACK_T14         3072  // OTATask (increased to 12 KB and placed in PSRAM if possible)
+#define STACK_T13         3072  // OTATask (increased to 12 KB and placed in PSRAM if possible)
 
-// Task priorities (all currently set to 1, but defined for consistency)
-#define PRIORITY_T1       1
+// Task priorities angepasst für bessere Synchronisation
+#define PRIORITY_T1       1    // CombinedPolling höchste Priorität
 #define PRIORITY_T2       1
 #define PRIORITY_T3       1
 #define PRIORITY_T4       1
@@ -253,8 +248,11 @@
 #define PRIORITY_T10      1
 #define PRIORITY_T11      1
 #define PRIORITY_T12      1
-#define PRIORITY_T13      1
-#define PRIORITY_T14      1         // Priority for OTA task
+#define PRIORITY_T13      1         // Priority for OTA task
+
+// Timing Parameter für PCF8574
+#define PCF_UPDATE_INTERVAL    10    // Minimale Zeit zwischen PCF Updates (ms)
+#define PCF_VERIFY_TIMEOUT     50    // Timeout für Statusverifikation (ms)
 
 // OTA-specific settings
 #define OTA_NEXTION_PORT  80        // Port for Nextion OTA web server

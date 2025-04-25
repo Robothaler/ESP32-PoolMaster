@@ -1100,6 +1100,9 @@ void ProcessCommand(void *pvParameters)
           if (FLOWError)
             FLOWError = false;
 
+          if (I2CError)
+            I2CError = false;
+
           if (FLOW2Error)
             FLOW2Error = false;
           

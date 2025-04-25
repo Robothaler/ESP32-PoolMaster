@@ -1,14 +1,12 @@
 // Supervisory task
 
-#include <Arduino.h>                // Arduino framework
+#include <Arduino.h>
 #include "Config.h"
 #include "PoolMaster.h"
 //#include <ESP_Mail_Client.h>
 
 static WiFiClient wificlient;
 
-extern bool lockI2C();
-extern void unlockI2C();
 extern Arduino_DebugUtils Debug;
 
 // SMTPSession smtp;
@@ -37,6 +35,7 @@ void setStandardMotorValvePositions();
 void setStandardHeatPumpMotorValvePositions();
 void setMotorValvePositionsForHeatPump();
 void setMotorValvePositionsForCleanMode();
+void getDurationSafe();
 // void smtpCallback(SMTP_Status);
 // bool SMTP_Connect(void);
 // void Send_Email(void);
@@ -94,6 +93,14 @@ void setMotorValvePositionsForCleanMode()
       Bodenablauf.close();
       Solarvalve.close();
     }
+}
+
+unsigned long getDurationSafe(unsigned long start, unsigned long current) {
+    if (current < start) {
+        // Handle millis() overflow
+        return (ULONG_MAX - start) + current + 1;
+    }
+    return current - start;
 }
 
 void PoolMaster(void *pvParameters)
@@ -348,12 +355,12 @@ Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID())
         // Check if the temperature difference is large enough to turn on solar pump and valve
         if (storage.WaterSTemp < storage.WaterTemp_SetPoint && storage.SolarTemp > storage.WaterSTemp + 4)
         {
-            SolarPump.Start();
+            //SolarPump.Start();
             publishSolarMode(1);
         }
         else if (storage.WaterSTemp >= storage.WaterTemp_SetPoint || storage.SolarRLTemp + 2 <= storage.WaterSTemp)
         {
-            SolarPump.Stop();
+            //SolarPump.Stop();
             publishSolarMode(2);
         }
     } else
@@ -748,7 +755,7 @@ void SetOrpPID(bool Enable)
 void Send_IFTTTNotif(){
     static const String url1 = IFTTT_key;
     String url2 = "";
-    static bool notif_sent[5] = {0,0,0,0,0};
+    static bool notif_sent[9] = {0,0,0,0,0,0,0,0,0};
 
     if(PSIError)
     {
@@ -879,7 +886,20 @@ void Send_IFTTTNotif(){
                 notif_sent[7] = true;
             }
         }
-    } else notif_sent[7] = false;    
+    } else notif_sent[7] = false;
+    
+    if(I2CError)
+    {
+        if(!notif_sent[8])
+        {
+            if(wificlient.connect("maker.ifttt.com",80))
+            {
+                url2 = String("I2X-Hardware Error! -> Check I2C-Hardware");
+                wificlient.print(String("POST ") + url1 + url2 + String(" HTTP/1.1\r\nHost: maker.ifttt.com\r\nConnection: close\r\n\r\n"));
+                notif_sent[8] = true;
+            }
+        }
+    } else notif_sent[8] = false;
 }
 
 /*

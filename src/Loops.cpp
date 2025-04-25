@@ -1,6 +1,7 @@
 #include <Arduino.h>                // Arduino framework
 #include "Config.h"
 #include "PoolMaster.h"
+#include "PCF8574Manager.h"
 
 extern Preferences nvs;
 
@@ -12,8 +13,8 @@ static DallasTemperature sensors_W(&oneWire_W);
 static DallasTemperature sensors_A(&oneWire_A);
 
 // global variable for numbers of connected sensors
-uint8_t numSensors_W;
-uint8_t numSensors_A;
+uint8_t sensorCount_A = 0;          // Amount of found sensors
+uint8_t sensorCount_W = 0;          // Amount of found sensors
 
 // DS18B20 SENSOR-Mapping to map the sensoradress with the Tempname
 const char* NV_STORAGE_MAPPING_A[] = {"SolarTemp", "SolarVLTemp", "SolarRLTemp", "AirInTemp", "AirTemp"}; // Mapping of A-BUS-Sensors to NVS
@@ -96,106 +97,114 @@ void AnalogInit() {
 #endif
 }
 
-void AnalogPoll(void *pvParameters) {
-  Debug.print(DBG_INFO, "[TASKS] AnalogPoll started on core %d", xPortGetCoreID());
+void CombinedPollingTask(void *pvParameters) {
+  Debug.print(DBG_INFO, "[TASKS] CombinedPollingTask started on core %d", xPortGetCoreID());
   while (!startTasks);
-  Debug.print(DBG_DEBUG, "[TASKS] AnalogPoll running...");
-  vTaskDelay(DT1); // Scheduling offset
+  Debug.print(DBG_DEBUG, "[TASKS] CombinedPollingTask running...");
+  vTaskDelay(DT1); // Verwende DT1 (ursprünglich für AnalogPoll)
 
-  esp_task_wdt_add(NULL); // Register with watchdog
-  TickType_t period = PT1;
+  esp_task_wdt_add(NULL);
+  TickType_t period = PT1; // Verwende PT1 (125ms), da es häufiger als PT13 (100ms) ist und beide abdeckt
   TickType_t ticktime = xTaskGetTickCount();
   static UBaseType_t hwm = 0;
 
   #ifdef CHRONO
   unsigned long td;
-  int t_act=0, t_min=999, t_max=0;
-  float t_mean=0.;
-  int n=1;
+  int t_act = 0, t_min = 999, t_max = 0;
+  float t_mean = 0.;
+  int n = 1;
   #endif
 
+  // Init ADC-Scans (AnalogPoll)
   lockI2C();
   adc_int.start();
-#ifdef EXT_ADS1115
+  #ifdef EXT_ADS1115
   adc_ph.start();
   adc_orp.start();
-#endif
+  #endif
   unlockI2C();
   vTaskDelayUntil(&ticktime, period);
 
+  const TickType_t minimumUpdateInterval = pdMS_TO_TICKS(PCF_UPDATE_INTERVAL);
+  static bool updateTaskStarted = false;
+  PCF8574Manager& pcfManager = PCF8574Manager::getInstance();
+  
   for (;;) {
-    esp_task_wdt_reset(); // Reset watchdog
+      esp_task_wdt_reset();
 
-    #ifdef CHRONO
-    td = millis();
-    #endif
+      #ifdef CHRONO
+      td = millis();
+      #endif
 
-    lockI2C();
-#ifdef EXT_ADS1115
-    adc_ph.update();
-    if (adc_ph.ready()) {
-      ph_sensor_value = adc_ph.readFilter(0);
-      if (ph_sensor_value >= 32768) ph_sensor_value -= 65536;
-      adc_ph.start();
-      samples_Ph.add(ph_sensor_value);
-      storage.PhValue = (samples_Ph.getAverage(5) * 0.1875 / 1000.0) * storage.pHCalibCoeffs0 + storage.pHCalibCoeffs1;
-    }
+      if (lockI2C()) {
+          // read analog sensors
+          #ifdef EXT_ADS1115
+          adc_ph.update();
+          if (adc_ph.ready()) {
+              ph_sensor_value = adc_ph.readFilter(0);
+              if (ph_sensor_value >= 32768) ph_sensor_value -= 65536;
+              adc_ph.start();
+              samples_Ph.add(ph_sensor_value);
+              storage.PhValue = (samples_Ph.getAverage(5) * 0.1875 / 1000.0) * storage.pHCalibCoeffs0 + storage.pHCalibCoeffs1;
+          }
 
-    adc_orp.update();
-    if (adc_orp.ready()) {
-      orp_sensor_value = adc_orp.readFilter(0);
-      if (orp_sensor_value >= 32768) orp_sensor_value -= 65536;
-      adc_orp.start();
-      samples_Orp.add(orp_sensor_value);
-      storage.OrpValue = (samples_Orp.getAverage(5) * 0.1875 / 1000.0) * storage.OrpCalibCoeffs0 + storage.OrpCalibCoeffs1;
-    }
+          adc_orp.update();
+          if (adc_orp.ready()) {
+              orp_sensor_value = adc_orp.readFilter(0);
+              if (orp_sensor_value >= 32768) orp_sensor_value -= 65536;
+              adc_orp.start();
+              samples_Orp.add(orp_sensor_value);
+              storage.OrpValue = (samples_Orp.getAverage(5) * 0.1875 / 1000.0) * storage.OrpCalibCoeffs0 + storage.OrpCalibCoeffs1;
+          }
 
-    adc_int.update();
-    if (adc_int.ready()) {
-      psi_sensor_value = adc_int.readFilter(0);
-      adc_int.start();
-      samples_PSI.add(psi_sensor_value);
-      storage.PSIValue = (samples_PSI.getAverage(5) * 0.1875 / 1000.0) * storage.PSICalibCoeffs0 + storage.PSICalibCoeffs1;
-      Debug.print(DBG_DEBUG, "pH: %5.0f - %4.2f - ORP: %5.0f - %3.0fmV - PSI: %5.0f - %4.2fBar\r",
-                  ph_sensor_value, storage.PhValue, orp_sensor_value, storage.OrpValue, psi_sensor_value, storage.PSIValue);
-    }
-#else
-    adc_int.update();
-    if (adc_int.ready()) {
-      orp_sensor_value = adc_int.readFilter(0);
-      ph_sensor_value = adc_int.readFilter(1);
-      psi_sensor_value = adc_int.readFilter(2);
-      adc_int.start();
+          adc_int.update();
+          if (adc_int.ready()) {
+              psi_sensor_value = adc_int.readFilter(0);
+              adc_int.start();
+              samples_PSI.add(psi_sensor_value);
+              storage.PSIValue = (samples_PSI.getAverage(5) * 0.1875 / 1000.0) * storage.PSICalibCoeffs0 + storage.PSICalibCoeffs1;
+              Debug.print(DBG_DEBUG, "pH: %5.0f - %4.2f - ORP: %5.0f - %3.0fmV - PSI: %5.0f - %4.2fBar\r",
+                          ph_sensor_value, storage.PhValue, orp_sensor_value, storage.OrpValue, psi_sensor_value, storage.PSIValue);
+          }
+          #else
+          adc_int.update();
+          if (adc_int.ready()) {
+              orp_sensor_value = adc_int.readFilter(0);
+              ph_sensor_value = adc_int.readFilter(1);
+              psi_sensor_value = adc_int.readFilter(2);
+              adc_int.start();
 
-      samples_Ph.add(ph_sensor_value);
-      storage.PhValue = (samples_Ph.getAverage(5) * 0.1875 / 1000.0) * storage.pHCalibCoeffs0 + storage.pHCalibCoeffs1;
-      // [SIMU logic remains unchanged...]
+              samples_Ph.add(ph_sensor_value);
+              storage.PhValue = (samples_Ph.getAverage(5) * 0.1875 / 1000.0) * storage.pHCalibCoeffs0 + storage.pHCalibCoeffs1;
 
-      samples_Orp.add(orp_sensor_value);
-      storage.OrpValue = (samples_Orp.getAverage(5) * 0.1875 / 1000.0) * storage.OrpCalibCoeffs0 + storage.OrpCalibCoeffs1;
-      // [SIMU logic remains unchanged...]
+              samples_Orp.add(orp_sensor_value);
+              storage.OrpValue = (samples_Orp.getAverage(5) * 0.1875 / 1000.0) * storage.OrpCalibCoeffs0 + storage.OrpCalibCoeffs1;
 
-      samples_PSI.add(psi_sensor_value);
-      storage.PSIValue = (samples_PSI.getAverage(5) * 0.1875 / 1000.0) * storage.PSICalibCoeffs0 + storage.PSICalibCoeffs1;
+              samples_PSI.add(psi_sensor_value);
+              storage.PSIValue = (samples_PSI.getAverage(5) * 0.1875 / 1000.0) * storage.PSICalibCoeffs0 + storage.PSICalibCoeffs1;
 
-      Debug.print(DBG_DEBUG, "pH: %5.0f - %4.2f - ORP: %5.0f - %3.0fmV - PSI: %5.0f - %4.2fBar\r",
-                  ph_sensor_value, storage.PhValue, orp_sensor_value, storage.OrpValue, psi_sensor_value, storage.PSIValue);
-    }
-#endif
-    unlockI2C();
+              Debug.print(DBG_DEBUG, "pH: %5.0f - %4.2f - ORP: %5.0f - %3.0fmV - PSI: %5.0f - %4.2fBar\r",
+                          ph_sensor_value, storage.PhValue, orp_sensor_value, storage.OrpValue, psi_sensor_value, storage.PSIValue);
+          }
+          #endif
 
-    #ifdef CHRONO
-    t_act = millis() - td;
-    if(t_act > t_max) t_max = t_act;
-    if(t_act < t_min) t_min = t_act;
-    t_mean += (t_act - t_mean)/n;
-    ++n;
-    Debug.print(DBG_INFO,"[AnalogPoll] td: %d t_act: %d t_min: %d t_max: %d t_mean: %4.1f",td,t_act,t_min,t_max,t_mean);
-    #endif
+          unlockI2C();
+      }
 
-    stack_mon(hwm);
-    Debug.print(DBG_DEBUG, "[stack_mon] %s: %u bytes", pcTaskGetName(NULL), uxTaskGetStackHighWaterMark(NULL));
-    vTaskDelayUntil(&ticktime, period);
+      #ifdef CHRONO
+      t_act = millis() - td;
+      if (t_act > t_max) t_max = t_act;
+      if (t_act < t_min) t_min = t_act;
+      t_mean += (t_act - t_mean) / n;
+      ++n;
+      if (n % 10 == 0) {
+          Debug.print(DBG_INFO, "[CombinedPolling] td: %d t_act: %d t_min: %d t_max: %d t_mean: %4.1f", td, t_act, t_min, t_max, t_mean);
+      }
+      #endif
+
+      stack_mon(hwm);
+      Debug.print(DBG_DEBUG, "[stack_mon] %s: %u bytes", pcTaskGetName(NULL), uxTaskGetStackHighWaterMark(NULL));
+      vTaskDelayUntil(&ticktime, period);
   }
 }
 
@@ -216,72 +225,72 @@ void Flow2Init()
 }
 
 void StatusLights(void *pvParameters) {
-  Debug.print(DBG_INFO, "[TASKS] StatusLights started on core %d", xPortGetCoreID());
-  while (!startTasks);
-  Debug.print(DBG_DEBUG, "[TASKS] StatusLights running...");
-  vTaskDelay(DT10);
+    Debug.print(DBG_INFO, "[TASKS] StatusLights started on core %d", xPortGetCoreID());
+    while (!startTasks);
+    Debug.print(DBG_DEBUG, "[TASKS] StatusLights running...");
+    vTaskDelay(DT10);
 
-  esp_task_wdt_add(NULL); // Register with watchdog
-  TickType_t period = PT10;
-  TickType_t ticktime = xTaskGetTickCount();
-  static UBaseType_t hwm = 0;
-
-  #ifdef CHRONO
-  unsigned long td;
-  int t_act=0, t_min=999, t_max=0;
-  float t_mean=0.;
-  int n=1;
-  #endif
-
-  static uint8_t line = 0;
-  for (;;) {
-    esp_task_wdt_reset(); // Reset watchdog
+    esp_task_wdt_add(NULL);
+    TickType_t period = PT10;
+    TickType_t ticktime = xTaskGetTickCount();
+    static UBaseType_t hwm = 0;
 
     #ifdef CHRONO
-    td = millis();
+    unsigned long td;
+    int t_act = 0, t_min = 999, t_max = 0;
+    float t_mean = 0.;
+    int n = 1;
     #endif
 
-    uint8_t status = 0;
-    status |= (line & 1) << 1;
-    if (line == 0) {
-      line = 1;
-      status |= (storage.AutoMode & 1) << 2;
-      status |= (AntiFreezeFiltering & 1) << 3;
-      status |= (PSIError & 1) << 7;
-      status |= (FLOWError & 1) << 7;
-      status |= (FLOW2Error & 1) << 7;
-    } else {
-      line = 0;
-      status |= (PhPID.GetMode() & 1) << 2;
-      status |= (OrpPID.GetMode() & 1) << 3;
-      status |= (!PhPump.TankLevel() & 1) << 4;
-      status |= (!ChlPump.TankLevel() & 1) << 5;
-      status |= (PhPump.UpTimeError & 1) << 6;
-      status |= (ChlPump.UpTimeError & 1) << 7;
+    static uint8_t line = 0;
+    for (;;) {
+        esp_task_wdt_reset();
+
+        #ifdef CHRONO
+        td = millis();
+        #endif
+
+        uint8_t status = 0;
+        status |= (line & 1) << 1;
+        if (line == 0) {
+            line = 1;
+            status |= (storage.AutoMode & 1) << 2;
+            status |= (AntiFreezeFiltering & 1) << 3;
+            status |= (PSIError & 1) << 7;
+            status |= (FLOWError & 1) << 7;
+            status |= (FLOW2Error & 1) << 7;
+            status |= (I2CError & 1) << 7;
+        } else {
+            line = 0;
+            status |= (PhPID.GetMode() & 1) << 2;
+            status |= (OrpPID.GetMode() & 1) << 3;
+            status |= (!PhPump.TankLevel() & 1) << 4;
+            status |= (!ChlPump.TankLevel() & 1) << 5;
+            status |= (PhPump.UpTimeError & 1) << 6;
+            status |= (ChlPump.UpTimeError & 1) << 7;
+        }
+        (status & 0xF0) ? digitalWrite(BUZZER, HIGH) : digitalWrite(BUZZER, LOW);
+        if (WiFi.status() == WL_CONNECTED) status |= 0x01;
+        else status &= 0xFE;
+        Debug.print(DBG_VERBOSE, "Status LED : 0x%02x", status);
+
+        uint8_t invertedStatus = ~status;
+        PCF8574Manager::getInstance().queueUpdate(PCF8574_ADR, invertedStatus);
+        Debug.print(DBG_VERBOSE, "[StatusLights] Queued state 0x%02X for 0x24", status);
+
+        #ifdef CHRONO
+        t_act = millis() - td;
+        if (t_act > t_max) t_max = t_act;
+        if (t_act < t_min) t_min = t_act;
+        t_mean += (t_act - t_mean) / n;
+        ++n;
+        Debug.print(DBG_INFO, "[StatusLights] td: %d t_act: %d t_min: %d t_max: %d t_mean: %4.1f", td, t_act, t_min, t_max, t_mean);
+        #endif
+
+        stack_mon(hwm);
+        Debug.print(DBG_DEBUG, "[stack_mon] %s: %u bytes", pcTaskGetName(NULL), uxTaskGetStackHighWaterMark(NULL));
+        vTaskDelayUntil(&ticktime, period);
     }
-    (status & 0xF0) ? digitalWrite(BUZZER, HIGH) : digitalWrite(BUZZER, LOW);
-    if (WiFi.status() == WL_CONNECTED) status |= 0x01;
-    else status &= 0xFE;
-    Debug.print(DBG_VERBOSE, "Status LED : 0x%02x", status);
-    lockI2C();
-    Wire.beginTransmission(PCF8574_ADR);
-    Wire.write(~status);
-    Wire.endTransmission();
-    unlockI2C();
-
-    #ifdef CHRONO
-    t_act = millis() - td;
-    if(t_act > t_max) t_max = t_act;
-    if(t_act < t_min) t_min = t_act;
-    t_mean += (t_act - t_mean)/n;
-    ++n;
-    Debug.print(DBG_INFO,"[StatusLights] td: %d t_act: %d t_min: %d t_max: %d t_mean: %4.1f",td,t_act,t_min,t_max,t_mean);
-    #endif
-
-    stack_mon(hwm);
-    Debug.print(DBG_DEBUG, "[stack_mon] %s: %u bytes", pcTaskGetName(NULL), uxTaskGetStackHighWaterMark(NULL));
-    vTaskDelayUntil(&ticktime, period);
-  }
 }
 
 //Ph regulation loop
@@ -542,8 +551,6 @@ void TempInit()
 
   DeviceAddress tempDeviceAddress_A;  // Adresse des gefundenen Sensors
   DeviceAddress tempDeviceAddress_W;  // Adresse des gefundenen Sensors
-  uint8_t sensorCount_A = 0;          // Anzahl der gefundenen Sensoren
-  uint8_t sensorCount_W = 0;          // Anzahl der gefundenen Sensoren
 
   // Start up the library
   sensors_W.begin();
@@ -651,7 +658,7 @@ void TempInit()
     }
 
     // Debug output for each sensor found
-    Debug.print(DBG_VERBOSE, "[DS18B20 - INIT]  Sensor W%d - Address: %02X%02X%02X%02X%02X%02X%02X%02X", sensorCount_W, tempDeviceAddress_W[0], tempDeviceAddress_W[1], tempDeviceAddress_W[2],
+    Debug.print(DBG_VERBOSE, "[DS18B20]  Sensor W%d - Address: %02X%02X%02X%02X%02X%02X%02X%02X", sensorCount_W, tempDeviceAddress_W[0], tempDeviceAddress_W[1], tempDeviceAddress_W[2],
     tempDeviceAddress_W[3], tempDeviceAddress_W[4], tempDeviceAddress_W[5], tempDeviceAddress_W[6], tempDeviceAddress_W[7]);
 
     sensorCount_W++;
@@ -679,7 +686,7 @@ void getTemp(void *pvParameters) {
   Debug.print(DBG_DEBUG, "[TASKS] getTemp running...");
   vTaskDelay(DT4);
 
-  esp_task_wdt_add(NULL); // Register with watchdog
+  esp_task_wdt_add(NULL);
   TickType_t period = PT4;
   TickType_t ticktime = xTaskGetTickCount();
   static UBaseType_t hwm = 0;
@@ -691,86 +698,100 @@ void getTemp(void *pvParameters) {
   int n=1;
   #endif
 
+  // Asynchrone Initialisierung
+  sensors_W.setWaitForConversion(false);
+  sensors_A.setWaitForConversion(false);
   sensors_W.requestTemperatures();
   sensors_A.requestTemperatures();
-  vTaskDelayUntil(&ticktime, period);
+  unsigned long lastRequest = millis();
+  bool waitingForConversion = true;
 
   for (;;) {
-    esp_task_wdt_reset(); // Reset watchdog
+    esp_task_wdt_reset();
 
     #ifdef CHRONO
     td = millis();
     #endif
 
-    for (int i = 0; i < 5; i++) {
-      byte currentAddress_A[8];
-      uint8_t storedAddress_A[8];
-      nvs.getBytes(("address_A_" + String(i)).c_str(), storedAddress_A, 8);
-      memcpy(currentAddress_A, storedAddress_A, 8);
+    if (waitingForConversion && millis() - lastRequest >= 800) {
+      // Lese Sensoren auf Bus A
+      for (int i = 0; i < sensorCount_A; i++) {
+        byte currentAddress_A[8];
+        uint8_t storedAddress_A[8];
+        nvs.getBytes(("address_A_" + String(i)).c_str(), storedAddress_A, 8);
+        memcpy(currentAddress_A, storedAddress_A, 8);
 
-      sensors_A.requestTemperaturesByAddress(currentAddress_A);
-      float temp = sensors_A.getTempC(currentAddress_A);
-
-      if (temp == NAN || temp == -127) {
-        Debug.print(DBG_WARNING, "[DS18B20] Error getting temperature for sensor A%d", i);
-      } else {
-        samples_A_Temp[i].add(temp);
-        float averagedTemp = samples_A_Temp[i].getAverage(5);
-        switch (storage.Array_A[i]) {
-          case 0: storage.SolarTemp = averagedTemp; break;
-          case 1: storage.SolarVLTemp = averagedTemp; break;
-          case 2: storage.SolarRLTemp = averagedTemp; break;
-          case 3: storage.AirInTemp = averagedTemp; break;
-          case 4: if (bme.begin(0x76)) storage.AirTemp = averagedTemp; break;
-          default: break;
+        float temp = sensors_A.getTempC(currentAddress_A);
+        if (temp == NAN || temp == -127) {
+          Debug.print(DBG_WARNING, "[DS18B20] Error getting temperature for sensor A%d", i);
+        } else {
+          samples_A_Temp[i].add(temp);
+          float averagedTemp = samples_A_Temp[i].getAverage(5);
+          switch (storage.Array_A[i]) {
+            case 0: storage.SolarTemp = averagedTemp; break;
+            case 1: storage.SolarVLTemp = averagedTemp; break;
+            case 2: storage.SolarRLTemp = averagedTemp; break;
+            case 3: storage.AirInTemp = averagedTemp; break;
+            case 4: if (bme.begin(0x76)) storage.AirTemp = averagedTemp; break;
+            default: break;
+          }
+          Debug.print(DBG_DEBUG, "[DS18B20] Sensor A%d - Address: %02X%02X%02X%02X%02X%02X%02X%02X - Temperature: %6.2f°C", i,
+                      currentAddress_A[0], currentAddress_A[1], currentAddress_A[2], currentAddress_A[3],
+                      currentAddress_A[4], currentAddress_A[5], currentAddress_A[6], currentAddress_A[7], averagedTemp);
         }
-        Debug.print(DBG_DEBUG, "[DS18B20] Sensor A%d - Address: %02X%02X%02X%02X%02X%02X%02X%02X - Temperature: %6.2f°C", i,
-                    currentAddress_A[0], currentAddress_A[1], currentAddress_A[2], currentAddress_A[3],
-                    currentAddress_A[4], currentAddress_A[5], currentAddress_A[6], currentAddress_A[7], averagedTemp);
+        vTaskDelay(10 / portTICK_PERIOD_MS); // CPU freigeben
       }
+
+      // Lese Sensoren auf Bus W
+      for (int i = 0; i < sensorCount_W; i++) {
+        byte currentAddress_W[8];
+        uint8_t storedAddress_W[8];
+        nvs.getBytes(("address_W_" + String(i)).c_str(), storedAddress_W, 8);
+        memcpy(currentAddress_W, storedAddress_W, 8);
+
+        float temp = sensors_W.getTempC(currentAddress_W);
+        if (temp == NAN || temp == -127) {
+          Debug.print(DBG_WARNING, "[DS18B20] Error getting temperature for sensor W%d", i);
+        } else {
+          samples_W_Temp[i].add(temp);
+          float averagedTemp = samples_W_Temp[i].getAverage(5);
+          switch (storage.Array_W[i]) {
+            case 0: storage.WaterSTemp = averagedTemp; break;
+            case 1: storage.WaterITemp = averagedTemp; break;
+            case 2: storage.WaterBTemp = averagedTemp; break;
+            case 3: storage.WaterWPTemp = averagedTemp; break;
+            case 4: storage.WaterWTTemp = averagedTemp; break;
+            default: break;
+          }
+          Debug.print(DBG_DEBUG, "[DS18B20] Sensor W%d - Address: %02X%02X%02X%02X%02X%02X%02X%02X - Temperature: %6.2f°C", i,
+                      currentAddress_W[0], currentAddress_W[1], currentAddress_W[2], currentAddress_W[3],
+                      currentAddress_W[4], currentAddress_W[5], currentAddress_W[6], currentAddress_W[7], averagedTemp);
+        }
+        vTaskDelay(10 / portTICK_PERIOD_MS);
+      }
+
+      // Log all temperatures
+      Debug.print(DBG_DEBUG, "[DS18B20] SolarTemp: %6.2f°C", storage.SolarTemp);
+      Debug.print(DBG_DEBUG, "[DS18B20] SolarVLTemp: %6.2f°C", storage.SolarVLTemp);
+      Debug.print(DBG_DEBUG, "[DS18B20] SolarRLTemp: %6.2f°C", storage.SolarRLTemp);
+      Debug.print(DBG_DEBUG, "[DS18B20] AirInTemp: %6.2f°C", storage.AirInTemp);
+      Debug.print(DBG_DEBUG, "[DS18B20] AirTemp: %6.2f°C", storage.AirTemp);
+      Debug.print(DBG_DEBUG, "[DS18B20] WaterSTemp: %6.2f°C", storage.WaterSTemp);
+      Debug.print(DBG_DEBUG, "[DS18B20] WaterITemp: %6.2f°C", storage.WaterITemp);
+      Debug.print(DBG_DEBUG, "[DS18B20] WaterBTemp: %6.2f°C", storage.WaterBTemp);
+      Debug.print(DBG_DEBUG, "[DS18B20] WaterWPTemp: %6.2f°C", storage.WaterWPTemp);
+      Debug.print(DBG_DEBUG, "[DS18B20] WaterWTTemp: %6.2f°C", storage.WaterWTTemp);
+
+      waitingForConversion = false;
     }
 
-    for (int i = 0; i < 5; i++) {
-      byte currentAddress_W[8];
-      uint8_t storedAddress_W[8];
-      nvs.getBytes(("address_W_" + String(i)).c_str(), storedAddress_W, 8);
-      memcpy(currentAddress_W, storedAddress_W, 8);
-
-      sensors_W.requestTemperaturesByAddress(currentAddress_W);
-      float temp = sensors_W.getTempC(currentAddress_W);
-
-      if (temp == NAN || temp == -127) {
-        Debug.print(DBG_WARNING, "[DS18B20] Error getting temperature for sensor W%d", i);
-      } else {
-        samples_W_Temp[i].add(temp);
-        float averagedTemp = samples_W_Temp[i].getAverage(5);
-        switch (storage.Array_W[i]) {
-          case 0: storage.WaterSTemp = averagedTemp; break;
-          case 1: storage.WaterITemp = averagedTemp; break;
-          case 2: storage.WaterBTemp = averagedTemp; break;
-          case 3: storage.WaterWPTemp = averagedTemp; break;
-          case 4: storage.WaterWTTemp = averagedTemp; break;
-          default: break;
-        }
-        Debug.print(DBG_DEBUG, "[DS18B20] Sensor W%d - Address: %02X%02X%02X%02X%02X%02X%02X%02X - Temperature: %6.2f°C", i,
-                    currentAddress_W[0], currentAddress_W[1], currentAddress_W[2], currentAddress_W[3],
-                    currentAddress_W[4], currentAddress_W[5], currentAddress_W[6], currentAddress_W[7], averagedTemp);
-      }
+    if (!waitingForConversion && millis() - lastRequest >= 1000) {
+      sensors_W.requestTemperatures();
+      sensors_A.requestTemperatures();
+      lastRequest = millis();
+      waitingForConversion = true;
+      Debug.print(DBG_VERBOSE, "[DS18B20] Requested temperatures");
     }
-
-    Debug.print(DBG_DEBUG, "[DS18B20] SolarTemp: %6.2f°C", storage.SolarTemp);
-    Debug.print(DBG_DEBUG, "[DS18B20] SolarVLTemp: %6.2f°C", storage.SolarVLTemp);
-    Debug.print(DBG_DEBUG, "[DS18B20] SolarRLTemp: %6.2f°C", storage.SolarRLTemp);
-    Debug.print(DBG_DEBUG, "[DS18B20] AirInTemp: %6.2f°C", storage.AirInTemp);
-    Debug.print(DBG_DEBUG, "[DS18B20] AirTemp: %6.2f°C", storage.AirTemp);
-    Debug.print(DBG_DEBUG, "[DS18B20] WaterSTemp: %6.2f°C", storage.WaterSTemp);
-    Debug.print(DBG_DEBUG, "[DS18B20] WaterITemp: %6.2f°C", storage.WaterITemp);
-    Debug.print(DBG_DEBUG, "[DS18B20] WaterBTemp: %6.2f°C", storage.WaterBTemp);
-    Debug.print(DBG_DEBUG, "[DS18B20] WaterWPTemp: %6.2f°C", storage.WaterWPTemp);
-    Debug.print(DBG_DEBUG, "[DS18B20] WaterWTTemp: %6.2f°C", storage.WaterWTTemp);
-
-    sensors_W.requestTemperatures();
-    sensors_A.requestTemperatures();
 
     #ifdef CHRONO
     t_act = millis() - td;
@@ -839,66 +860,6 @@ void readBME280(void *pvParameters) {
     t_mean += (t_act - t_mean)/n;
     ++n;
     Debug.print(DBG_INFO,"[readBME280] td: %d t_act: %d t_min: %d t_max: %d t_mean: %4.1f",td,t_act,t_min,t_max,t_mean);
-    #endif
-
-    stack_mon(hwm);
-    Debug.print(DBG_DEBUG, "[stack_mon] %s: %u bytes", pcTaskGetName(NULL), uxTaskGetStackHighWaterMark(NULL));
-    vTaskDelayUntil(&ticktime, period);
-  }
-}
-
-// I2C Polling Task for PCF8574 devices
-void I2CPollingTask(void *pvParameters) {
-  Debug.print(DBG_INFO, "[TASKS] I2CPollingTask started on core %d", xPortGetCoreID());
-  while (!startTasks);
-  Debug.print(DBG_DEBUG, "[TASKS] I2CPollingTask running...");
-  vTaskDelay(DT13);
-
-  esp_task_wdt_add(NULL);
-  TickType_t period = PT13; // 500ms
-  TickType_t ticktime = xTaskGetTickCount();
-  static UBaseType_t hwm = 0;
-
-  #ifdef CHRONO
-  unsigned long td;
-  int t_act=0, t_min=999, t_max=0;
-  float t_mean=0.;
-  int n=1;
-  #endif
-
-  for (;;) {
-    esp_task_wdt_reset();
-
-    #ifdef CHRONO
-    td = millis();
-    #endif
-
-    if (lockI2C()) {
-      for (int i = 0; i < NUM_PCF_DEVICES; i++) {
-        Wire.beginTransmission(pcfDevices[i].address);
-        Wire.requestFrom(pcfDevices[i].address, 1);
-        if (Wire.available()) {
-          *(pcfDevices[i].statePtr) = Wire.read();
-          Debug.print(DBG_VERBOSE, "[I2CPolling] Read state 0x%02X from PCF8574 at 0x%02X", *(pcfDevices[i].statePtr), pcfDevices[i].address);
-        } else {
-          Debug.print(DBG_WARNING, "[I2CPolling] Failed to read PCF8574 at 0x%02X", pcfDevices[i].address);
-        }
-        Wire.endTransmission();
-      }
-      unlockI2C();
-    } else {
-      Debug.print(DBG_WARNING, "[I2CPolling] Failed to acquire I2C mutex");
-    }
-
-    #ifdef CHRONO
-    t_act = millis() - td;
-    if(t_act > t_max) t_max = t_act;
-    if(t_act < t_min) t_min = t_act;
-    t_mean += (t_act - t_mean)/n;
-    ++n;
-    if (n % 10 == 0) {
-      Debug.print(DBG_INFO, "[I2CPolling] td: %d t_act: %d t_min: %d t_max: %d t_mean: %4.1f", td, t_act, t_min, t_max, t_mean);
-    }
     #endif
 
     stack_mon(hwm);

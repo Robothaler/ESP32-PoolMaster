@@ -74,10 +74,11 @@ struct StoreStruct
 
 extern StoreStruct storage;
 
-extern I2CDeviceStates i2cStates;
-extern const PCFDevice pcfDevices[NUM_PCF_DEVICES];
+extern const PCF_Pin NO_PIN;
 
-extern SemaphoreHandle_t mutex; // Mutex for I2C access
+extern SemaphoreHandle_t mutex;           // Mutex for I2C access
+extern SemaphoreHandle_t i2cStatesMutex;  // Mutex for I2C states
+extern SemaphoreHandle_t i2cOutputMutex;  // Mutex for I2C output states
 
 bool lockI2C(); // Declaration of the lockI2C function
 void unlockI2C(); // Declaration of the unlockI2C function
@@ -90,13 +91,6 @@ extern QueueHandle_t queueIn;
 
 //Set the I2C HEX Adress for the BME280 Temperature, Humidity and Airpressure-Sensor for the external temperature
 extern Adafruit_BME280 bme;
-
-//Set the I2C HEX Adress for the second PCF8574A IO-Portexpander which manages the Pumps
-extern PCF8574 pcf8574_I;
-//Set the I2C HEX Adress for the third PCF8574A IO-Portexpander which manages the MotorValves
-extern PCF8574 pcf8574_II;
-//Set the I2C HEX Adress for the fourth PCF8574A IO-Portexpander which manages also MotorValves and Waterfill, ...
-extern PCF8574 pcf8574_III;
 
 //The seven pumps of the system (instanciate the Pump class)
 //In this case, all pumps start/Stop are managed by relays
@@ -128,6 +122,7 @@ extern bool PSIError;
 extern bool FLOWError;
 extern bool FLOW2Error;
 extern bool WaterFillError;
+extern bool I2CError;
 
 void createTasks(int app_cpu, TaskHandle_t* pubSetTaskHandle, TaskHandle_t* pubMeasTaskHandle);
 bool saveParam(const char* key, const uint8_t* val, size_t size);

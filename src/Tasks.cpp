@@ -3,23 +3,6 @@
 #include "Ota.h"
 #include "Config.h"
 
-// External task functions
-extern void PoolMaster(void*);
-extern void AnalogPoll(void*);
-extern void pHRegulation(void*);
-extern void ChlorSaltRegulation(void*);
-extern void getTemp(void*);
-extern void readBME280(void*);
-extern void ProcessCommand(void*);
-extern void FlowMeasures(void*);
-extern void SettingsPublish(void*);
-extern void MeasuresPublish(void*);
-extern void StatusLights(void*);
-extern void I2CPollingTask(void*);
-
-extern bool lockI2C();
-extern void unlockI2C();
-
 void createTasks(int app_cpu, TaskHandle_t* pubSetTaskHandle, TaskHandle_t* pubMeasTaskHandle) {
   BaseType_t result;
   Debug.print(DBG_INFO, "[TASKS] Free Heap before tasks: %d", ESP.getFreeHeap());
@@ -35,8 +18,8 @@ void createTasks(int app_cpu, TaskHandle_t* pubSetTaskHandle, TaskHandle_t* pubM
 
   // Analog measurement polling task
   xTaskCreatePinnedToCore(
-    AnalogPoll,
-    "AnalogPoll",
+    CombinedPollingTask,
+    "CombinedPolling",
     STACK_T1,
     NULL,
     PRIORITY_T1,
@@ -154,10 +137,11 @@ void createTasks(int app_cpu, TaskHandle_t* pubSetTaskHandle, TaskHandle_t* pubM
     app_cpu
   );
 
-  // I2C Polling Task für PCF8574-Geräte
+  // OTA task for Nextion display
+  /*Debug.print(DBG_INFO, "[TASKS] Creating OTA task...");
   xTaskCreatePinnedToCore(
-    I2CPollingTask,
-    "I2CPolling",
+    otaTask,
+    "OTATask",
     STACK_T13,
     NULL,
     PRIORITY_T13,
@@ -165,19 +149,7 @@ void createTasks(int app_cpu, TaskHandle_t* pubSetTaskHandle, TaskHandle_t* pubM
     app_cpu
   );
 
-  // OTA task for Nextion display
-  /*Debug.print(DBG_INFO, "[TASKS] Creating OTA task...");
-  xTaskCreatePinnedToCore(
-    otaTask,
-    "OTATask",
-    STACK_T14,
-    NULL,
-    PRIORITY_T14,
-    nullptr,
-    app_cpu
-  );
-
   Debug.print(DBG_INFO, "[TASKS] OTA task created");
-  vTaskDelay(DT14); // Apply start offset for OTA task */
+  vTaskDelay(DT13); // Apply start offset for OTA task */
 }
 
