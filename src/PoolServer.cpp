@@ -204,66 +204,138 @@ void ProcessCommand(void *pvParameters)
         // "DS18B20A" command which is called when new Array for DS18B20A Sensor was entered
         else if (command.containsKey(F("DS18B20A")))
         {
-          Debug.print(DBG_DEBUG, "DS18B20A command received");
-          const JsonArray &jsonArray = command[F("DS18B20A")].as<JsonArray>();
-          uint8_t newArray[MAX_ADDRESSES] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-          int i = 0;
-          for (auto value : jsonArray)
-          {
-            if (i > (MAX_ADDRESSES - 1))
-              break; // Maximum of 5 sensors allowed
-            int index = value.as<int>();
-            if ((index >= 0) && (index <= (MAX_ADDRESSES - 1)))
+            Debug.print(DBG_DEBUG, "DS18B20A command received");
+            const JsonArray &jsonArray = command[F("DS18B20A")].as<JsonArray>();
+            uint8_t newArray[MAX_ADDRESSES] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+            bool usedIndices[MAX_ADDRESSES] = {false};
+            bool valid = true;
+            size_t size = jsonArray.size();
+
+            // Prüfe, ob die Eingabe genau MAX_ADDRESSES Elemente enthält
+            if (size != MAX_ADDRESSES)
             {
-              newArray[i] = storage.Array_A[index];
-              Debug.print(DBG_DEBUG, "New mapping for DS18B20_A sensor %d: %d", index, newArray[i]);
+                Debug.print(DBG_ERROR, "[DS18B20A] Invalid number of indices: %d, expected %d", size, MAX_ADDRESSES);
+                mqttErrorPublish("{\"error\":\"Invalid number of DS18B20A indices\"}");
+                valid = false;
             }
-            i++;
-          }
-          for (int i = 0; i < MAX_ADDRESSES; i++)
-          {
-            storage.Array_A[i] = newArray[i];
-          }
-          saveParam("Array_A", storage.Array_A, MAX_ADDRESSES);
-          storage.SolarTemp = 0.0;
-          storage.SolarVLTemp = 0.0;
-          storage.SolarRLTemp = 0.0;
-          storage.AirInTemp = 0.0;
-          storage.AirTemp = 0.0;
-          PublishSettings();
+            else
+            {
+                int i = 0;
+                for (auto value : jsonArray)
+                {
+                    int index = value.as<int>();
+                    if (index < 0 || index >= MAX_ADDRESSES)
+                    {
+                        Debug.print(DBG_ERROR, "[DS18B20A] Invalid index at position %d: %d", i, index);
+                        mqttErrorPublish("{\"error\":\"Invalid DS18B20A index\"}");
+                        valid = false;
+                        break;
+                    }
+                    if (usedIndices[index])
+                    {
+                        Debug.print(DBG_ERROR, "[DS18B20A] Duplicate index at position %d: %d", i, index);
+                        mqttErrorPublish("{\"error\":\"Duplicate DS18B20A index\"}");
+                        valid = false;
+                        break;
+                    }
+                    usedIndices[index] = true;
+                    newArray[i] = storage.Array_A[index];
+                    Debug.print(DBG_DEBUG, "New mapping for DS18B20_A sensor %d: %d (%s)", i, newArray[i], newArray[i] < MAX_ADDRESSES ? NV_STORAGE_MAPPING_A[newArray[i]] : "unassigned");
+                    i++;
+                }
+            }
+
+            if (valid)
+            {
+                for (int i = 0; i < MAX_ADDRESSES; i++)
+                {
+                    storage.Array_A[i] = newArray[i];
+                    if (newArray[i] >= MAX_ADDRESSES)
+                    {
+                        Debug.print(DBG_WARNING, "[DS18B20A] Sensor A%d unassigned", i);
+                    }
+                }
+                saveParam("Array_A", storage.Array_A, MAX_ADDRESSES);
+                storage.SolarTemp = 0.0;
+                storage.SolarVLTemp = 0.0;
+                storage.SolarRLTemp = 0.0;
+                storage.AirInTemp = 0.0;
+                storage.AirTemp = 0.0;
+                PublishSettings();
+            }
+            else
+            {
+                Debug.print(DBG_INFO, "[DS18B20A] Reverting to previous Array_A");
+            }
         }
 
         // "DS18B20W" command which is called when new Array for DS18B20W Sensor was entered
         else if (command.containsKey(F("DS18B20W")))
+{
+    Debug.print(DBG_DEBUG, "DS18B20W command received");
+    const JsonArray &jsonArray = command[F("DS18B20W")].as<JsonArray>();
+    uint8_t newArray[MAX_ADDRESSES] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    bool usedIndices[MAX_ADDRESSES] = {false};
+    bool valid = true;
+    size_t size = jsonArray.size();
+
+    // Prüfe, ob die Eingabe genau MAX_ADDRESSES Elemente enthält
+    if (size != MAX_ADDRESSES)
+    {
+        Debug.print(DBG_ERROR, "[DS18B20W] Invalid number of indices: %d, expected %d", size, MAX_ADDRESSES);
+        mqttErrorPublish("{\"error\":\"Invalid number of DS18B20W indices\"}");
+        valid = false;
+    }
+    else
+    {
+        int i = 0;
+        for (auto value : jsonArray)
         {
-          Debug.print(DBG_DEBUG, "DS18B20W command received");
-          const JsonArray &jsonArray = command[F("DS18B20W")].as<JsonArray>();
-          uint8_t newArray[MAX_ADDRESSES] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-          int i = 0;
-          for (auto value : jsonArray)
-          {
-            if (i > (MAX_ADDRESSES - 1))
-              break; // Maximum of 5 sensors allowed
             int index = value.as<int>();
-            if ((index >= 0) && (index <= (MAX_ADDRESSES - 1)))
+            if (index < 0 || index >= MAX_ADDRESSES)
             {
-              newArray[i] = storage.Array_W[index];
-              Debug.print(DBG_DEBUG, "New mapping for DS18B20_W sensor %d: %d", index, newArray[i]);
+                Debug.print(DBG_ERROR, "[DS18B20W] Invalid index at position %d: %d", i, index);
+                mqttErrorPublish("{\"error\":\"Invalid DS18B20W index\"}");
+                valid = false;
+                break;
             }
+            if (usedIndices[index])
+            {
+                Debug.print(DBG_ERROR, "[DS18B20W] Duplicate index at position %d: %d", i, index);
+                mqttErrorPublish("{\"error\":\"Duplicate DS18B20W index\"}");
+                valid = false;
+                break;
+            }
+            usedIndices[index] = true;
+            newArray[i] = storage.Array_W[index];
+            Debug.print(DBG_DEBUG, "New mapping for DS18B20_W sensor %d: %d (%s)", i, newArray[i], newArray[i] < MAX_ADDRESSES ? NV_STORAGE_MAPPING_W[newArray[i]] : "unassigned");
             i++;
-          }
-          for (int i = 0; i < MAX_ADDRESSES; i++)
-          {
-            storage.Array_W[i] = newArray[i];
-          }
-          saveParam("Array_W", storage.Array_W, MAX_ADDRESSES);
-          storage.WaterSTemp = 0.0;
-          storage.WaterITemp = 0.0;
-          storage.WaterBTemp = 0.0;
-          storage.WaterWPTemp = 0.0;
-          storage.WaterWTTemp = 0.0;
-          PublishSettings();
         }
+    }
+
+    if (valid)
+    {
+        for (int i = 0; i < MAX_ADDRESSES; i++)
+        {
+            storage.Array_W[i] = newArray[i];
+            if (newArray[i] >= MAX_ADDRESSES)
+            {
+                Debug.print(DBG_WARNING, "[DS18B20W] Sensor W%d unassigned", i);
+            }
+        }
+        saveParam("Array_W", storage.Array_W, MAX_ADDRESSES);
+        storage.WaterSTemp = 0.0;
+        storage.WaterITemp = 0.0;
+        storage.WaterBTemp = 0.0;
+        storage.WaterWPTemp = 0.0;
+        storage.WaterWTTemp = 0.0;
+        PublishSettings();
+    }
+    else
+    {
+        Debug.print(DBG_INFO, "[DS18B20W] Reverting to previous Array_W");
+    }
+}
 
         //"PhCalib" command which computes and sets the calibration coefficients of the pH sensor response based on a multi-point linear regression
         //{"PhCalib":[4.02,3.8,9.0,9.11]}  -> multi-point linear regression calibration (minimum 1 point-couple, 6 max.) in the form [ProbeReading_0, BufferRating_0, xx, xx, ProbeReading_n, BufferRating_n]
@@ -394,6 +466,154 @@ void ProcessCommand(void *pvParameters)
             Debug.print(DBG_DEBUG,"Calibration completed. Coeffs are: %10.2f, %10.2f",storage.PSICalibCoeffs0,storage.PSICalibCoeffs1);
           }
         }
+        //SaltCurrentCalib command which computes and sets the calibration coefficients of the Salt sensor response based on a linear regression
+        else if (command.containsKey(F("SaltCurrentCalib")))
+        {
+          float CalibPoints[4];
+          int NbPoints = (int)copyArray(command[F("SaltCurrentCalib")].as<JsonArray>(), CalibPoints);
+          Debug.print(DBG_DEBUG, "SaltCurrentCalib command - %d points received", NbPoints);
+          for (int i = 0; i < NbPoints; i += 2)
+            Debug.print(DBG_DEBUG, "%10.2f - %10.2f", CalibPoints[i], CalibPoints[i + 1]);
+
+          if (NbPoints == 4)
+          {
+            Debug.print(DBG_DEBUG, "4 points. Performing a linear regression calibration");
+            float xCalibPoints[2];
+            float yCalibPoints[2];
+            xCalibPoints[0] = CalibPoints[0];
+            yCalibPoints[0] = CalibPoints[1];
+            xCalibPoints[1] = CalibPoints[2];
+            yCalibPoints[1] = CalibPoints[3];
+            simpLinReg(xCalibPoints, yCalibPoints, storage.SaltCurrentCalibCoeffs0, storage.SaltCurrentCalibCoeffs1, 2);
+            saveParam("SaltCurrCalib0", storage.SaltCurrentCalibCoeffs0);
+            saveParam("SaltCurrCalib1", storage.SaltCurrentCalibCoeffs1);
+            PublishSettings();
+            Debug.print(DBG_DEBUG, "Calibration completed. Coeffs are: %10.2f, %10.2f", storage.SaltCurrentCalibCoeffs0, storage.SaltCurrentCalibCoeffs1);
+          }
+          else
+          {
+            Debug.print(DBG_ERROR, "Invalid number of points for SaltCurrentCalib: %d", NbPoints);
+            mqttErrorPublish("{\"error\":\"Invalid number of SaltCurrentCalib points\"}");
+          }
+        }
+        //FilterCurrentCalib command which computes and sets the calibration coefficients of the Filter sensor response based on a linear regression
+        else if (command.containsKey(F("FilterCurrentCalib")))
+        {
+          float CalibPoints[4];
+          int NbPoints = (int)copyArray(command[F("FilterCurrentCalib")].as<JsonArray>(), CalibPoints);
+          Debug.print(DBG_DEBUG, "FilterCurrentCalib command - %d points received", NbPoints);
+          for (int i = 0; i < NbPoints; i += 2)
+            Debug.print(DBG_DEBUG, "%10.2f - %10.2f", CalibPoints[i], CalibPoints[i + 1]);
+
+          if (NbPoints == 4)
+          {
+            Debug.print(DBG_DEBUG, "4 points. Performing a linear regression calibration");
+            float xCalibPoints[2];
+            float yCalibPoints[2];
+            xCalibPoints[0] = CalibPoints[0];
+            yCalibPoints[0] = CalibPoints[1];
+            xCalibPoints[1] = CalibPoints[2];
+            yCalibPoints[1] = CalibPoints[3];
+            simpLinReg(xCalibPoints, yCalibPoints, storage.FilterCurrentCalibCoeffs0, storage.FilterCurrentCalibCoeffs1, 2);
+            saveParam("FilterCurrCalib0", storage.FilterCurrentCalibCoeffs0);
+            saveParam("FilterCurrCalib1", storage.FilterCurrentCalibCoeffs1);
+            PublishSettings();
+            Debug.print(DBG_DEBUG, "Calibration completed. Coeffs are: %10.2f, %10.2f", storage.FilterCurrentCalibCoeffs0, storage.FilterCurrentCalibCoeffs1);
+          }
+          else
+          {
+            Debug.print(DBG_ERROR, "Invalid number of points for FilterCurrentCalib: %d", NbPoints);
+            mqttErrorPublish("{\"error\":\"Invalid number of FilterCurrentCalib points\"}");
+          }
+        }
+        else if (command.containsKey(F("FilterCurrentCalib")))
+        {
+          float CalibPoints[4];
+          int NbPoints = (int)copyArray(command[F("FilterCurrentCalib")].as<JsonArray>(), CalibPoints);
+          Debug.print(DBG_DEBUG, "FilterCurrentCalib command - %d points received", NbPoints);
+          for (int i = 0; i < NbPoints; i += 2)
+            Debug.print(DBG_DEBUG, "%10.2f - %10.2f", CalibPoints[i], CalibPoints[i + 1]);
+
+          if (NbPoints == 4)
+          {
+            Debug.print(DBG_DEBUG, "4 points. Performing a linear regression calibration");
+            float xCalibPoints[2];
+            float yCalibPoints[2];
+            xCalibPoints[0] = CalibPoints[0];
+            yCalibPoints[0] = CalibPoints[1];
+            xCalibPoints[1] = CalibPoints[2];
+            yCalibPoints[1] = CalibPoints[3];
+            simpLinReg(xCalibPoints, yCalibPoints, storage.FilterCurrentCalibCoeffs0, storage.FilterCurrentCalibCoeffs1, 2);
+            saveParam("FilterCurrCalib0", storage.FilterCurrentCalibCoeffs0);
+            saveParam("FilterCurrCalib1", storage.FilterCurrentCalibCoeffs1);
+            PublishSettings();
+            Debug.print(DBG_DEBUG, "Calibration completed. Coeffs are: %10.2f, %10.2f", storage.FilterCurrentCalibCoeffs0, storage.FilterCurrentCalibCoeffs1);
+          }
+          else
+          {
+            Debug.print(DBG_ERROR, "Invalid number of points for FilterCurrentCalib: %d", NbPoints);
+            mqttErrorPublish("{\"error\":\"Invalid number of FilterCurrentCalib points\"}");
+          }
+        }
+        //HeatCurrentCalib command which computes and sets the calibration coefficients of the Heatpump currentsensor response based on a linear regression
+        else if (command.containsKey(F("HeatCurrentCalib")))
+        {
+          float CalibPoints[4];
+          int NbPoints = (int)copyArray(command[F("HeatCurrentCalib")].as<JsonArray>(), CalibPoints);
+          Debug.print(DBG_DEBUG, "HeatCurrentCalib command - %d points received", NbPoints);
+          for (int i = 0; i < NbPoints; i += 2)
+            Debug.print(DBG_DEBUG, "%10.2f - %10.2f", CalibPoints[i], CalibPoints[i + 1]);
+
+          if (NbPoints == 4)
+          {
+            Debug.print(DBG_DEBUG, "4 points. Performing a linear regression calibration");
+            float xCalibPoints[2];
+            float yCalibPoints[2];
+            xCalibPoints[0] = CalibPoints[0];
+            yCalibPoints[0] = CalibPoints[1];
+            xCalibPoints[1] = CalibPoints[2];
+            yCalibPoints[1] = CalibPoints[3];
+            simpLinReg(xCalibPoints, yCalibPoints, storage.HeatCurrentCalibCoeffs0, storage.HeatCurrentCalibCoeffs1, 2);
+            saveParam("HeatCurrCalib0", storage.HeatCurrentCalibCoeffs0);
+            saveParam("HeatCurrCalib1", storage.HeatCurrentCalibCoeffs1);
+            PublishSettings();
+            Debug.print(DBG_DEBUG, "Calibration completed. Coeffs are: %10.2f, %10.2f", storage.HeatCurrentCalibCoeffs0, storage.HeatCurrentCalibCoeffs1);
+          }
+          else
+          {
+            Debug.print(DBG_ERROR, "Invalid number of points for HeatCurrentCalib: %d", NbPoints);
+            mqttErrorPublish("{\"error\":\"Invalid number of HeatCurrentCalib points\"}");
+          }
+        }
+        else if (command.containsKey(F("HeatCurrentCalib")))
+        {
+          float CalibPoints[4];
+          int NbPoints = (int)copyArray(command[F("HeatCurrentCalib")].as<JsonArray>(), CalibPoints);
+          Debug.print(DBG_DEBUG, "HeatCurrentCalib command - %d points received", NbPoints);
+          for (int i = 0; i < NbPoints; i += 2)
+            Debug.print(DBG_DEBUG, "%10.2f - %10.2f", CalibPoints[i], CalibPoints[i + 1]);
+
+          if (NbPoints == 4)
+          {
+            Debug.print(DBG_DEBUG, "4 points. Performing a linear regression calibration");
+            float xCalibPoints[2];
+            float yCalibPoints[2];
+            xCalibPoints[0] = CalibPoints[0];
+            yCalibPoints[0] = CalibPoints[1];
+            xCalibPoints[1] = CalibPoints[2];
+            yCalibPoints[1] = CalibPoints[3];
+            simpLinReg(xCalibPoints, yCalibPoints, storage.HeatCurrentCalibCoeffs0, storage.HeatCurrentCalibCoeffs1, 2);
+            saveParam("HeatCurrCalib0", storage.HeatCurrentCalibCoeffs0);
+            saveParam("HeatCurrCalib1", storage.HeatCurrentCalibCoeffs1);
+            PublishSettings();
+            Debug.print(DBG_DEBUG, "Calibration completed. Coeffs are: %10.2f, %10.2f", storage.HeatCurrentCalibCoeffs0, storage.HeatCurrentCalibCoeffs1);
+          }
+          else
+          {
+            Debug.print(DBG_ERROR, "Invalid number of points for HeatCurrentCalib: %d", NbPoints);
+            mqttErrorPublish("{\"error\":\"Invalid number of HeatCurrentCalib points\"}");
+          }
+        }
         //"Mode" command which sets regulation and filtration to manual or auto modes
         else if (command.containsKey(F("Mode")))
         {
@@ -417,6 +637,7 @@ void ProcessCommand(void *pvParameters)
           if ((int)command[F("SolarLocExt")] == 0)
           {
             storage.SolarLocExt = 0;
+            Solarvalve.calibrate();
           }
           else
           {

@@ -36,6 +36,7 @@ void setStandardHeatPumpMotorValvePositions();
 void setMotorValvePositionsForHeatPump();
 void setMotorValvePositionsForCleanMode();
 void getDurationSafe();
+const char* resetReasonToString(uint8_t reason);
 // void smtpCallback(SMTP_Status);
 // bool SMTP_Connect(void);
 // void Send_Email(void);
@@ -101,6 +102,23 @@ unsigned long getDurationSafe(unsigned long start, unsigned long current) {
         return (ULONG_MAX - start) + current + 1;
     }
     return current - start;
+}
+
+const char* resetReasonToString(uint8_t reason) {
+    switch (reason) {
+        case ESP_RST_UNKNOWN:    return "Unknown";
+        case ESP_RST_POWERON:    return "Power-on";
+        case ESP_RST_EXT:        return "External";
+        case ESP_RST_SW:         return "Software";
+        case ESP_RST_PANIC:      return "Panic";
+        case ESP_RST_INT_WDT:    return "Int Watchdog";
+        case ESP_RST_TASK_WDT:   return "Task Watchdog";
+        case ESP_RST_WDT:        return "Other Watchdog";
+        case ESP_RST_DEEPSLEEP:  return "Deep Sleep";
+        case ESP_RST_BROWNOUT:   return "Brownout";
+        case ESP_RST_SDIO:       return "SDIO";
+        default:                 return "Invalid";
+    }
 }
 
 void PoolMaster(void *pvParameters)
@@ -178,6 +196,18 @@ Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID())
     WP_Mischer.loop();
     Bodenablauf.loop();
     Solarvalve.loop();
+
+    // Uptime-Berechnung (alle 5 Minuten)
+        static unsigned long lastUptimeSave = 0U;
+        if (millis() - lastUptimeSave >= 300000U) { // 5 Minuten
+            unsigned long currentMillis = millis();
+            storage.Uptime += getDurationSafe(storage.LastUptimeUpdate, currentMillis) / 3600000U; // Stunden
+            storage.LastUptimeUpdate = currentMillis;
+            saveParam("Uptime", storage.Uptime);
+            saveParam("LastUptimeUpdate", storage.LastUptimeUpdate);
+            lastUptimeSave = currentMillis;
+            Debug.print(DBG_INFO, "[Uptime] Updated: %lu hours", storage.Uptime);
+        }
 
       // Debug.print(DBG_VERBOSE, "[WIFI] SSID: %s", storage.SSID.c_str());
       // Debug.print(DBG_VERBOSE, "[WIFI] PASSWORD: %s", storage.WIFI_PASS.c_str());
@@ -489,11 +519,24 @@ Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID())
     float waterConsumption = 0.0;
     float flowRate = storage.WaterFillFR;
 
-    bool waterMaxLvl = digitalRead(WATER_MAX_LVL) == 0; // switch is open, Water Level is above max level
-    bool waterMinLvl = digitalRead(WATER_MIN_LVL) == 0; // switch is open, Water level is ok
-    Debug.print(DBG_VERBOSE, "[WaterFill] waterMaxLvl = %d", waterMaxLvl);
-    Debug.print(DBG_VERBOSE, "[WaterFill] waterMinLvl = %d", waterMinLvl);
-    Debug.print(DBG_ERROR, "[WaterFill] WaterFill Status: WaterFillDuration: %d ms and WaterFillUpTimeLimit: %d ms", WaterFill.UpTime, storage.WaterFillUpTimeLimit);
+    static bool lastWaterMaxLvl = false; // Store previous state of waterMaxLvl
+    static bool lastWaterMinLvl = false; // Store previous state of waterMinLvl
+    static bool lastWaterFillRunning = false; // Store previous state of WaterFill.IsRunning()
+    static bool upTimeWarningReported = false; // Track if unexpected UpTime warning was reported
+
+    bool waterMaxLvl = digitalRead(WATER_MAX_LVL) == 1; // switch is open (HIGH), Water Level is above max level
+    bool waterMinLvl = digitalRead(WATER_MIN_LVL) == 1; // switch is open (HIGH), Water level is ok
+    Debug.print(DBG_VERBOSE, "[WaterFill] waterMaxLvl = %d (Max Level %s), waterMinLvl = %d (Min Level %s)",
+                waterMaxLvl, waterMaxLvl ? "Above Max" : "Below Max",
+                waterMinLvl, waterMinLvl ? "OK" : "Below Min");
+
+    // Log WaterFill status only on state changes
+    if (waterMaxLvl != lastWaterMaxLvl || waterMinLvl != lastWaterMinLvl || 
+        WaterFill.IsRunning() != lastWaterFillRunning || WaterFill.UpTime != lastUpTime) {
+        Debug.print(DBG_INFO, "[WaterFill] WaterFill Status: WaterFillDuration: %lu ms and WaterFillUpTimeLimit: %lu ms", 
+                    WaterFill.UpTime, storage.WaterFillUpTimeLimit);
+    }
+
     unsigned long levelMinHighDelay = 1; // defines the delay until the water valve opens if min level switch is reached, in minutes
 
     static unsigned long LastWaterFillStartTime = 0;
@@ -512,28 +555,28 @@ Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID())
         storage.WaterFillMode = 0;
         WaterFill.Stop();
         WaterFillError = true;
-        Debug.print(DBG_ERROR, "[WaterFill] WaterFill stopped. MaxUpTime is reached: WaterFillDuration: %d ms and WaterFillUpTimeLimit: %d ms", WaterFill.UpTime, storage.WaterFillUpTimeLimit);
+        Debug.print(DBG_ERROR, "[WaterFill] WaterFill stopped. MaxUpTime is reached: WaterFillDuration: %lu ms and WaterFillUpTimeLimit: %lu ms", WaterFill.UpTime, storage.WaterFillUpTimeLimit);
     }
 
     // Check waterMinLvl and Timestamp since last MinLevel
-    if (waterMinLvl && waterMaxLvl && timeSinceMinLvl == 0) {
+    if (!waterMinLvl && !waterMaxLvl && timeSinceMinLvl == 0) {
         timeSinceMinLvl = millis();
     }
 
     if (storage.WaterFillMode && FiltrationPump.IsRunning()) { // Automatic mode
-        if (waterMinLvl && waterMaxLvl && timeSinceMinLvl != 0 && !WaterFill.IsRunning() && !WaterFillError) {
+        if (!waterMinLvl && !waterMaxLvl && timeSinceMinLvl != 0 && !WaterFill.IsRunning() && !WaterFillError) {
             if (millis() - timeSinceMinLvl >= levelMinHighDelay * 60 * 1000) { // Check if the delay has been reached
                 WaterFill.Start();
                 Debug.print(DBG_VERBOSE, "[WaterFill] Starting WaterFill...");
             }
         }
 
-        if (!waterMinLvl && waterMaxLvl && timeSinceMinLvl != 0 && LastWaterFillStartTime == 0) {
+        if (!waterMinLvl && !waterMaxLvl && timeSinceMinLvl != 0 && LastWaterFillStartTime == 0) {
             LastWaterFillStartTime = millis();
             Debug.print(DBG_VERBOSE, "[WaterFill] Started timing fill process at: %lu", LastWaterFillStartTime);
         }            
 
-        if (!waterMaxLvl && WaterFill.IsRunning()) {
+        if (waterMaxLvl && WaterFill.IsRunning()) {
             Debug.print(DBG_VERBOSE, "[WaterFill] Stopping WaterFill...");
             WaterFill.Stop();
             timeSinceMinLvl = 0;
@@ -561,7 +604,7 @@ Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID())
         }        
     }
     else { // Manual mode
-        if (!waterMaxLvl && WaterFill.IsRunning() || WaterFillError && WaterFill.IsRunning()) { // Water level reached maximum, stop water filling
+        if (waterMaxLvl && WaterFill.IsRunning() || WaterFillError && WaterFill.IsRunning()) { // Water level reached maximum, stop water filling
             Debug.print(DBG_VERBOSE, "[WaterFill] Stopping WaterFill in Manual mode...");
             WaterFill.Stop();
             LastWaterFillStopTime = millis();
@@ -569,9 +612,10 @@ Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID())
     }
 
     // Calculate the water consumption since the last reset of the annual consumption
-    if (WaterFill.UpTime != lastUpTime) { // Check if WaterFill.UpTime has changed        
+    if (WaterFill.IsRunning() && WaterFill.UpTime != lastUpTime) { // Only calculate if valve is running and UpTime has changed        
         unsigned long fillDur = getDurationSafe(lastUpTime, WaterFill.UpTime);
-        Debug.print(DBG_ERROR, "[WaterFill] TimeCalc: fillDuration: %d ms and lastUpTime: %d ms", fillDur, lastUpTime);
+        Debug.print(DBG_VERBOSE, "[WaterFill] TimeCalc: fillDuration: %lu ms, lastUpTime: %lu ms, ValveRunning: %d", 
+                    fillDur, lastUpTime, WaterFill.IsRunning());
         
         // Calculate water consumption in liters
         float fillDurMinutes = fillDur / 60000.0; // Convert milliseconds to minutes
@@ -580,6 +624,117 @@ Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID())
         Debug.print(DBG_VERBOSE, "[WaterFill] Added consumption: %.2f L (duration: %lu ms)", waterConsumption, fillDur);
         
         lastUpTime = WaterFill.UpTime;
+    }
+
+    // Always update lastUpTime to prevent repeated status logs
+    if (WaterFill.UpTime != lastUpTime && !upTimeWarningReported) {
+        Debug.print(DBG_WARNING, "[WaterFill] UpTime changed unexpectedly: %lu ms (last: %lu ms), ValveRunning: %d",
+                    WaterFill.UpTime, lastUpTime, WaterFill.IsRunning());
+        upTimeWarningReported = true; // Prevent repeated warnings
+    }
+    lastUpTime = WaterFill.UpTime; // Update lastUpTime to sync with UpTime
+
+    // WaterFill error handling with debouncing
+    static bool waterFillErrorReported = false;
+    static unsigned long lastErrorReportTime = 0;
+    static const unsigned long ERROR_REPORT_INTERVAL = 600000; // 10 Minuten
+    static unsigned long invalidStateStartTime = 0;
+    static const unsigned long DEBOUNCE_THRESHOLD = 10000; // 10 Sekunden Entprellzeit
+
+    if (storage.WaterFillDuration > storage.WaterFillUpTimeLimit || (waterMaxLvl && !waterMinLvl)) {
+        if (invalidStateStartTime == 0) {
+            invalidStateStartTime = millis();
+            Debug.print(DBG_VERBOSE, "[WaterFill] Invalid state detected (waterMaxLvl=true, waterMinLvl=false), starting debounce timer...");
+        } else if (millis() - invalidStateStartTime >= DEBOUNCE_THRESHOLD) {
+            WaterFillError = true;
+            if (!waterFillErrorReported || (millis() - lastErrorReportTime >= ERROR_REPORT_INTERVAL)) {
+                Debug.print(DBG_ERROR, "[WaterFill] WaterFill Error: Invalid state persisted for %lu ms (waterMaxLvl=%d, waterMinLvl=%d)",
+                            DEBOUNCE_THRESHOLD, waterMaxLvl, waterMinLvl);
+                mqttErrorPublish("{\"WATERFILL Error\":1}");
+                waterFillErrorReported = true;
+                lastErrorReportTime = millis();
+            }
+        }
+    } else {
+        WaterFillError = false;
+        waterFillErrorReported = false;
+        invalidStateStartTime = 0; // Reset debounce timer
+        Debug.print(DBG_VERBOSE, "[WaterFill] No invalid state, resetting debounce timer");
+    }
+
+    // Update last states for next iteration
+    lastWaterMaxLvl = waterMaxLvl;
+    lastWaterMinLvl = waterMinLvl;
+    lastWaterFillRunning = WaterFill.IsRunning();
+
+    // *******************************************************************************************
+    // Manage SaltConcentration and SaltPump
+    // *******************************************************************************************
+    static unsigned long lastSaltMeasurement = 0;
+    const unsigned long saltMeasurementInterval = 3600000; // 1 Stunde in ms
+
+    // Check if measurement is needed: Hourly or if SaltConcentration is invalid
+    bool isHourlyMeasurement = (minute() == 0 && millis() - lastSaltMeasurement >= saltMeasurementInterval);
+    bool isInitialMeasurement = (storage.SaltConcentration <= 0.0);
+
+    if ((isHourlyMeasurement || isInitialMeasurement) &&
+        SaltPump.IsRunning() && FiltrationPump.IsRunning() &&
+        storage.SaltCurrentValue > 0.0 && storage.SaltCurrentValue <= 9.0 &&
+        storage.WaterSTemp >= 10.0 && storage.WaterSTemp <= 40.0) {
+        // Calculate conductivity (in S/m)
+        float conductivity = storage.SaltCurrentValue / (ELECTROLYSIS_VOLTAGE * storage.CellConstant);
+        // Convert to mS/cm (1 S/m = 10 mS/cm)
+        conductivity *= 10.0;
+        // Temperature correction to 25°C
+        float tempCorrectedConductivity = conductivity / (1.0 + 0.02 * (storage.WaterSTemp - 25.0));
+        // Calculate salt concentration (in g/L)
+        float saltConcentration = tempCorrectedConductivity / 0.18;
+
+        // Store salt concentration
+        storage.SaltConcentration = saltConcentration;
+        saveParam("SaltConcentration", storage.SaltConcentration);
+
+        Debug.print(DBG_DEBUG, "[Salt] Conductivity: %.2f mS/cm, TempCorrected: %.2f mS/cm, Concentration: %.2f g/L",
+                    conductivity * 10.0, tempCorrectedConductivity, saltConcentration);
+
+        // Check salt level
+        if (saltConcentration < LOW_SALT_THRESHOLD) {
+            storage.SaltStatus = "Low Salt";
+            // Calculate required salt amount (in kg)
+            storage.SaltNeeded = (TARGET_SALT_REF - saltConcentration) * POOL_VOLUME / 1000.0;
+            saveParam("SaltNeeded", storage.SaltNeeded);
+            Debug.print(DBG_INFO, "[Salt] Low Salt: %.2f g/L, Add %.1f kg", saltConcentration, storage.SaltNeeded);
+            mqttErrorPublish("{\"SaltStatus\":\"Low Salt\",\"SaltConcentration\":");
+            mqttErrorPublish(String(saltConcentration, 2).c_str());
+            mqttErrorPublish(",\"SaltNeeded\":");
+            mqttErrorPublish(String(storage.SaltNeeded, 1).c_str());
+            mqttErrorPublish("}");
+        } else if (saltConcentration > TARGET_SALT_MAX) {
+            storage.SaltStatus = "High Salt";
+            storage.SaltNeeded = 0.0;
+            saveParam("SaltNeeded", storage.SaltNeeded);
+            Debug.print(DBG_INFO, "[Salt] High Salt: %.2f g/L", saltConcentration);
+            mqttErrorPublish("{\"SaltStatus\":\"High Salt\",\"SaltConcentration\":");
+            mqttErrorPublish(String(saltConcentration, 2).c_str());
+            mqttErrorPublish("}");
+        } else {
+            storage.SaltStatus = "OK";
+            storage.SaltNeeded = 0.0;
+            saveParam("SaltNeeded", storage.SaltNeeded);
+            Debug.print(DBG_INFO, "[Salt] OK: %.2f g/L", saltConcentration);
+        }
+        saveParam("SaltStatus", storage.SaltStatus);
+        lastSaltMeasurement = millis();
+    } else if (isHourlyMeasurement && (!SaltPump.IsRunning() || !FiltrationPump.IsRunning())) {
+        // Reset status if SaltPump or FiltrationPump are not running
+        storage.SaltStatus = "Unknown";
+        storage.SaltConcentration = 0.0;
+        storage.SaltNeeded = 0.0;
+        saveParam("SaltStatus", storage.SaltStatus);
+        saveParam("SaltConcentration", storage.SaltConcentration);
+        saveParam("SaltNeeded", storage.SaltNeeded);
+        Debug.print(DBG_INFO, "[Salt] No measurement: SaltPump=%d, FiltrationPump=%d", SaltPump.IsRunning(), FiltrationPump.IsRunning());
+        lastSaltMeasurement = millis();
     }
 
     // ******************************************************************************************
@@ -672,14 +827,6 @@ Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID())
     } else if(storage.FLOW2Value >= storage.FLOW2_MedThreshold)
         FLOW2Error = false;
 
-    // WaterFill error
-    if (storage.WaterFillDuration > storage.WaterFillUpTimeLimit || waterMaxLvl == 0 && waterMinLvl == 1)
-    {
-        WaterFillError = true;
-        mqttErrorPublish("{\"WATERFILL Error\":1}");
-    } else if(storage.WaterFillDuration >= storage.WaterFillUpTimeLimit)
-        WaterFillError = false;
-        
     //UPdate Nextion TFT
     UpdateTFT();
 
@@ -751,156 +898,162 @@ void SetOrpPID(bool Enable)
   }
 }
 
-//Send notifications to IFTTT applet in case of alarm
-void Send_IFTTTNotif(){
+// Send notifications to IFTTT applet in case of alarm
+void Send_IFTTTNotif() {
     static const String url1 = IFTTT_key;
     String url2 = "";
-    static bool notif_sent[9] = {0,0,0,0,0,0,0,0,0};
-
-    if(PSIError)
-    {
-        if(!notif_sent[0])
-        {
-            if(wificlient.connect("maker.ifttt.com",80))
-            {
-                url2 = String("?value1=Water%20pressure&value2=");
-                if(storage.PSIValue <= storage.PSI_MedThreshold)
-                {
-                    url2 += String("Low");
-                } 
-                else if (storage.PSIValue >= storage.PSI_HighThreshold)
-                {
-                    url2 += String("High");
-                }
-                url2 += String("%20pressure:%20") + String(storage.PSIValue) + String("bar");
-                wificlient.print(String("POST ") + url1 + url2 + String(" HTTP/1.1\r\nHost: maker.ifttt.com\r\nConnection: close\r\n\r\n"));
-                notif_sent[0] = true;
-            }
-        }    
-    } else notif_sent[0] = false;
-
-    if(FLOWError)
-    {
-        if(!notif_sent[1])
-        {
-            if(wificlient.connect("maker.ifttt.com",80))
-            {
-                url2 = String("?value1=Water%20flow&value2=");
-                if(storage.FLOWValue <= storage.FLOW_MedThreshold)
-                {
-                    url2 += String("Low");
-                } 
-                else if (storage.FLOWValue >= storage.FLOW_HighThreshold)
-                {
-                    url2 += String("High");
-                }
-                url2 += String("%20flow:%20") + String(storage.FLOWValue) + String("%");
-                wificlient.print(String("POST ") + url1 + url2 + String(" HTTP/1.1\r\nHost: maker.ifttt.com\r\nConnection: close\r\n\r\n"));
-                notif_sent[1] = true;
-            }
-        }    
-    } else notif_sent[1] = false;
-
-    if(FLOW2Error)
-    {
-        if(!notif_sent[2])
-        {
-            if(wificlient.connect("maker.ifttt.com",80))
-            {
-                url2 = String("?value1=Water%20flow2&value2=");
-                if(storage.FLOW2Value <= storage.FLOW2_MedThreshold)
-                {
-                    url2 += String("Low");
-                } 
-                else if (storage.FLOW2Value >= storage.FLOW2_HighThreshold)
-                {
-                    url2 += String("High");
-                }
-                url2 += String("%20flow2:%20") + String(storage.FLOW2Value) + String("%");
-                wificlient.print(String("POST ") + url1 + url2 + String(" HTTP/1.1\r\nHost: maker.ifttt.com\r\nConnection: close\r\n\r\n"));
-                notif_sent[2] = true;
-            }
-        }    
-    } else notif_sent[2] = false;
-
-    if(!ChlPump.TankLevel())
-    {
-        if(!notif_sent[3])
-        {
-            if(wificlient.connect("maker.ifttt.com",80))
-            {
-                url2 = String("?value1=Chl%20level&value2=") + String(ChlPump.GetTankFill()) + String("%");
-                wificlient.print(String("POST ") + url1 + url2 + String(" HTTP/1.1\r\nHost: maker.ifttt.com\r\nConnection: close\r\n\r\n"));
-                notif_sent[3] = true;
-            }
+    static bool notif_sent[11] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+  
+    if (PSIError) {
+      if (!notif_sent[0]) {
+        if (wificlient.connect("maker.ifttt.com", 80)) {
+          url2 = String("?value1=Water%20pressure&value2=");
+          if (storage.PSIValue <= storage.PSI_MedThreshold) {
+            url2 += String("Low");
+          } else if (storage.PSIValue >= storage.PSI_HighThreshold) {
+            url2 += String("High");
+          }
+          url2 += String("%20pressure:%20") + String(storage.PSIValue) + String("bar");
+          wificlient.print(String("POST ") + url1 + url2 + String(" HTTP/1.1\r\nHost: maker.ifttt.com\r\nConnection: close\r\n\r\n"));
+          notif_sent[0] = true;
         }
-    } else notif_sent[3] = false;
-
-    if(!PhPump.TankLevel())
-    {
-        if(!notif_sent[4])
-        {
-            if(wificlient.connect("maker.ifttt.com",80))
-            {
-                url2 = String("?value1=pH+%20level&value2=") + String(PhPump.GetTankFill()) + String("%");
-                wificlient.print(String("POST ") + url1 + url2 + String(" HTTP/1.1\r\nHost: maker.ifttt.com\r\nConnection: close\r\n\r\n"));
-                notif_sent[4] = true;
-            }
+      }
+    } else {
+      notif_sent[0] = false;
+    }
+  
+    if (FLOWError) {
+      if (!notif_sent[1]) {
+        if (wificlient.connect("maker.ifttt.com", 80)) {
+          url2 = String("?value1=Water%20flow&value2=");
+          if (storage.FLOWValue <= storage.FLOW_MedThreshold) {
+            url2 += String("Low");
+          } else if (storage.FLOWValue >= storage.FLOW_HighThreshold) {
+            url2 += String("High");
+          }
+          url2 += String("%20flow:%20") + String(storage.FLOWValue) + String("%");
+          wificlient.print(String("POST ") + url1 + url2 + String(" HTTP/1.1\r\nHost: maker.ifttt.com\r\nConnection: close\r\n\r\n"));
+          notif_sent[1] = true;
         }
-    } else notif_sent[4] = false;
-
-    if(ChlPump.UpTimeError)
-    {
-        if(!notif_sent[5])
-        {
-            if(wificlient.connect("maker.ifttt.com",80))
-            {
-                url2 = String("?value1=Chl%20pump%20uptime&value2=") + String(round(ChlPump.UpTime/60000.)) + String("min");
-                wificlient.print(String("POST ") + url1 + url2 + String(" HTTP/1.1\r\nHost: maker.ifttt.com\r\nConnection: close\r\n\r\n"));
-                notif_sent[5] = true;
-            }
+      }
+    } else {
+      notif_sent[1] = false;
+    }
+  
+    if (FLOW2Error) {
+      if (!notif_sent[2]) {
+        if (wificlient.connect("maker.ifttt.com", 80)) {
+          url2 = String("?value1=Water%20flow2&value2=");
+          if (storage.FLOW2Value <= storage.FLOW2_MedThreshold) {
+            url2 += String("Low");
+          } else if (storage.FLOW2Value >= storage.FLOW2_HighThreshold) {
+            url2 += String("High");
+          }
+          url2 += String("%20flow2:%20") + String(storage.FLOW2Value) + String("%");
+          wificlient.print(String("POST ") + url1 + url2 + String(" HTTP/1.1\r\nHost: maker.ifttt.com\r\nConnection: close\r\n\r\n"));
+          notif_sent[2] = true;
         }
-    } else notif_sent[5] = false;
-
-    if(PhPump.UpTimeError)
-    {
-        if(!notif_sent[6])
-        {
-            if(wificlient.connect("maker.ifttt.com",80))
-            {
-                url2 = String("?value1=pH+%20pump%20uptime&value2=") + String(round(PhPump.UpTime/60000.)) + String("min");
-                wificlient.print(String("POST ") + url1 + url2 + String(" HTTP/1.1\r\nHost: maker.ifttt.com\r\nConnection: close\r\n\r\n"));
-                notif_sent[6] = true;
-            }
+      }
+    } else {
+      notif_sent[2] = false;
+    }
+  
+    if (!ChlPump.TankLevel()) {
+      if (!notif_sent[3]) {
+        if (wificlient.connect("maker.ifttt.com", 80)) {
+          url2 = String("?value1=Chl%20level&value2=") + String(ChlPump.GetTankFill()) + String("%");
+          wificlient.print(String("POST ") + url1 + url2 + String(" HTTP/1.1\r\nHost: maker.ifttt.com\r\nConnection: close\r\n\r\n"));
+          notif_sent[3] = true;
         }
-    } else notif_sent[6] = false;
-
-    if(WaterFill.UpTimeError)
-    {
-        if(!notif_sent[7])
-        {
-            if(wificlient.connect("maker.ifttt.com",80))
-            {
-                url2 = String("?value1=water%20fill%20uptime&value2=") + String(round(WaterFill.UpTime/60000.)) + String("min");
-                wificlient.print(String("POST ") + url1 + url2 + String(" HTTP/1.1\r\nHost: maker.ifttt.com\r\nConnection: close\r\n\r\n"));
-                notif_sent[7] = true;
-            }
+      }
+    } else {
+      notif_sent[3] = false;
+    }
+  
+    if (!PhPump.TankLevel()) {
+      if (!notif_sent[4]) {
+        if (wificlient.connect("maker.ifttt.com", 80)) {
+          url2 = String("?value1=pH+%20level&value2=") + String(PhPump.GetTankFill()) + String("%");
+          wificlient.print(String("POST ") + url1 + url2 + String(" HTTP/1.1\r\nHost: maker.ifttt.com\r\nConnection: close\r\n\r\n"));
+          notif_sent[4] = true;
         }
-    } else notif_sent[7] = false;
-    
-    if(I2CError)
-    {
-        if(!notif_sent[8])
-        {
-            if(wificlient.connect("maker.ifttt.com",80))
-            {
-                url2 = String("I2X-Hardware Error! -> Check I2C-Hardware");
-                wificlient.print(String("POST ") + url1 + url2 + String(" HTTP/1.1\r\nHost: maker.ifttt.com\r\nConnection: close\r\n\r\n"));
-                notif_sent[8] = true;
-            }
+      }
+    } else {
+      notif_sent[4] = false;
+    }
+  
+    if (ChlPump.UpTimeError) {
+      if (!notif_sent[5]) {
+        if (wificlient.connect("maker.ifttt.com", 80)) {
+          url2 = String("?value1=Chl%20pump%20uptime&value2=") + String(round(ChlPump.UpTime / 60000.)) + String("min");
+          wificlient.print(String("POST ") + url1 + url2 + String(" HTTP/1.1\r\nHost: maker.ifttt.com\r\nConnection: close\r\n\r\n"));
+          notif_sent[5] = true;
         }
-    } else notif_sent[8] = false;
-}
+      }
+    } else {
+      notif_sent[5] = false;
+    }
+  
+    if (PhPump.UpTimeError) {
+      if (!notif_sent[6]) {
+        if (wificlient.connect("maker.ifttt.com", 80)) {
+          url2 = String("?value1=pH+%20pump%20uptime&value2=") + String(round(PhPump.UpTime / 60000.)) + String("min");
+          wificlient.print(String("POST ") + url1 + url2 + String(" HTTP/1.1\r\nHost: maker.ifttt.com\r\nConnection: close\r\n\r\n"));
+          notif_sent[6] = true;
+        }
+      }
+    } else {
+      notif_sent[6] = false;
+    }
+  
+    if (WaterFill.UpTimeError) {
+      if (!notif_sent[7]) {
+        if (wificlient.connect("maker.ifttt.com", 80)) {
+          url2 = String("?value1=water%20fill%20uptime&value2=") + String(round(WaterFill.UpTime / 60000.)) + String("min");
+          wificlient.print(String("POST ") + url1 + url2 + String(" HTTP/1.1\r\nHost: maker.ifttt.com\r\nConnection: close\r\n\r\n"));
+          notif_sent[7] = true;
+        }
+      }
+    } else {
+      notif_sent[7] = false;
+    }
+  
+    if (I2CError) {
+      if (!notif_sent[8]) {
+        if (wificlient.connect("maker.ifttt.com", 80)) {
+          url2 = String("I2X-Hardware Error! -> Check I2C-Hardware");
+          wificlient.print(String("POST ") + url1 + url2 + String(" HTTP/1.1\r\nHost: maker.ifttt.com\r\nConnection: close\r\n\r\n"));
+          notif_sent[8] = true;
+        }
+      }
+    } else {
+      notif_sent[8] = false;
+    }
+  
+    if (storage.SaltStatus == "Low Salt") {
+      if (!notif_sent[9]) {
+        if (wificlient.connect("maker.ifttt.com", 80)) {
+          url2 = String("?value1=Salt%20concentration&value2=Low%20salt:%20") + String(storage.SaltConcentration) + String("g/L,%20Add%20") + String(storage.SaltNeeded) + String("kg");
+          wificlient.print(String("POST ") + url1 + url2 + String(" HTTP/1.1\r\nHost: maker.ifttt.com\r\nConnection: close\r\n\r\n"));
+          notif_sent[9] = true;
+        }
+      }
+    } else {
+      notif_sent[9] = false;
+    }
+  
+    if (storage.SaltStatus == "High Salt") {
+      if (!notif_sent[10]) {
+        if (wificlient.connect("maker.ifttt.com", 80)) {
+          url2 = String("?value1=Salt%20concentration&value2=High%20salt:%20") + String(storage.SaltConcentration) + String("g/L");
+          wificlient.print(String("POST ") + url1 + url2 + String(" HTTP/1.1\r\nHost: maker.ifttt.com\r\nConnection: close\r\n\r\n"));
+          notif_sent[10] = true;
+        }
+      }
+    } else {
+      notif_sent[10] = false;
+    }
+  }
 
 /*
 bool SMTP_Connect(){

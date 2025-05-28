@@ -12,7 +12,7 @@ extern void PoolMaster(void*);
 extern void CombinedPollingTask(void*);
 extern void pHRegulation(void*);
 extern void ChlorSaltRegulation(void*);
-extern void getTemp(void*);
+extern void TempTask(void* pvParameters);
 extern void readBME280(void*);
 extern void ProcessCommand(void*);
 extern void FlowMeasures(void*);

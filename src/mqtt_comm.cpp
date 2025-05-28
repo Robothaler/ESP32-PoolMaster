@@ -219,6 +219,10 @@ void onMqttConnect(bool sessionPresent) {
   mqttClient.subscribe(PoolTopicAPI, 2);
   mqttClient.publish(PoolTopicStatus, 1, true, "{\"PoolMaster Online\":1}");
   MQTTConnection = true;
+  char resetPayload[64];
+    snprintf(resetPayload, sizeof(resetPayload), "{\"ResetReason\":\"%s\"}", resetReasonToString(storage.ResetReason));
+    mqttClient.publish(POOLTOPIC"ResetReason", 1, true, resetPayload);
+    Debug.print(DBG_INFO, "[MQTT] Published ResetReason: %s", resetPayload);
 }
 
 void onMqttDisconnect(AsyncMqttClientDisconnectReason reason) {

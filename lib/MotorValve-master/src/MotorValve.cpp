@@ -35,6 +35,10 @@ MotorValve::MotorValve(PCF_Pin OpenPin, PCF_Pin ClosePin, int StartAngle, int Ma
     this->instanceName = Name;
     this->currentAngle = StartAngle;
     this->targetAngle = StartAngle;
+    this->openPinState = false;  // Initial state: openPin off
+    this->closePinState = false; // Initial state: closePin off
+    Debug.print(DBG_INFO, "[MotorValve] %s initialized with openPin %d on 0x%02X, closePin %d on 0x%02X",
+                instanceName, openPin.pin, openPin.address, closePin.pin, closePin.address);
 }
 
 void MotorValve::open() {
@@ -107,6 +111,7 @@ void MotorValve::loop() {
             currentAngle = (calibrationDirection == CLOCKWISE) ? startAngle : maxAngle;
             Debug.print(DBG_DEBUG, "[MotorValve] %s: Calibration stopped at angle: %d, openState: 0x%02X, closeState: 0x%02X",
                         instanceName, currentAngle, getCurrentState(openPin.address), getCurrentState(closePin.address));
+            synchronizeWithShadow(); // synchronize after calibration
         }
     }
 
@@ -137,6 +142,7 @@ void MotorValve::loop() {
                         instanceName, calculatedAngle, getCurrentState(openPin.address), getCurrentState(closePin.address));
         }
     }
+    synchronizeWithShadow(); // frequent synchronization
 }
 
 void MotorValve::calibrate() {
@@ -157,43 +163,85 @@ void MotorValve::calibrate() {
 
 void MotorValve::setOpenSignal() {
     PCF8574Manager& manager = PCF8574Manager::getInstance();
-    // Deaktiviere Close-Pin zuerst
+    // Update Register
+    openPinState = true;
+    closePinState = false;
+    // deactivate Close-Pin first
     if (closePin.address != 0xFF && closePin.pin <= 7) {
-        manager.queuePinUpdate(closePin.address, closePin.pin, false); // OFF = HIGH bei activeLow
+        manager.queuePinUpdate(closePin.address, closePin.pin, false); // OFF = HIGH at activeLow
     }
-    // Aktiviere Open-Pin
+    // activate Open-Pin
     if (openPin.address != 0xFF && openPin.pin <= 7) {
-        manager.queuePinUpdate(openPin.address, openPin.pin, true);    // ON = LOW bei activeLow
+        manager.queuePinUpdate(openPin.address, openPin.pin, true);    // ON = LOW at activeLow
     }
     Debug.print(DBG_INFO, "[MotorValve] %s: Queued openPin %d on 0x%02X to ON, closePin %d on 0x%02X to OFF",
                 instanceName, openPin.pin, openPin.address, closePin.pin, closePin.address);
+    synchronizeWithShadow(); // imidiate synchronization
 }
 
 void MotorValve::setCloseSignal() {
     PCF8574Manager& manager = PCF8574Manager::getInstance();
-    // Deaktiviere Open-Pin zuerst
+    // Update Register
+    openPinState = false;
+    closePinState = true;
+    // deactivate Open-Pin first
     if (openPin.address != 0xFF && openPin.pin <= 7) {
-        manager.queuePinUpdate(openPin.address, openPin.pin, false);   // OFF = HIGH bei activeLow
+        manager.queuePinUpdate(openPin.address, openPin.pin, false);   // OFF = HIGH at activeLow
     }
-    // Aktiviere Close-Pin
+    // Aactivate Close-Pin
     if (closePin.address != 0xFF && closePin.pin <= 7) {
-        manager.queuePinUpdate(closePin.address, closePin.pin, true);  // ON = LOW bei activeLow
+        manager.queuePinUpdate(closePin.address, closePin.pin, true);  // ON = LOW at activeLow
     }
     Debug.print(DBG_INFO, "[MotorValve] %s: Queued closePin %d on 0x%02X to ON, openPin %d on 0x%02X to OFF",
                 instanceName, closePin.pin, closePin.address, openPin.pin, openPin.address);
+    synchronizeWithShadow(); // imidiate synchronization
 }
 
 void MotorValve::setIdle() {
     PCF8574Manager& manager = PCF8574Manager::getInstance();
+    // Update Register
+    openPinState = false;
+    closePinState = false;
     // Deaktiviere beide Pins
     if (openPin.address != 0xFF && openPin.pin <= 7) {
-        manager.queuePinUpdate(openPin.address, openPin.pin, false);   // OFF = HIGH bei activeLow
+        manager.queuePinUpdate(openPin.address, openPin.pin, false);   // OFF = HIGH at activeLow
     }
     if (closePin.address != 0xFF && closePin.pin <= 7) {
-        manager.queuePinUpdate(closePin.address, closePin.pin, false); // OFF = HIGH bei activeLow
+        manager.queuePinUpdate(closePin.address, closePin.pin, false); // OFF = HIGH at activeLow
     }
     Debug.print(DBG_INFO, "[MotorValve] %s: Queued both pins to OFF (openPin %d on 0x%02X, closePin %d on 0x%02X)",
                 instanceName, openPin.pin, openPin.address, closePin.pin, closePin.address);
+    synchronizeWithShadow(); // imimediate synchronization
+}
+
+void MotorValve::synchronizeWithShadow() {
+    PCF8574Manager& manager = PCF8574Manager::getInstance();
+
+    // verify openPin
+    if (openPin.address != 0xFF && openPin.pin <= 7) {
+        uint8_t shadowState = manager.getState(openPin.address);
+        bool shadowPinState = (shadowState & (1 << openPin.pin)) == 0; // LOW = ON at activeLow
+        if (shadowPinState != openPinState) {
+            Debug.print(DBG_WARNING, "[MotorValve] %s: Shadow state mismatch for openPin %d on 0x%02X: openPinState=%d, shadowPinState=%d",
+                        instanceName, openPin.pin, openPin.address, openPinState, shadowPinState);
+            manager.queuePinUpdate(openPin.address, openPin.pin, openPinState);
+            Debug.print(DBG_INFO, "[MotorValve] %s: Synchronized openPin %d on 0x%02X to openPinState=%d",
+                        instanceName, openPin.pin, openPin.address, openPinState);
+        }
+    }
+
+    // verify closePin
+    if (closePin.address != 0xFF && closePin.pin <= 7) {
+        uint8_t shadowState = manager.getState(closePin.address);
+        bool shadowPinState = (shadowState & (1 << closePin.pin)) == 0; // LOW = ON at activeLow
+        if (shadowPinState != closePinState) {
+            Debug.print(DBG_WARNING, "[MotorValve] %s: Shadow state mismatch for closePin %d on 0x%02X: closePinState=%d, shadowPinState=%d",
+                        instanceName, closePin.pin, closePin.address, closePinState, shadowPinState);
+            manager.queuePinUpdate(closePin.address, closePin.pin, closePinState);
+            Debug.print(DBG_INFO, "[MotorValve] %s: Synchronized closePin %d on 0x%02X to closePinState=%d",
+                        instanceName, closePin.pin, closePin.address, closePinState);
+        }
+    }
 }
 
 void MotorValve::setSignal(PCF_Pin pin, uint8_t state) {

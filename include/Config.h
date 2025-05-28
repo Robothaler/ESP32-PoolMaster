@@ -4,9 +4,9 @@
 
 //Version of config stored in EEPROM
 //Random value. Change this value (to any other value) to revert the config to default values
-#define CONFIG_VERSION  25
+#define CONFIG_VERSION  3
 
-#define DEBUG_LEVEL     DBG_VERBOSE    // Possible levels : NONE/ERROR/WARNING/INFO/DEBUG/VERBOSE
+#define DEBUG_LEVEL     DBG_NONE    // Possible levels : NONE/ERROR/WARNING/INFO/DEBUG/VERBOSE
 
 // WiFi credentials
 // ------  Credentials are stored in include/credentials.h
@@ -41,6 +41,18 @@
 #define POLARITY_DIRECT   0
 #define POLARITY_REVERSE  1
 
+// Configuration for Zodiac LM2-40 Salt Electrolysis
+#define ELECTROLYSIS_VOLTAGE  24.0    // Voltage of electrolysis cell (V)
+#define DEFAULT_CELL_CONSTANT 5.0     // Default cell constant (m⁻¹)
+#define POOL_VOLUME           23.6    // Pool volume (m³)
+#define TARGET_SALT_MIN       3.0     // Target salt content minimum (g/L)
+#define TARGET_SALT_MAX       4.0     // Target salt content maximum (g/L)
+#define LOW_SALT_THRESHOLD    2.8     // Threshold for "Low Salt" (g/L)
+#define TARGET_SALT_REF       3.5     // Reference for salt amount calculation (g/L)
+
+#define FILTER_VOLTAGE        230.0   // V, Voltage of filtration pump
+#define HEAT_VOLTAGE          230.0   // V, Voltage of heat pump
+
 // Define RELAY-PINS for all Pumps (Second PCF8574_I)
 #define FILTRATION_PUMP   P0   // Filtration-Pump
 #define HEAT_PUMP         P1   // Heat-Pump
@@ -49,7 +61,7 @@
 #define PH_PUMP           P4   // PH-Pump
 #define CHL_PUMP          P5   // Chlorine-Pump
 #define SOLAR_PUMP        P6   // Solar, 3-way-valve for Warmwater Solarpanels
-#define SALT_POL          P7   // Salt-Manager Polarity DIRECT / REVERSE
+#define RELAY_R0          P7   // Spare I
 
 // Define RELAY-PINS for MotorValves (Third PCF8574_II)
 #define ESD_TRE_OPEN      P0   // ESD-Treppe (open)
@@ -74,7 +86,7 @@
 
 #define LIGHT_POOL         7   // Pool Spotlight
 #define LIGHT_ROOM        10   // Serviceroom light
-#define RELAY_R0          13   // Spare I
+#define SALT_POL          13   // Salt-Manager Polarity DIRECT / REVERSE
 #define RELAY_R1          14   // Spare II
 #define RELAY_R2          21   // Spare III
 #define RELAY_R3          38   // Spare IV
@@ -82,13 +94,13 @@
 #define RELAY_R5           6   // Spare VI
 
 //Digital input pins connected to Flow-Meter additional security for Filtrationpump and dosing
-#define FLOW              39   // war 39 // Flow-Meter in Main-Pipe to be sure Filtrationpump is running
-#define FLOW2             40   // war 40 // Flow-Meter in Measure-Pipe to be sure water is flowing to get accurate values of ph and orp meter
+#define FLOW              39   // Flow-Meter in Main-Pipe to be sure Filtrationpump is running
+#define FLOW2             40   // Flow-Meter in Measure-Pipe to be sure water is flowing to get accurate values of ph and orp meter
 
 //Digital input pins connected to level reed switches in pool to indicate low or high water level
 //LOW = Switch is closed / HIGH = Switch is open
-#define WATER_MAX_LVL     41  
-#define WATER_MIN_LVL     42   
+#define WATER_MAX_LVL     41   //
+#define WATER_MIN_LVL     42   // 
 
 //Digital input pins connected to level reed switches in canister indicate low pH or Chlorine level
 //LOW = Switch is open
@@ -96,14 +108,14 @@
 #define CHL_LVL           16   //
 
 //One wire bus for the air/water temperature measurement
-#define ONE_WIRE_BUS_A     4   //  (WAR 18)
-#define ONE_WIRE_BUS_W     5   //  (WAR 19)
+#define ONE_WIRE_BUS_A     4
+#define ONE_WIRE_BUS_W     5
 #define MAX_ADDRESSES      5   // 5 sensors max on the bus
 
 //I2C bus for analog measurement with ADS1115 of pH, ORP and water pressure 
 //and status LED through PCF8574A 
-#define I2C_SDA			       8  //  (WAR 21)
-#define I2C_SCL			       9  //  (WAR 22)
+#define I2C_SDA			       8   //
+#define I2C_SCL			       9   //
 #define PCF8574_ADR       0x24 // for Status-LEDs
 #define PCF8574_I_ADR     0x3F // for External Relais for 230V Apliances
 #define PCF8574_II_ADR    0x3D // for Motorvalves
@@ -128,6 +140,7 @@
 #define TIMETOMAX_90      90   // Time to reach to maximum in Seconds
 
 #define WDT_TIMEOUT       10
+#define MWDT_TIMEOUT_MS   15000 // 15 Sekunden
 
 // Server port
 #define SERVER_PORT       8060
@@ -138,8 +151,9 @@
 //OTA host name
 #define OTA_HOST          "PoolMaster"
 
-//12bits (0,06°C) temperature sensors resolution
-#define TEMPERATURE_RESOLUTION 12
+// 12bits (0,06°C) temperature sensors resolution
+// 9 bits (0.5°C) resolution is used for the DS18B20 sensors
+#define TEMPERATURE_RESOLUTION 9
 
 //MQTT stuff including local broker/server IP address, login and pwd
 //------------------------------------------------------------------
@@ -178,7 +192,7 @@
 // T1:  CombinedPolling (previously AnaloPoll)
 // T2:  ProcessCommand (previously PoolServer)
 // T3:  PoolMaster
-// T4:  getTemp
+// T4:  TempTask
 // T5:  readBME280
 // T6:  OrpRegulation
 // T7:  SaltRegulation
@@ -194,7 +208,7 @@
 #define PT1               125
 #define PT2               500
 #define PT3               500
-#define PT4               1000 / (1 << (12 - TEMPERATURE_RESOLUTION))
+#define PT4               2000 // (1 << (12 - TEMPERATURE_RESOLUTION))
 #define PT5               2000
 #define PT6               1000
 #define PT7               1000
@@ -209,7 +223,7 @@
 #define DT1               0/portTICK_PERIOD_MS
 #define DT2               190/portTICK_PERIOD_MS
 #define DT3               310/portTICK_PERIOD_MS
-#define DT4               440/portTICK_PERIOD_MS
+#define DT4               600/portTICK_PERIOD_MS
 #define DT5               520/portTICK_PERIOD_MS
 #define DT6               560/portTICK_PERIOD_MS
 #define DT7               565/portTICK_PERIOD_MS
@@ -221,10 +235,10 @@
 #define DT13              980/portTICK_PERIOD_MS  // Start offset for OTA task to avoid overlap
 
 // Task stack sizes (in bytes)
-#define STACK_T1          4096  // CombinedPolling
+#define STACK_T1          8192  // CombinedPolling
 #define STACK_T2          8192  // ProcessCommand
 #define STACK_T3          5120  // PoolMaster
-#define STACK_T4          4096  // getTemp
+#define STACK_T4          8192  // TempTask
 #define STACK_T5          3072  // readBME280
 #define STACK_T6          3072  // OrpRegulation
 #define STACK_T7          3072  // SaltRegulation
@@ -251,14 +265,14 @@
 #define PRIORITY_T13      1         // Priority for OTA task
 
 // Timing Parameter für PCF8574
-#define PCF_UPDATE_INTERVAL    10    // Minimale Zeit zwischen PCF Updates (ms)
+#define PCF_UPDATE_INTERVAL    50    // Minimale Zeit zwischen PCF Updates (ms)
 #define PCF_VERIFY_TIMEOUT     50    // Timeout für Statusverifikation (ms)
 
 // OTA-specific settings
 #define OTA_NEXTION_PORT  80        // Port for Nextion OTA web server
 #define OTA_NEXTION_PATH  "/upload" // Endpoint for Nextion OTA uploads
 
-#define CHRONO                    // Activate tasks timings traces for profiling
+//#define CHRONO                    // Activate tasks timings traces for profiling
 //#define SIMU                      // Used to simulate pH/ORP sensors. Very simple simulation:
                                     // the sensor value is computed from the output of the PID 
                                     // loop to reach linearly the theorical value produced by this

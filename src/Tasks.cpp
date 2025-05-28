@@ -49,15 +49,16 @@ void createTasks(int app_cpu, TaskHandle_t* pubSetTaskHandle, TaskHandle_t* pubM
     app_cpu
   );
 
+
   // Temperatures measurement
   xTaskCreatePinnedToCore(
-    getTemp,
-    "GetTemp",
+    TempTask,
+    "TempTask",
     STACK_T4,
     NULL,
     PRIORITY_T4,
     nullptr,
-    0
+    app_cpu
   );
 
   // BME280 measurement

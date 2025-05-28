@@ -19,8 +19,11 @@ static volatile bool TFT_ON = true;           // display status
 static volatile bool refresh = false;         // flag to force display refresh
 
 static String temp;
-static unsigned long LastAction = 0; // Last action time done on TFT. Go to sleep after TFT_SLEEP
+static unsigned long LastAction = 0;          // Last action time done on TFT. Go to sleep after TFT_SLEEP
 static char HourBuffer[9];
+uint32_t LastTFTUpdate = 0U;
+uint32_t LastTFTTouch = 0U;
+bool Sleep = false;
 
 static uint8_t debounceCount = 2;
 static uint8_t debounceM     = 0;
@@ -49,29 +52,39 @@ static uint8_t debounceWF    = 0;
 static uint8_t debounceWiFi  = 0;
 static uint8_t debounceMQL   = 0;
 
+// New variables for salt status cycling
+static unsigned long lastSaltUpdate = 0;
+static int saltDisplayState = 0;                        // 0: Polarity, 1: Salt Current, 2: Salt Status
+static const unsigned long saltDisplayInterval = 2000;  // 2 seconds per state
+// cycling between Uptime, ResetReason, Firmware
+static uint8_t displayState = 0;
+static unsigned long lastDisplaySwitch = 0;
+const unsigned long displayInterval = 2000;             // 2 seconds per state
 
 // Structure holding the measurement values to display on the Nextion display
 // Used to refresh only modified values
 static struct TFTStruct
 {
-  float pH, Orp, pHSP, OrpSP, WST, WIT, WBT, WWPT, WWTT, WTSP, AT, AH, AP, AIT, ST, SVLT, SRLT, PSI, flow, flow2, F1H, F1L, F2H, F2L, PsiH, PsiL, WTLow, pHPumpFR, ChlPumpFR, WaterFillFR, Ph_Kp, Ph_Ki, Ph_Kd, Orp_Kp, Orp_Ki, Orp_Kd;
-  uint8_t FSta, FSto, FStaT0, FStoT1, SStaT0, SStoT1, pHTkFill, OrpTkFill, PIDpH, PIDChl, PubInt, PumpMaxUp, WFMaxUp, FillDur, WFMinLvl, WFMaxLvl, DelayPID, pHPIDW, OrpPIDW, FLOW_Pulse, FLOW2_Pulse, SaltDiff;
+  float pH, Orp, pHSP, OrpSP, WST, WIT, WBT, WWPT, WWTT, WTSP, AT, AH, AP, AIT, ST, SVLT, SRLT, PSI, flow, flow2, F1H, F1L, F2H, F2L, PsiH, PsiL, WTLow, pHPumpFR, ChlPumpFR, WaterFillFR, Ph_Kp, Ph_Ki, Ph_Kd, Orp_Kp, Orp_Ki, Orp_Kd, SaltCurrentValue, SaltNeeded, FiltPower, HeatPower, SaltCurrent_Raw, FilterCurrent_Raw, HeatCurrent_Raw;;
+  uint8_t FSta, FSto, FStaT0, FStoT1, SStaT0, SStoT1, pHTkFill, OrpTkFill, PIDpH, PIDChl, PubInt, PumpMaxUp, WFMaxUp, FillDur, WFMinLvl, WFMaxLvl, DelayPID, pHPIDW, OrpPIDW, FLOW_Pulse, FLOW2_Pulse, SaltDiff, ResetReason;
   uint16_t MQTT_PORT;
+  uint32_t Uptime;
   boolean WIFI_OnOff, MqttLogin, BUSA_B, Mode, SolarLoEx, SolarMode, WaterFillMode, SaltMode, NetW, Filt, Robot, R0, R1, R2, pHUTErr, ChlUTErr, WFUTErr, WFErr, PSIErr, FLOWErr, FLOW2Err, pHTLErr, ChlTLErr, PhPump, ChlPump, Heat, HeatPump, SaltPump, SolarPump ,Salt_Chlor, SaltPolarity, ValveMode, CleanMode, ValveSwitch, WaterFill;
   unsigned long pHPpRT, OrpPpRT, SHRT, HPRT, SPUT, SPRT, SolPRT, FLRT, WFRT, WFAC;
   IPAddress MQTT_IP;
   DeviceAddress TW_Adr_1, TW_Adr_2, TW_Adr_3, TW_Adr_4, TW_Adr_5, TA_Adr_1, TA_Adr_2, TA_Adr_3, TA_Adr_4, TA_Adr_5;
-  String FW, SSID, PASSW, MQTT_USER, MQTT_PASS, MQTT_NAME;
+  String FW, SSID, PASSW, MQTT_USER, MQTT_PASS, MQTT_NAME, SaltStatus;
   std::string ELDTstate, ELDHstate, WPVstate, WPMstate, BOTTstate, SOLARstate;
 } TFTStruc =
 { //default values to force update on next refresh
-  -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1.,
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., 0.0, -1., -1., -1., -1., -1.,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,0,
   MQTT_SERVER_PORT,
+  0U,
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
   99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
   99,
-  "", "", "", "", "", "",
+  "", "", "", "", "", "", "",
   "", "", "", "", "", "",
 };
 
@@ -147,12 +160,47 @@ void UpdateTFT()
   sprintf(HourBuffer, "%02d:%02d:%02d", hour(), minute(), second());
   myNex.writeStr("page0.vaTime.txt", HourBuffer);
 
-  if (Firmw != TFTStruc.FW)
-  {
-    TFTStruc.FW = F("MC fw: v ");
-    TFTStruc.FW += Firmw;
-    myNex.writeStr(F("page0.vaMCFW.txt"), TFTStruc.FW);
-  }
+  if (millis() - lastDisplaySwitch >= displayInterval || !refresh) {
+        xSemaphoreTake(mutex, portMAX_DELAY);
+        switch (displayState) {
+            case 0: // Uptime
+                if (storage.Uptime != TFTStruc.Uptime || !refresh) {
+                    TFTStruc.Uptime = storage.Uptime;
+                    temp = "Uptime: " + String(TFTStruc.Uptime) + " h";
+                    myNex.writeStr(F("page0.vaMCFW.txt"), temp);
+                    if (CurrentPage == 0) {
+                        myNex.writeStr(F("Status.txt"), temp);
+                    }
+                    Debug.print(DBG_VERBOSE, "[Nextion] Updated Uptime: %s", temp.c_str());
+                }
+                break;
+            case 1: // ResetReason
+                if (storage.ResetReason != TFTStruc.ResetReason || !refresh) {
+                    TFTStruc.ResetReason = storage.ResetReason;
+                    temp = "Reset: " + String(resetReasonToString(TFTStruc.ResetReason));
+                    myNex.writeStr(F("page0.vaMCFW.txt"), temp);
+                    if (CurrentPage == 0) {
+                        myNex.writeStr(F("Status.txt"), temp);
+                    }
+                    Debug.print(DBG_VERBOSE, "[Nextion] Updated ResetReason: %s", temp.c_str());
+                }
+                break;
+            case 2: // Firmware
+                if (Firmw != TFTStruc.FW || !refresh) {
+                    TFTStruc.FW = Firmw;
+                    temp = "MC fw: v " + TFTStruc.FW;
+                    myNex.writeStr(F("page0.vaMCFW.txt"), temp);
+                    if (CurrentPage == 0) {
+                        myNex.writeStr(F("Status.txt"), temp);
+                    }
+                    Debug.print(DBG_VERBOSE, "[Nextion] Updated Firmware: %s", temp.c_str());
+                }
+                break;
+        }
+        xSemaphoreGive(mutex);
+        displayState = (displayState + 1) % 3; // Zyklus: 0 -> 1 -> 2 -> 0
+        lastDisplaySwitch = millis();
+    }
 
   if (storage.WIFI_OnOff != TFTStruc.WIFI_OnOff || !refresh)
   {
@@ -479,9 +527,9 @@ void UpdateTFT()
       if (CurrentPage == 27)
       {
         if (TFTStruc.BUSA_B == 1)
-        myNex.writeStr(F("b2.pic=58"));
+        myNex.writeStr(F("b2.pic=61"));
         else
-        myNex.writeStr(F("b2.pic=59"));
+        myNex.writeStr(F("b2.pic=60"));
       }
     }
     else
@@ -747,6 +795,30 @@ void UpdateTFT()
     temp = String(TFTStruc.PsiL, 1);
     myNex.writeStr(F("page0.vaPsiL.txt"), temp);
     if (CurrentPage == 12)  myNex.writeStr(F("PsiL.txt"), temp);
+  }
+
+  if (storage.SaltCurrentValue != TFTStruc.SaltCurrent_Raw || !refresh)
+  {
+    TFTStruc.SaltCurrent_Raw = storage.SaltCurrentValue;
+    temp = String(TFTStruc.SaltCurrent_Raw, 2);
+    myNex.writeStr(F("pageAmpCalib.vaSaltCur.txt"), temp);
+    if (CurrentPage == 29)  myNex.writeStr(F("vaSaltCur.txt"), temp);
+  }
+
+  if (storage.FilterCurrentValue != TFTStruc.FilterCurrent_Raw || !refresh)
+  {
+    TFTStruc.FilterCurrent_Raw = storage.FilterCurrentValue;
+    temp = String(TFTStruc.FilterCurrent_Raw, 2);
+    myNex.writeStr(F("pageAmpCalib.vaFiltCur.txt"), temp);
+    if (CurrentPage == 29)  myNex.writeStr(F("vaFiltCur.txt"), temp);
+  }
+
+  if (storage.HeatCurrentValue!= TFTStruc.HeatCurrent_Raw|| !refresh)
+  {
+    TFTStruc.HeatCurrent_Raw = storage.HeatCurrentValue;
+    temp = String(TFTStruc.HeatCurrent_Raw, 2);
+    myNex.writeStr(F("pageAmpCalib.vaHeatCur.txt"), temp);
+    if (CurrentPage == 29)  myNex.writeStr(F("vaHeatCur.txt"), temp);
   }
 
   if (storage.FLOWValue != TFTStruc.flow || !refresh)
@@ -1516,13 +1588,75 @@ if (ELD_Hinten.getStatus() != TFTStruc.ELDHstate || !refresh)
       debounceSolP++;
   }
 
-  if (storage.SaltPolarity != TFTStruc.SaltPolarity || !refresh)
-  {
-      TFTStruc.SaltPolarity = storage.SaltPolarity;
-      temp = TFTStruc.SaltPolarity ? F("DIREKT") : F("VERPOLT");
-      myNex.writeStr(F("page0.vaSaltDir.txt"), temp);
-    if (CurrentPage == 13)  myNex.writeStr(F("SaltDir.txt"), temp);
+  // Salt status cyclic display
+  if (millis() - lastSaltUpdate >= saltDisplayInterval) {
+    String displayText;
+    bool useRedColor = false;
+
+    switch (saltDisplayState) {
+      case 0: // Polarity
+          displayText = storage.SaltPolarity == POLARITY_DIRECT ? F("DIREKT") : F("VERPOLT");
+          break;
+      case 1: // Salt Current
+          displayText = String(F(" ")) + String(storage.SaltCurrentValue, 1) + F("A");
+          break;
+      case 2: // Leistung
+      {
+          float power = storage.SaltCurrentValue * ELECTROLYSIS_VOLTAGE; // Leistung in Watt
+          displayText = String(F(" ")) + String(power, 0) + F("W");
+          break;
+      }
+      case 3: // Salt Status
+          if (storage.SaltStatus == "LOW Salt") {
+              displayText = String(F("+ ")) + String(storage.SaltNeeded, 0) + F(" kg Salz");
+              useRedColor = true;
+          } else if (storage.SaltStatus == "HIGH Salt") {
+              displayText = F("HIGH Salt");
+              useRedColor = true;
+          } else if (storage.SaltStatus == "OK") {
+              displayText = F("Salt: OK");
+              saltDisplayState = -1; // Skip to polarity next
+          } else {
+              displayText = TFTStruc.SaltStatus;
+              if (displayText == "") {
+                  displayText = F("...Wait");
+              }
+              useRedColor = (TFTStruc.SaltStatus == "LOW Salt" || TFTStruc.SaltStatus == "HIGH Salt");
+              Debug.print(DBG_VERBOSE, "[Nextion] Skipping Unknown, using: %s", displayText.c_str());
+              saltDisplayState = -1; // Skip to polarity
+          }
+          TFTStruc.SaltStatus = displayText;
+          break;
   }
+
+    // Update display only if text or color has changed
+    if (displayText != TFTStruc.SaltStatus || !refresh) {
+      TFTStruc.SaltStatus = displayText;
+      myNex.writeStr(F("page0.vaSaltDir.txt"), displayText);
+      myNex.writeNum(F("page0.vaSaltDir.pco"), useRedColor ? 63488 : 65535);
+      if (CurrentPage == 13) {
+        myNex.writeStr(F("SaltDir.txt"), displayText);
+        myNex.writeNum(F("SaltDir.pco"), useRedColor ? 63488 : 65535);
+      }
+      Debug.print(DBG_VERBOSE, "Updated salt display: %s, color: %d", displayText.c_str(), useRedColor ? 63488 : 65535);
+    }
+
+    // Update salt current
+    if (storage.SaltCurrentValue != TFTStruc.SaltCurrentValue || !refresh) {
+      TFTStruc.SaltCurrentValue = storage.SaltCurrentValue;
+      Debug.print(DBG_VERBOSE, "Updated salt current: %.2f A", storage.SaltCurrentValue);
+    }
+
+    // Update salt needed
+    if (storage.SaltNeeded != TFTStruc.SaltNeeded || !refresh) {
+      TFTStruc.SaltNeeded = storage.SaltNeeded;
+      Debug.print(DBG_VERBOSE, "Updated salt needed: %.1f kg", storage.SaltNeeded);
+    }
+
+    // Cycle to next state
+    saltDisplayState = (saltDisplayState + 1) % (storage.SaltStatus == "OK" || storage.SaltStatus == "Unknown" ? 3 : 4);
+    lastSaltUpdate = millis();
+    }
 
   if (storage.SaltDiff != TFTStruc.SaltDiff || !refresh)
   {
@@ -1544,6 +1678,19 @@ if (ELD_Hinten.getStatus() != TFTStruc.ELDHstate || !refresh)
 
     myNex.writeStr(F("page0.vaFiltDur.txt"), temp);
     if (CurrentPage == 1)  myNex.writeStr(F("FiltDur.txt"), temp);
+  }
+
+  float filterPower = storage.FilterCurrentValue * FILTER_VOLTAGE;
+  if ((filterPower != TFTStruc.FiltPower) || !refresh) {
+      TFTStruc.FiltPower = filterPower;
+      String temp = String((int)filterPower);
+      int len = temp.length();
+      for (int i = len - 3; i > 0; i -= 3) {
+          temp = temp.substring(0, i) + "." + temp.substring(i);
+      }
+
+      myNex.writeStr(F("page0.vawFilt.txt"), temp.c_str());
+      if (CurrentPage == 1) myNex.writeStr(F("page1.wFilt.txt"), temp.c_str());
   }
 
   if ((WaterFill.UpTime != TFTStruc.WFRT) || !refresh)
@@ -1713,6 +1860,19 @@ if (ELD_Hinten.getStatus() != TFTStruc.ELDHstate || !refresh)
 
     myNex.writeStr(F("page0.vaWPDur.txt"), temp);
     if (CurrentPage == 3)  myNex.writeStr(F("WPDur.txt"), temp);
+  }
+
+  float heatPower = storage.HeatCurrentValue * HEAT_VOLTAGE;
+  if ((heatPower != TFTStruc.HeatPower) || !refresh) {
+      TFTStruc.HeatPower = heatPower;
+      String temp = String((int)heatPower);
+      int len = temp.length();
+      for (int i = len - 3; i > 0; i -= 3) {
+          temp = temp.substring(0, i) + "." + temp.substring(i);
+      }
+
+      myNex.writeStr(F("page0.vaWWP.txt"), temp.c_str());
+      if (CurrentPage == 3) myNex.writeStr(F("page3.WWP.txt"), temp.c_str());
   }
 
   if ((SolarPump.UpTime != TFTStruc.SHRT) || !refresh)
@@ -2087,7 +2247,7 @@ if (ELD_Hinten.getStatus() != TFTStruc.ELDHstate || !refresh)
       }
   }
   //put TFT in sleep mode with wake up on touch and force page 0 load to trigger an event
-  if((unsigned long)(millis() - LastAction) >= TFT_SLEEP && TFT_ON && CurrentPage != 2)
+  if((unsigned long)(millis() - LastAction) >= TFT_SLEEP && TFT_ON && CurrentPage != 22 && CurrentPage != 11 && CurrentPage != 21 && CurrentPage != 25 && CurrentPage != 28 && CurrentPage != 29 && CurrentPage != 30)
   {
     myNex.writeStr("thup=1");
     myNex.writeStr("wup=0");
@@ -2704,5 +2864,13 @@ void trigger53()
 void trigger54()
 {
   CurrentPage = 27;
+  LastAction = millis();
+}
+
+//Page KeyPad has finished loading
+//printh 23 02 54 37
+void trigger55()
+{
+  CurrentPage = 22;
   LastAction = millis();
 }

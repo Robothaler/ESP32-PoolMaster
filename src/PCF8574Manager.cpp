@@ -23,7 +23,7 @@ PCF8574Manager::PCF8574Manager() : updateQueue(NULL), stateMutex(NULL), taskHand
 }
 
 void PCF8574Manager::init() {
-    this->updateQueue = xQueueCreate(20, sizeof(PCFUpdate)); // Increased capacity
+    this->updateQueue = xQueueCreate(30, sizeof(PCFUpdate)); // Increased capacity
     this->stateMutex = xSemaphoreCreateMutex();
     if (!this->updateQueue || !this->stateMutex) {
         Debug.print(DBG_ERROR, "[PCF8574Manager] Failed to create queue or mutex");

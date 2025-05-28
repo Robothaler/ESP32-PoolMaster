@@ -38,6 +38,7 @@ public:
     bool isCalibrating();
     const char *getStatus();
     uint8_t getCurrentState(uint8_t address);
+    void synchronizeWithShadow(); // Neue Methode für Synchronisierung
 
 private:
     void setSignal(PCF_Pin pin, uint8_t state);
@@ -58,6 +59,8 @@ private:
     bool calibrating = false;
     bool opening = false;
     bool closing = false;
+    bool openPinState = false;  // Neues Register für openPin
+    bool closePinState = false; // Neues Register für closePin
     unsigned long operationStartTime = 0;
     unsigned long calibrationStartTime = 0;
 };
