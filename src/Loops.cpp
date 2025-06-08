@@ -26,6 +26,14 @@ constexpr float ERROR_TEMP_VALUE = -127.0; // Fehlerwert für ungültige Tempera
 constexpr float MIN_VALID_CURRENT = -20.0; // Minimale plausible Stromstärke (A)
 constexpr float MAX_VALID_CURRENT = 20.0;  // Maximale plausible Stromstärke (A)
 
+// Plausibilitätsgrenzen für pH- und ORP-Rohwerte (in mV)
+constexpr float MIN_VALID_PH_RAW = -2000.0;  // Minimaler plausibler pH-Rohwert (mV)
+constexpr float MAX_VALID_PH_RAW = 2000.0;   // Maximaler plausibler pH-Rohwert (mV)
+constexpr float MIN_VALID_ORP_RAW = -2000.0; // Minimaler plausibler ORP-Rohwert (mV)
+constexpr float MAX_VALID_ORP_RAW = 2000.0;  // Maximaler plausibler ORP-Rohwert (mV)
+constexpr unsigned long SENSOR_ERROR_REPORT_INTERVAL = 600000; // 10 Minuten
+
+
 // DS18B20 SENSOR-Mapping to map the sensoradress with the Tempname
 const char* NV_STORAGE_MAPPING_A[] = {"SolarTemp", "SolarVLTemp", "SolarRLTemp", "AirInTemp", "AirTemp"}; // Mapping of A-BUS-Sensors to NVS
 const char* NV_STORAGE_MAPPING_W[] = {"WaterSTemp", "WaterITemp", "WaterBTemp", "WaterWPTemp", "WaterWTTemp"}; // Mapping of W-BUS-Sensors to NVS
@@ -43,6 +51,12 @@ static float psi_sensor_value;    // PSI sensor current value
 static float salt_current_sensor_value; // ACS712 Salt Electrolysis sensor value (mV)
 static float filter_current_sensor_value; // ACS712 Filter Pump sensor value (mV)
 static float heat_current_sensor_value; // ACS712 Heat Pump sensor value (mV)
+
+// Add missing error state variables for pH and ORP sensors
+static bool ph_sensor_error = false;
+static unsigned long last_ph_error_report = 0;
+static bool orp_sensor_error = false;
+static unsigned long last_orp_error_report = 0;
 
 portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -70,7 +84,9 @@ byte flow2_pulse1Sec = 0;
 static RunningMedian samples_A_Temp[5] = { RunningMedian(11), RunningMedian(11), RunningMedian(11), RunningMedian(11), RunningMedian(11) };
 static RunningMedian samples_W_Temp[5] = { RunningMedian(11), RunningMedian(11), RunningMedian(11), RunningMedian(11), RunningMedian(11) };
 static RunningMedian samples_Ph        = RunningMedian(11);
+static RunningMedian samples_Ph_Raw    = RunningMedian(11);
 static RunningMedian samples_Orp       = RunningMedian(11);
+static RunningMedian samples_Orp_Raw   = RunningMedian(11);
 static RunningMedian samples_PSI       = RunningMedian(11);
 static RunningMedian samples_ATemp     = RunningMedian(11);
 static RunningMedian samples_AHum      = RunningMedian(11);
@@ -185,7 +201,25 @@ void CombinedPollingTask(void *pvParameters) {
               if (ph_sensor_value >= 32768) ph_sensor_value -= 65536;
               adc_ph.start();
               samples_Ph.add(ph_sensor_value);
+              samples_Ph_Raw.add(ph_sensor_value); // Rohwert speichern
+              float ph_raw_mV = samples_Ph_Raw.getAverage(5) * 0.1875; // ADC-Wert in mV
+              storage.PhRawValue = ph_raw_mV; // Speichere pH-Rohwert
               storage.PhValue = (samples_Ph.getAverage(5) * 0.1875 / 1000.0) * storage.pHCalibCoeffs0 + storage.pHCalibCoeffs1;
+
+              // Plausibilitätsprüfung für pH-Rohwert
+              if (ph_raw_mV < MIN_VALID_PH_RAW || ph_raw_mV > MAX_VALID_PH_RAW) {
+                  if (!ph_sensor_error || (millis() - last_ph_error_report > SENSOR_ERROR_REPORT_INTERVAL)) {
+                      Debug.print(DBG_WARNING, "[pH Sensor] Invalid raw value: %.2f mV", ph_raw_mV);
+                      char errorMsg[100];
+                      snprintf(errorMsg, sizeof(errorMsg), "{\"error\":\"pH sensor invalid raw value: %.2f mV\"}", ph_raw_mV);
+                      mqttErrorPublish(errorMsg);
+                      ph_sensor_error = true;
+                      last_ph_error_report = millis();
+                  }
+              } else {
+                  ph_sensor_error = false; // Fehlerstatus zurücksetzen
+                  Debug.print(DBG_VERBOSE, "[pH Sensor] Raw value: %.2f mV, Filtered pH: %.2f", ph_raw_mV, storage.PhValue);
+              }
           }
 
           adc_orp.update();
@@ -194,7 +228,25 @@ void CombinedPollingTask(void *pvParameters) {
               if (orp_sensor_value >= 32768) orp_sensor_value -= 65536;
               adc_orp.start();
               samples_Orp.add(orp_sensor_value);
+              samples_Orp_Raw.add(orp_sensor_value); // Rohwert speichern
+              float orp_raw_mV = samples_Orp_Raw.getAverage(5) * 0.1875; // ADC-Wert in mV
+              storage.OrpRawValue = orp_raw_mV; // Speichere ORP-Rohwert
               storage.OrpValue = (samples_Orp.getAverage(5) * 0.1875 / 1000.0) * storage.OrpCalibCoeffs0 + storage.OrpCalibCoeffs1;
+
+              // Plausibilitätsprüfung für ORP-Rohwert
+              if (orp_raw_mV < MIN_VALID_ORP_RAW || orp_raw_mV > MAX_VALID_ORP_RAW) {
+                  if (!orp_sensor_error || (millis() - last_orp_error_report > SENSOR_ERROR_REPORT_INTERVAL)) {
+                      Debug.print(DBG_WARNING, "[ORP Sensor] Invalid raw value: %.2f mV", orp_raw_mV);
+                      char errorMsg[100];
+                      snprintf(errorMsg, sizeof(errorMsg), "{\"error\":\"ORP sensor invalid raw value: %.2f mV\"}", orp_raw_mV);
+                      mqttErrorPublish(errorMsg);
+                      orp_sensor_error = true;
+                      last_orp_error_report = millis();
+                  }
+              } else {
+                  orp_sensor_error = false; // Fehlerstatus zurücksetzen
+                  Debug.print(DBG_VERBOSE, "[ORP Sensor] Raw value: %.2f mV, Filtered ORP: %.2f mV", orp_raw_mV, storage.OrpValue);
+              }
           }
 
           adc_int.update();
@@ -234,8 +286,8 @@ void CombinedPollingTask(void *pvParameters) {
                   storage.HeatCurrentValue = 0.0; // Fehlerwert
               }
 
-              Debug.print(DBG_DEBUG, "pH: %5.0f - %4.2f - ORP: %5.0f - %3.0fmV - PSI: %5.0f - %4.2fBar - SaltCurrent: %5.0f - %4.2fA - FilterCurrent: %5.0f - %4.2fA - HeatCurrent: %5.0f - %4.2fA\r",
-                          ph_sensor_value, storage.PhValue, orp_sensor_value, storage.OrpValue, 
+              Debug.print(DBG_DEBUG, "pH: %5.0f - %4.2f - pH Raw: %.2f mV - ORP: %5.0f - %3.0f mV - ORP Raw: %.2f mV - PSI: %5.0f - %4.2f Bar - SaltCurrent: %5.0f - %4.2f A - FilterCurrent: %5.0f - %4.2f A - HeatCurrent: %5.0f - %4.2f A\r",
+                          ph_sensor_value, storage.PhValue, storage.PhRawValue, orp_sensor_value, storage.OrpValue, storage.OrpRawValue,
                           psi_sensor_value, storage.PSIValue, salt_current_sensor_value, storage.SaltCurrentValue,
                           filter_current_sensor_value, storage.FilterCurrentValue, heat_current_sensor_value, storage.HeatCurrentValue);
           }
@@ -249,10 +301,46 @@ void CombinedPollingTask(void *pvParameters) {
               adc_int.start();
 
               samples_Ph.add(ph_sensor_value);
+              samples_Ph_Raw.add(ph_sensor_value); // Rohwert speichern
+              float ph_raw_mV = samples_Ph_Raw.getAverage(5) * 0.1875; // ADC-Wert in mV
+              storage.PhRawValue = ph_raw_mV; // Speichere pH-Rohwert
               storage.PhValue = (samples_Ph.getAverage(5) * 0.1875 / 1000.0) * storage.pHCalibCoeffs0 + storage.pHCalibCoeffs1;
 
+              // Plausibilitätsprüfung für pH-Rohwert
+              if (ph_raw_mV < MIN_VALID_PH_RAW || ph_raw_mV > MAX_VALID_PH_RAW) {
+                  if (!ph_sensor_error || (millis() - last_ph_error_report > SENSOR_ERROR_REPORT_INTERVAL)) {
+                      Debug.print(DBG_WARNING, "[pH Sensor] Invalid raw value: %.2f mV", ph_raw_mV);
+                      char errorMsg[100];
+                      snprintf(errorMsg, sizeof(errorMsg), "{\"error\":\"pH sensor invalid raw value: %.2f mV\"}", ph_raw_mV);
+                      mqttErrorPublish(errorMsg);
+                      ph_sensor_error = true;
+                      last_ph_error_report = millis();
+                  }
+              } else {
+                  ph_sensor_error = false; // Fehlerstatus zurücksetzen
+                  Debug.print(DBG_VERBOSE, "[pH Sensor] Raw value: %.2f mV, Filtered pH: %.2f", ph_raw_mV, storage.PhValue);
+              }
+
               samples_Orp.add(orp_sensor_value);
+              samples_Orp_Raw.add(orp_sensor_value); // Rohwert speichern
+              float orp_raw_mV = samples_Orp_Raw.getAverage(5) * 0.1875; // ADC-Wert in mV
+              storage.OrpRawValue = orp_raw_mV; // Speichere ORP-Rohwert
               storage.OrpValue = (samples_Orp.getAverage(5) * 0.1875 / 1000.0) * storage.OrpCalibCoeffs0 + storage.OrpCalibCoeffs1;
+
+              // Plausibilitätsprüfung für ORP-Rohwert
+              if (orp_raw_mV < MIN_VALID_ORP_RAW || orp_raw_mV > MAX_VALID_ORP_RAW) {
+                  if (!orp_sensor_error || (millis() - last_orp_error_report > SENSOR_ERROR_REPORT_INTERVAL)) {
+                      Debug.print(DBG_WARNING, "[ORP Sensor] Invalid raw value: %.2f mV", orp_raw_mV);
+                      char errorMsg[100];
+                      snprintf(errorMsg, sizeof(errorMsg), "{\"error\":\"ORP sensor invalid raw value: %.2f mV\"}", orp_raw_mV);
+                      mqttErrorPublish(errorMsg);
+                      orp_sensor_error = true;
+                      last_orp_error_report = millis();
+                  }
+              } else {
+                  orp_sensor_error = false; // Fehlerstatus zurücksetzen
+                  Debug.print(DBG_VERBOSE, "[ORP Sensor] Raw value: %.2f mV, Filtered ORP: %.2f mV", orp_raw_mV, storage.OrpValue);
+              }
 
               samples_PSI.add(psi_sensor_value);
               storage.PSIValue = (samples_PSI.getAverage(5) * 0.1875 / 1000.0) * storage.PSICalibCoeffs0 + storage.PSICalibCoeffs1;
@@ -284,8 +372,8 @@ void CombinedPollingTask(void *pvParameters) {
                   storage.HeatCurrentValue = 0.0; // Fehlerwert
               }
 
-              Debug.print(DBG_DEBUG, "pH: %5.0f - %4.2f - ORP: %5.0f - %3.0fmV - PSI: %5.0f - %4.2fBar - SaltCurrent: %5.0f - %4.2fA - FilterCurrent: %5.0f - %4.2fA - HeatCurrent: %5.0f - %4.2fA\r",
-                          ph_sensor_value, storage.PhValue, orp_sensor_value, storage.OrpValue, 
+              Debug.print(DBG_DEBUG, "pH: %5.0f - %4.2f - pH Raw: %.2f mV - ORP: %5.0f - %3.0f mV - ORP Raw: %.2f mV - PSI: %5.0f - %4.2f Bar - SaltCurrent: %5.0f - %4.2f A - FilterCurrent: %5.0f - %4.2f A - HeatCurrent: %5.0f - %4.2f A\r",
+                          ph_sensor_value, storage.PhValue, storage.PhRawValue, orp_sensor_value, storage.OrpValue, storage.OrpRawValue,
                           psi_sensor_value, storage.PSIValue, salt_current_sensor_value, storage.SaltCurrentValue,
                           filter_current_sensor_value, storage.FilterCurrentValue, heat_current_sensor_value, storage.HeatCurrentValue);
           }
@@ -316,7 +404,7 @@ void FlowInit()
   flow_pulseCount = 0;
   flow_previousMillis = 0;
 
-  attachInterrupt(digitalPinToInterrupt(FLOW), flow_pulseCounter, RISING);
+  attachInterrupt(digitalPinToInterrupt(FLOW), flow_pulseCounter, FALLING);
 }
 
 void Flow2Init()
@@ -421,28 +509,38 @@ void pHRegulation(void *pvParameters) {
     td = millis();
     #endif
 
-    if (FiltrationPump.IsRunning() && (PhPID.GetMode() == AUTOMATIC)) {
-      if (PhPID.Compute()) {
-        Debug.print(DBG_VERBOSE, "Ph regulation: %10.2f, %13.9f, %13.9f, %17.9f", storage.PhPIDOutput, storage.PhValue, storage.Ph_SetPoint, storage.Ph_Kp);
-        if (storage.PhPIDOutput < 30000.0) storage.PhPIDOutput = 0;
-        Debug.print(DBG_INFO, "Ph regulation: %10.2f", storage.PhPIDOutput);
-#ifdef SIMU
-        newpHOutput = true;
-#endif
+    if (FiltrationPump.IsRunning()) {
+      if (PhPID.GetMode() == AUTOMATIC) {
+        // Automatik-Modus: PID-Regelung
+        if (PhPID.Compute()) {
+          Debug.print(DBG_VERBOSE, "Ph regulation: %10.2f, %13.9f, %13.9f, %17.9f", 
+                      storage.PhPIDOutput, storage.PhValue, storage.Ph_SetPoint, storage.Ph_Kp);
+          if (storage.PhPIDOutput < 30000.0) storage.PhPIDOutput = 0;
+          Debug.print(DBG_INFO, "Ph regulation: %10.2f", storage.PhPIDOutput);
+          #ifdef SIMU
+          newpHOutput = true;
+          #endif
+        }
+        #ifdef SIMU
+        else newpHOutput = false;
+        #endif
+        unsigned long now = millis();
+        if (now - storage.PhPIDwindowStartTime > storage.PhPIDWindowSize) {
+          storage.PhPIDwindowStartTime += storage.PhPIDWindowSize;
+        }
+        if ((unsigned long)storage.PhPIDOutput <= now - storage.PhPIDwindowStartTime)
+          PhPump.Stop();
+        else
+          PhPump.Start();
+      } else {
+        // Manueller Modus: Keine automatische Steuerung durch PID
+        Debug.print(DBG_VERBOSE, "[PhPump] Manual mode: PhPump state=%d", PhPump.IsRunning());
+        // Die Pumpe behält ihren Zustand, wird durch externe Aufrufe von PhPump.Start() oder PhPump.Stop() gesteuert
       }
-#ifdef SIMU
-      else newpHOutput = false;
-#endif
-      unsigned long now = millis();
-      if (now - storage.PhPIDwindowStartTime > storage.PhPIDWindowSize) {
-        storage.PhPIDwindowStartTime += storage.PhPIDWindowSize;
-      }
-      if ((unsigned long)storage.PhPIDOutput <= now - storage.PhPIDwindowStartTime)
-        PhPump.Stop();
-      else
-        PhPump.Start();
     } else {
-      PhPump.Stop(); // Ensure pump is off when conditions not met
+      // Filtrationspumpe läuft nicht: pH-Pumpe stoppen
+      PhPump.Stop();
+      Debug.print(DBG_INFO, "[PhPump] Stopped: FiltrationPump not running");
     }
 
     #ifdef CHRONO
@@ -646,7 +744,7 @@ void FlowMeasures(void *pvParameters) {
       detachInterrupt(digitalPinToInterrupt(FLOW));
       byte pulseCount = flow_pulseCount;
       flow_pulseCount = 0;
-      attachInterrupt(digitalPinToInterrupt(FLOW), flow_pulseCounter, RISING);
+      attachInterrupt(digitalPinToInterrupt(FLOW), flow_pulseCounter, FALLING);
       portEXIT_CRITICAL(&mux);
       flow_pulse1Sec = pulseCount;
       flow_calibrationFactor = storage.FLOW_Pulse;
@@ -702,59 +800,65 @@ void TempInit()
     uint8_t sensorCount_A = 0;
     uint8_t sensorCount_W = 0;
 
+    // Statische Arrays statt std::vector
+    DeviceAddress foundAddresses_A[MAX_ADDRESSES];
+    DeviceAddress foundAddresses_W[MAX_ADDRESSES];
+    uint8_t foundCount_A = 0;
+    uint8_t foundCount_W = 0;
+
     // Start up the library
     sensors_W.begin();
-    sensors_W.begin(); // Workaround for OneWire library bug
+    sensors_W.begin(); // Workaround für OneWire-Bug
+    vTaskDelay(pdMS_TO_TICKS(100));
     sensors_A.begin();
+    vTaskDelay(pdMS_TO_TICKS(100));
 
     Debug.print(DBG_INFO, "[DS18B20 - INIT] 1wire W devices: %d device(s) found", sensors_W.getDeviceCount());
     Debug.print(DBG_INFO, "[DS18B20 - INIT] 1wire A devices: %d device(s) found", sensors_A.getDeviceCount());
-
-    // Schritt 1: Sammle alle aktuell erkannten Sensoradressen
-    std::vector<DeviceAddress> foundAddresses_A;
-    std::vector<DeviceAddress> foundAddresses_W;
 
     // Sensoren auf Bus A scannen
     Debug.print(DBG_INFO, "[DS18B20 - INIT] Searching for sensors on bus A");
     while (sensors_A.getAddress(tempDeviceAddress_A.data(), sensorCount_A) && sensorCount_A < MAX_ADDRESSES)
     {
-        foundAddresses_A.push_back(tempDeviceAddress_A);
-        Debug.print(DBG_VERBOSE, "[DS18B20] Sensor A%d - Address: %02X%02X%02X%02X%02X%02X%02X%02X", 
+        foundAddresses_A[foundCount_A] = tempDeviceAddress_A;
+        Debug.print(DBG_VERBOSE, "[DS18B20] Sensor A%d - Address: %02X%02X%02X%02X%02X%02X%02X%02X",
                     sensorCount_A, tempDeviceAddress_A[0], tempDeviceAddress_A[1], tempDeviceAddress_A[2],
-                    tempDeviceAddress_A[3], tempDeviceAddress_A[4], tempDeviceAddress_A[5], 
+                    tempDeviceAddress_A[3], tempDeviceAddress_A[4], tempDeviceAddress_A[5],
                     tempDeviceAddress_A[6], tempDeviceAddress_A[7]);
         sensorCount_A++;
+        foundCount_A++;
     }
 
     // Sensoren auf Bus W scannen
     Debug.print(DBG_INFO, "[DS18B20 - INIT] Searching for sensors on bus W");
     while (sensors_W.getAddress(tempDeviceAddress_W.data(), sensorCount_W) && sensorCount_W < MAX_ADDRESSES)
     {
-        foundAddresses_W.push_back(tempDeviceAddress_W);
-        Debug.print(DBG_VERBOSE, "[DS18B20] Sensor W%d - Address: %02X%02X%02X%02X%02X%02X%02X%02X", 
+        foundAddresses_W[foundCount_W] = tempDeviceAddress_W;
+        Debug.print(DBG_VERBOSE, "[DS18B20] Sensor W%d - Address: %02X%02X%02X%02X%02X%02X%02X%02X",
                     sensorCount_W, tempDeviceAddress_W[0], tempDeviceAddress_W[1], tempDeviceAddress_W[2],
-                    tempDeviceAddress_W[3], tempDeviceAddress_W[4], tempDeviceAddress_W[5], 
+                    tempDeviceAddress_W[3], tempDeviceAddress_W[4], tempDeviceAddress_W[5],
                     tempDeviceAddress_W[6], tempDeviceAddress_W[7]);
         sensorCount_W++;
+        foundCount_W++;
     }
 
-    // Schritt 2: Initialisiere leere Slots mit Null-Adressen
+    // Initialisiere leere Slots mit Null-Adressen
     uint8_t zeroAddress[8] = {0};
     for (uint8_t i = 0; i < MAX_ADDRESSES; i++)
     {
         bool slotUsed_A = false;
         bool slotUsed_W = false;
-        for (const auto& addr : foundAddresses_A)
+        for (uint8_t j = 0; j < foundCount_A; j++)
         {
-            if (memcmp(&storage.address_A_0[i * 8], addr.data(), 8) == 0)
+            if (memcmp(&storage.address_A_0[i * 8], foundAddresses_A[j].data(), 8) == 0)
             {
                 slotUsed_A = true;
                 break;
             }
         }
-        for (const auto& addr : foundAddresses_W)
+        for (uint8_t j = 0; j < foundCount_W; j++)
         {
-            if (memcmp(&storage.address_W_0[i * 8], addr.data(), 8) == 0)
+            if (memcmp(&storage.address_W_0[i * 8], foundAddresses_W[j].data(), 8) == 0)
             {
                 slotUsed_W = true;
                 break;
@@ -770,9 +874,9 @@ void TempInit()
         }
     }
 
-    // Schritt 3: Vergleiche mit gespeicherten Adressen und aktualisiere NVS
+    // Vergleiche mit gespeicherten Adressen und aktualisiere NVS
     bool usedSlots_A[MAX_ADDRESSES] = {false};
-    for (size_t i = 0; i < foundAddresses_A.size(); i++)
+    for (uint8_t i = 0; i < foundCount_A; i++)
     {
         bool addressFound = false;
         for (uint8_t j = 0; j < MAX_ADDRESSES; j++)
@@ -800,10 +904,15 @@ void TempInit()
                 bool isInvalid = true;
                 if (!isEmpty)
                 {
-                    isInvalid = std::none_of(foundAddresses_A.begin(), foundAddresses_A.end(),
-                                             [&](const DeviceAddress& addr) { 
-                                                 return memcmp(addr.data(), storedAddress, 8) == 0; 
-                                             });
+                    isInvalid = true;
+                    for (uint8_t k = 0; k < foundCount_A; k++)
+                    {
+                        if (memcmp(foundAddresses_A[k].data(), storedAddress, 8) == 0)
+                        {
+                            isInvalid = false;
+                            break;
+                        }
+                    }
                 }
 
                 if (isEmpty || isInvalid)
@@ -822,7 +931,7 @@ void TempInit()
     }
 
     bool usedSlots_W[MAX_ADDRESSES] = {false};
-    for (size_t i = 0; i < foundAddresses_W.size(); i++)
+    for (uint8_t i = 0; i < foundCount_W; i++)
     {
         bool addressFound = false;
         for (uint8_t j = 0; j < MAX_ADDRESSES; j++)
@@ -850,10 +959,15 @@ void TempInit()
                 bool isInvalid = true;
                 if (!isEmpty)
                 {
-                    isInvalid = std::none_of(foundAddresses_W.begin(), foundAddresses_W.end(),
-                                             [&](const DeviceAddress& addr) { 
-                                                 return memcmp(addr.data(), storedAddress, 8) == 0; 
-                                             });
+                    isInvalid = true;
+                    for (uint8_t k = 0; k < foundCount_W; k++)
+                    {
+                        if (memcmp(foundAddresses_W[k].data(), storedAddress, 8) == 0)
+                        {
+                            isInvalid = false;
+                            break;
+                        }
+                    }
                 }
 
                 if (isEmpty || isInvalid)
@@ -871,19 +985,19 @@ void TempInit()
         }
     }
 
-    // Schritt 4: Setze die Auflösung für alle Sensoren
+    // Setze die Auflösung für alle Sensoren
     sensors_W.setResolution(TEMPERATURE_RESOLUTION);
     sensors_A.setResolution(TEMPERATURE_RESOLUTION);
 
-    // Schritt 5: Fehlerbehandlung
-    if (foundAddresses_A.empty() && foundAddresses_W.empty())
+    // Fehlerbehandlung
+    if (foundCount_A == 0 && foundCount_W == 0)
     {
         Debug.print(DBG_ERROR, "[DS18B20 - INIT] No temperature sensors found");
     }
-    else if (foundAddresses_A.size() > MAX_ADDRESSES || foundAddresses_W.size() > MAX_ADDRESSES)
+    else if (foundCount_A > MAX_ADDRESSES || foundCount_W > MAX_ADDRESSES)
     {
         Debug.print(DBG_WARNING, "[DS18B20 - INIT] Too many sensors detected (A: %d, W: %d, max: %d)",
-        foundAddresses_A.size(), foundAddresses_W.size(), MAX_ADDRESSES);
+                    foundCount_A, foundCount_W, MAX_ADDRESSES);
     }
     else
     {
@@ -1124,8 +1238,15 @@ void getTemp()
         if (storage.Array_A[i] < MAX_ADDRESSES && temp_A[i] != ERROR_TEMP_VALUE)
         {
             const char* fieldName = NV_STORAGE_MAPPING_A[storage.Array_A[i]];
+            
             if (strcmp(fieldName, "SolarTemp") == 0)
-                assignTemperature(storage.SolarTemp, temp_A[i], fieldName, i, "A");
+            {
+                if (storage.SolarLocExt == 0)
+                {
+                    assignTemperature(storage.SolarTemp, temp_A[i], fieldName, i, "A");
+                }
+                // Wenn SolarLocExt == 1, ignoriere SolarTemp
+            }
             else if (strcmp(fieldName, "SolarVLTemp") == 0)
                 assignTemperature(storage.SolarVLTemp, temp_A[i], fieldName, i, "A");
             else if (strcmp(fieldName, "SolarRLTemp") == 0)
@@ -1214,78 +1335,104 @@ void TempTask(void *pvParameters) {
 }
 
 // Asynchronous reading of BME280 data
-void readBME280(void *pvParameters) {
-  Debug.print(DBG_INFO, "[TASKS] readBME280 started on core %d", xPortGetCoreID());
-  while (!startTasks);
-  Debug.print(DBG_DEBUG, "[TASKS] readBME280 running...");
-  vTaskDelay(DT5);
+void readBME280(void* pvParameters) {
+    Debug.print(DBG_INFO, "[TASKS] readBME280 started on core %d", xPortGetCoreID());
+    while (!startTasks);
+    Debug.print(DBG_DEBUG, "[TASKS] readBME280 running...");
+    vTaskDelay(DT5); // 520 ms
 
-  esp_task_wdt_add(NULL);
-  TickType_t period = PT5;
-  TickType_t ticktime = xTaskGetTickCount();
-  static UBaseType_t hwm = 0;
+    esp_task_wdt_add(NULL);
+    TickType_t period = PT5; // 2000 ms
+    TickType_t ticktime = xTaskGetTickCount();
+    static UBaseType_t hwm = 0;
 
-  #ifdef CHRONO
-  unsigned long td;
-  int t_act=0, t_min=999, t_max=0;
-  float t_mean=0.;
-  int n=1;
-  #endif
+    #ifdef CHRONO
+    unsigned long td;
+    int t_act = 0, t_min = 999, t_max = 0;
+    float t_mean = 0.;
+    int n = 1;
+    #endif
 
-  // Initialisiere BME280 einmal
-  static bool bmeInitialized = false;
-  if (!bmeInitialized)
-  {
-      if (bme.begin(0x76))
-      {
-          Debug.print(DBG_INFO, "[BME280] BME280 initialized successfully");
-          bmeInitialized = true;
-      }
-      else
-      {
-          Debug.print(DBG_ERROR, "[BME280] Failed to initialize BME280");
-      }
-  }
+    static bool bmeInitialized = false;
+    if (!bmeInitialized) {
+        if (bme.begin(0x76)) {
+            bme.setSampling(
+                Adafruit_BME280::MODE_NORMAL,
+                Adafruit_BME280::SAMPLING_X4, // Temperatur
+                Adafruit_BME280::SAMPLING_X4, // Druck
+                Adafruit_BME280::SAMPLING_X4, // Feuchtigkeit
+                Adafruit_BME280::FILTER_X2,
+                Adafruit_BME280::STANDBY_MS_500);
+            Debug.print(DBG_INFO, "[BME280] BME280 initialized successfully");
+            bmeInitialized = true;
+        } else {
+            Debug.print(DBG_ERROR, "[BME280] Failed to initialize BME280");
+        }
+    }
 
-  for (;;) {
-      esp_task_wdt_reset();
+    for (;;) {
+        esp_task_wdt_reset();
 
-      #ifdef CHRONO
-      td = millis();
-      #endif
+        #ifdef CHRONO
+        td = millis();
+        #endif
 
-      if (bmeInitialized)
-      {
-          lockI2C();
-          storage.AirHum = bme.readHumidity();
-          storage.AirPress = bme.readPressure() / 100.0F;
-          storage.AirTemp = bme.readTemperature();
-          samples_AHum.add(storage.AirHum);
-          samples_AP.add(storage.AirPress);
-          samples_ATemp.add(storage.AirTemp);
-          storage.AirHum = samples_AHum.getAverage();
-          storage.AirPress = samples_AP.getAverage();
-          storage.AirTemp = samples_ATemp.getAverage();
-          Debug.print(DBG_DEBUG, "[BME280] BME280: T=%6.2f°C P=%7.2fhPa H=%6.2f%%",
-                      storage.AirTemp, storage.AirPress, storage.AirHum);
-          unlockI2C();
-      }
-      else
-      {
-          Debug.print(DBG_WARNING, "[BME280] BME280 not initialized");
-      }
+        if (bmeInitialized) {
+            lockI2C();
+            float temp = bme.readTemperature();
+            float humidity = bme.readHumidity();
+            float pressure = bme.readPressure() / 100.0F;
 
-      #ifdef CHRONO
-      t_act = millis() - td;
-      if(t_act > t_max) t_max = t_act;
-      if(t_act < t_min) t_min = t_act;
-      t_mean += (t_act - t_mean)/n;
-      ++n;
-      Debug.print(DBG_INFO,"[readBME280] td: %d t_act: %d t_min: %d t_max: %d t_mean: %4.1f",td,t_act,t_min,t_max,t_mean);
-      #endif
+            // Plausibilitätsprüfung
+            if (isnan(temp) || temp < MIN_VALID_TEMP || temp > MAX_VALID_TEMP) {
+                Debug.print(DBG_WARNING, "[BME280] Invalid temperature: %.2f °C", temp);
+                char errorMsg[100];
+                snprintf(errorMsg, sizeof(errorMsg), "{\"error\":\"BME280 invalid temperature: %.2f °C\"}", temp);
+                mqttErrorPublish(errorMsg);
+            } else {
+                samples_ATemp.add(temp);
+                storage.AirTemp = samples_ATemp.getAverage(5);
+                Debug.print(DBG_DEBUG, "[BME280] Raw Temp: %.2f °C, Filtered: %.2f °C", temp, storage.AirTemp);
+            }
 
-      stack_mon(hwm);
-      Debug.print(DBG_DEBUG, "[stack_mon] %s: %u bytes", pcTaskGetName(NULL), uxTaskGetStackHighWaterMark(NULL));
-      vTaskDelayUntil(&ticktime, period);
-  }
+            if (isnan(humidity) || humidity < 0 || humidity > 100) {
+                Debug.print(DBG_WARNING, "[BME280] Invalid humidity: %.2f %%", humidity);
+                char errorMsg[100];
+                snprintf(errorMsg, sizeof(errorMsg), "{\"error\":\"BME280 invalid humidity: %.2f %%\"}", humidity);
+                mqttErrorPublish(errorMsg);
+            } else {
+                samples_AHum.add(humidity);
+                storage.AirHum = samples_AHum.getAverage(5);
+            }
+
+            if (isnan(pressure) || pressure < 800 || pressure > 1200) {
+                Debug.print(DBG_WARNING, "[BME280] Invalid pressure: %.2f hPa", pressure);
+                char errorMsg[100];
+                snprintf(errorMsg, sizeof(errorMsg), "{\"error\":\"BME280 invalid pressure: %.2f hPa\"}", pressure);
+                mqttErrorPublish(errorMsg);
+            } else {
+                samples_AP.add(pressure);
+                storage.AirPress = samples_AP.getAverage(5);
+            }
+
+            Debug.print(DBG_INFO, "[BME280] T=%.2f°C, P=%.2fhPa, H=%.2f%%, Free Heap: %d",
+                        storage.AirTemp, storage.AirPress, storage.AirHum, ESP.getFreeHeap());
+            unlockI2C();
+        } else {
+            Debug.print(DBG_WARNING, "[BME280] BME280 not initialized");
+        }
+
+        #ifdef CHRONO
+        t_act = millis() - td;
+        if (t_act > t_max) t_max = t_act;
+        if (t_act < t_min) t_min = t_act;
+        t_mean += (t_act - t_mean) / n;
+        ++n;
+        Debug.print(DBG_INFO, "[readBME280] td: %d t_act: %d t_min: %d t_max: %d t_mean: %4.1f", td, t_act, t_min, t_max, t_mean);
+        #endif
+
+        stack_mon(hwm);
+        Debug.print(DBG_DEBUG, "[stack_mon] %s: %u bytes", pcTaskGetName(NULL), uxTaskGetStackHighWaterMark(NULL));
+        vTaskDelayUntil(&ticktime, period);
+    }
 }

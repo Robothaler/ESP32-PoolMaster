@@ -38,17 +38,17 @@
 struct StoreStruct
 {
   uint8_t ConfigVersion;   // This is for testing if first time using eeprom or not
-  String SSID, WIFI_PASS, MQTT_USER, MQTT_PASS, MQTT_NAME, SaltStatus;
+  String SSID, WIFI_PASS, MQTT_USER, MQTT_PASS, MQTT_NAME, SaltStatus, ResetTimestamp;
   IPAddress MQTT_IP;
   uint32_t MQTT_PORT, Uptime, LastUptimeUpdate;
-  bool WIFI_OnOff, MQTTLOGIN_OnOff, BUS_A_B, Ph_RegulationOnOff, Orp_RegulationOnOff, AutoMode, SolarLocExt, SolarMode, Salt_Chlor, SaltMode, SaltPolarity, WinterMode, WaterHeat, ValveMode, CleanMode, ValveSwitch, WaterFillMode;
-  uint8_t FiltrationDuration, FiltrationStart, FiltrationStop, FiltrationStartMin, FiltrationStopMax, DelayPIDs, SolarStartMin, SolarStopMax, ResetReason;
+  bool WIFI_OnOff, MQTTLOGIN_OnOff, BUS_A_B, Ph_RegulationOnOff, Orp_RegulationOnOff, AutoMode, SolarLocExt, SolarOnline, SolarMode, Salt_Chlor, SaltMode, SaltPolarity, WinterMode, WaterHeat, ValveMode, CleanMode, ValveSwitch, WaterFillMode, HeatPumpMode;
+  uint8_t FiltrationDuration, FiltrationStart, FiltrationStop, FiltrationStartMin, FiltrationStopMax, DelayPIDs, SolarStartMin, SolarStopMax, ResetReason, SolarPumpStatus, ValveStatus;
   uint8_t address_A_0[8], address_A_1[8], address_A_2[8], address_A_3[8], address_A_4[8], Array_A[5];
   uint8_t address_W_0[8], address_W_1[8], address_W_2[8], address_W_3[8], address_W_4[8], Array_W[5];
   unsigned long PhPumpUpTimeLimit, ChlPumpUpTimeLimit, WaterFillUpTimeLimit, WaterFillDuration, SaltPumpRunTime, PublishPeriod;
   unsigned long PhPIDWindowSize, OrpPIDWindowSize, PhPIDwindowStartTime, OrpPIDwindowStartTime, WaterFillAnCon;
   double Ph_SetPoint, Orp_SetPoint, PSI_HighThreshold, PSI_MedThreshold, FLOW_Pulse, FLOW_HighThreshold, FLOW_MedThreshold, FLOW2_Pulse, FLOW2_HighThreshold, FLOW2_MedThreshold, WaterTempLowThreshold, WaterTemp_SetPoint, pHCalibCoeffs0, pHCalibCoeffs1, OrpCalibCoeffs0, OrpCalibCoeffs1, PSICalibCoeffs0, PSICalibCoeffs1, SaltDiff;
-  double Ph_Kp, Ph_Ki, Ph_Kd, Orp_Kp, Orp_Ki, Orp_Kd, PhPIDOutput, OrpPIDOutput, PhValue, OrpValue, PSIValue, FLOWValue, FLOW2Value;
+  double Ph_Kp, Ph_Ki, Ph_Kd, Orp_Kp, Orp_Ki, Orp_Kd, PhPIDOutput, OrpPIDOutput, PhValue, PhRawValue, OrpValue, OrpRawValue, PSIValue, FLOWValue, FLOW2Value;
   double WaterSTemp, WaterITemp, WaterBTemp, WaterWPTemp, WaterWTTemp, AirInTemp, AirTemp, AirHum, AirPress, SolarTemp, SolarVLTemp, SolarRLTemp; 
   double AcidFill, ChlFill, pHTankVol, ChlTankVol, pHPumpFR, ChlPumpFR, WaterFillFR, SaltCurrentValue, FilterCurrentValue, HeatCurrentValue, SaltCurrentCalibCoeffs0, SaltCurrentCalibCoeffs1, FilterCurrentCalibCoeffs0, FilterCurrentCalibCoeffs1, HeatCurrentCalibCoeffs0HeatCurrentCalibCoeffs1;
   float SaltConcentration, CellConstant, SaltNeeded, PoolVolume,;
@@ -58,17 +58,17 @@ struct StoreStruct
 struct StoreStruct
 {
     uint8_t ConfigVersion;
-    String SSID, WIFI_PASS, MQTT_USER, MQTT_PASS, MQTT_NAME, SaltStatus;
+    String SSID, WIFI_PASS, MQTT_USER, MQTT_PASS, MQTT_NAME, SaltStatus, ResetTimestamp;
     IPAddress MQTT_IP;
     uint32_t MQTT_PORT, Uptime, LastUptimeUpdate;
-    bool WIFI_OnOff, MQTTLOGIN_OnOff, BUS_A_B, Ph_RegulationOnOff, Orp_RegulationOnOff, AutoMode, SolarLocExt, SolarMode, Salt_Chlor, SaltMode, SaltPolarity, WinterMode, WaterHeat, ValveMode, CleanMode, ValveSwitch, WaterFillMode;
-    uint8_t FiltrationDuration, FiltrationStart, FiltrationStop, FiltrationStartMin, FiltrationStopMax, DelayPIDs, SolarStartMin, SolarStopMax, ResetReason;
+    bool WIFI_OnOff, MQTTLOGIN_OnOff, BUS_A_B, Ph_RegulationOnOff, Orp_RegulationOnOff, AutoMode, SolarLocExt, SolarOnline, SolarMode, Salt_Chlor, SaltMode, SaltPolarity, WinterMode, WaterHeat, ValveMode, CleanMode, ValveSwitch, WaterFillMode, HeatPumpMode;
+    uint8_t FiltrationDuration, FiltrationStart, FiltrationStop, FiltrationStartMin, FiltrationStopMax, DelayPIDs, SolarStartMin, SolarStopMax, ResetReason, SolarPumpStatus, ValveStatus;
     uint8_t address_A_0[8], address_A_1[8], address_A_2[8], address_A_3[8], address_A_4[8], Array_A[5]; // Array for DS18B20-adress A
     uint8_t address_W_0[8], address_W_1[8], address_W_2[8], address_W_3[8], address_W_4[8], Array_W[5]; // Array for DS18B20-adress W
     unsigned long PhPumpUpTimeLimit, ChlPumpUpTimeLimit, WaterFillUpTimeLimit, WaterFillDuration, SaltPumpRunTime, PublishPeriod;
     unsigned long PhPIDWindowSize, OrpPIDWindowSize, PhPIDwindowStartTime, OrpPIDwindowStartTime, WaterFillAnCon;
     double Ph_SetPoint, Orp_SetPoint, PSI_HighThreshold, PSI_MedThreshold, FLOW_Pulse, FLOW_HighThreshold, FLOW_MedThreshold, FLOW2_Pulse, FLOW2_HighThreshold, FLOW2_MedThreshold, WaterTempLowThreshold, WaterTemp_SetPoint, pHCalibCoeffs0, pHCalibCoeffs1, OrpCalibCoeffs0, OrpCalibCoeffs1, PSICalibCoeffs0, PSICalibCoeffs1, SaltDiff;
-    double Ph_Kp, Ph_Ki, Ph_Kd, Orp_Kp, Orp_Ki, Orp_Kd, PhPIDOutput, OrpPIDOutput, PhValue, OrpValue, PSIValue, FLOWValue, FLOW2Value;
+    double Ph_Kp, Ph_Ki, Ph_Kd, Orp_Kp, Orp_Ki, Orp_Kd, PhPIDOutput, OrpPIDOutput, PhValue, PhRawValue, OrpValue, OrpRawValue, PSIValue, FLOWValue, FLOW2Value;
     double WaterSTemp, WaterITemp, WaterBTemp, WaterWPTemp, WaterWTTemp, AirInTemp, AirTemp, AirHum, AirPress, SolarTemp, SolarVLTemp, SolarRLTemp;
     double AcidFill, ChlFill, pHTankVol, ChlTankVol, pHPumpFR, ChlPumpFR, WaterFillFR, SaltCurrentValue, FilterCurrentValue, HeatCurrentValue, SaltCurrentCalibCoeffs0, SaltCurrentCalibCoeffs1, FilterCurrentCalibCoeffs0, FilterCurrentCalibCoeffs1, HeatCurrentCalibCoeffs0, HeatCurrentCalibCoeffs1;
     float SaltConcentration, CellConstant, SaltNeeded, PoolVolume;
@@ -88,8 +88,8 @@ unsigned long getDurationSafe(unsigned long start, unsigned long current);
 const char* resetReasonToString(uint8_t reason);
 
 //Queue object to store incoming JSON commands (up to 10)
-#define QUEUE_ITEMS_NBR 10
-#define QUEUE_ITEM_SIZE 100
+#define QUEUE_ITEMS_NBR 20
+#define QUEUE_ITEM_SIZE 150
 extern QueueHandle_t queueIn;
 
 //Set the I2C HEX Adress for the BME280 Temperature, Humidity and Airpressure-Sensor for the external temperature
@@ -137,6 +137,25 @@ void publishPoolMode(int event);
 void publishSolarMode(int event);
 void connectToWiFi();
 void connectToMqtt();
+
+// Converts ESP32 reset reason enum to a human-readable string
+// Returns a String describing the reset reason
+String resetReasonToString(esp_reset_reason_t reason) {
+    switch (reason) {
+        case ESP_RST_UNKNOWN:    return "Unknown";
+        case ESP_RST_POWERON:    return "Power-on";
+        case ESP_RST_EXT:        return "External";
+        case ESP_RST_SW:         return "Software";
+        case ESP_RST_PANIC:      return "Panic";
+        case ESP_RST_INT_WDT:    return "Int Watchdog";
+        case ESP_RST_TASK_WDT:   return "Task Watchdog";
+        case ESP_RST_WDT:        return "Other Watchdog";
+        case ESP_RST_DEEPSLEEP:  return "Deep Sleep";
+        case ESP_RST_BROWNOUT:   return "Brownout";
+        case ESP_RST_SDIO:       return "SDIO";
+        default:                 return "Invalid";
+    }
+}
 
 // DS18B20 SENSOR-Mapping to save the sensoradress and Indexnumber to nvs
 extern const char* NV_STORAGE_MAPPING_A[];

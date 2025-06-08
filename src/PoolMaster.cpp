@@ -104,23 +104,6 @@ unsigned long getDurationSafe(unsigned long start, unsigned long current) {
     return current - start;
 }
 
-const char* resetReasonToString(uint8_t reason) {
-    switch (reason) {
-        case ESP_RST_UNKNOWN:    return "Unknown";
-        case ESP_RST_POWERON:    return "Power-on";
-        case ESP_RST_EXT:        return "External";
-        case ESP_RST_SW:         return "Software";
-        case ESP_RST_PANIC:      return "Panic";
-        case ESP_RST_INT_WDT:    return "Int Watchdog";
-        case ESP_RST_TASK_WDT:   return "Task Watchdog";
-        case ESP_RST_WDT:        return "Other Watchdog";
-        case ESP_RST_DEEPSLEEP:  return "Deep Sleep";
-        case ESP_RST_BROWNOUT:   return "Brownout";
-        case ESP_RST_SDIO:       return "SDIO";
-        default:                 return "Invalid";
-    }
-}
-
 void PoolMaster(void *pvParameters)
 {
 
@@ -556,6 +539,10 @@ Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID())
         WaterFill.Stop();
         WaterFillError = true;
         Debug.print(DBG_ERROR, "[WaterFill] WaterFill stopped. MaxUpTime is reached: WaterFillDuration: %lu ms and WaterFillUpTimeLimit: %lu ms", WaterFill.UpTime, storage.WaterFillUpTimeLimit);
+        char errorMsg[100];
+        snprintf(errorMsg, sizeof(errorMsg), "{\"error\":\"WaterFill stopped due to MaxUpTime reached\",\"Duration\":%lu,\"Limit\":%lu}", 
+                WaterFill.UpTime, storage.WaterFillUpTimeLimit);
+        mqttErrorPublish(errorMsg);
     }
 
     // Check waterMinLvl and Timestamp since last MinLevel
@@ -700,25 +687,25 @@ Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID())
         // Check salt level
         if (saltConcentration < LOW_SALT_THRESHOLD) {
             storage.SaltStatus = "Low Salt";
-            // Calculate required salt amount (in kg)
             storage.SaltNeeded = (TARGET_SALT_REF - saltConcentration) * POOL_VOLUME / 1000.0;
             saveParam("SaltNeeded", storage.SaltNeeded);
             Debug.print(DBG_INFO, "[Salt] Low Salt: %.2f g/L, Add %.1f kg", saltConcentration, storage.SaltNeeded);
-            mqttErrorPublish("{\"SaltStatus\":\"Low Salt\",\"SaltConcentration\":");
-            mqttErrorPublish(String(saltConcentration, 2).c_str());
-            mqttErrorPublish(",\"SaltNeeded\":");
-            mqttErrorPublish(String(storage.SaltNeeded, 1).c_str());
-            mqttErrorPublish("}");
-        } else if (saltConcentration > TARGET_SALT_MAX) {
+            char errorMsg[100];
+            snprintf(errorMsg, sizeof(errorMsg), "{\"SaltStatus\":\"Low Salt\",\"SaltConcentration\":%.2f,\"SaltNeeded\":%.1f}", 
+                    saltConcentration, storage.SaltNeeded);
+            mqttErrorPublish(errorMsg);
+        }
+        if (saltConcentration > TARGET_SALT_MAX) {
             storage.SaltStatus = "High Salt";
             storage.SaltNeeded = 0.0;
             saveParam("SaltNeeded", storage.SaltNeeded);
             Debug.print(DBG_INFO, "[Salt] High Salt: %.2f g/L", saltConcentration);
-            mqttErrorPublish("{\"SaltStatus\":\"High Salt\",\"SaltConcentration\":");
-            mqttErrorPublish(String(saltConcentration, 2).c_str());
-            mqttErrorPublish("}");
+            char errorMsg[100];
+            snprintf(errorMsg, sizeof(errorMsg), "{\"SaltStatus\":\"High Salt\",\"SaltConcentration\":%.2f}", 
+                    saltConcentration);
+            mqttErrorPublish(errorMsg);
         } else {
-            storage.SaltStatus = "OK";
+                    storage.SaltStatus = "OK";
             storage.SaltNeeded = 0.0;
             saveParam("SaltNeeded", storage.SaltNeeded);
             Debug.print(DBG_INFO, "[Salt] OK: %.2f g/L", saltConcentration);
@@ -783,8 +770,8 @@ Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID())
         mqttErrorPublish("{\"PSI Error\":1}");
     }
 
-    //If filtration pump has been running for over 40secs but flow in Main-Pipe is still low, stop the filtration pump, something is wrong, set error flag
-    if (FiltrationPump.IsRunning() && ((millis() - FiltrationPump.LastStartTime) > 40000) && (storage.FLOWValue < storage.FLOW_MedThreshold))
+    //If filtration pump has been running for over 60secs but flow in Main-Pipe is still low, stop the filtration pump, something is wrong, set error flag
+    if (FiltrationPump.IsRunning() && ((millis() - FiltrationPump.LastStartTime) > 60000) && (storage.FLOWValue < storage.FLOW_MedThreshold))
     {
         FiltrationPump.Stop();
         SaltPump.Stop();
@@ -864,6 +851,7 @@ void SetPhPID(bool Enable)
     storage.PhPIDwindowStartTime = millis();
     PhPID.SetMode(AUTOMATIC);
     storage.Ph_RegulationOnOff = 1;
+    Debug.print(DBG_INFO, "[PhPID] Enabled (AUTOMATIC mode)");
   }
   else
   {
@@ -872,6 +860,7 @@ void SetPhPID(bool Enable)
     storage.Ph_RegulationOnOff = 0;
     storage.PhPIDOutput = 0.0;
     PhPump.Stop();
+    Debug.print(DBG_INFO, "[PhPID] Disabled (MANUAL mode)");
   }
 }
 

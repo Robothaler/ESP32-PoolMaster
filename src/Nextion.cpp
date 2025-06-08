@@ -18,7 +18,7 @@ static volatile int CurrentPage = 0;
 static volatile bool TFT_ON = true;           // display status
 static volatile bool refresh = false;         // flag to force display refresh
 
-static String temp;
+static String temp;                           // TODO: Replace with char buffer to avoid String fragmentation
 static unsigned long LastAction = 0;          // Last action time done on TFT. Go to sleep after TFT_SLEEP
 static char HourBuffer[9];
 uint32_t LastTFTUpdate = 0U;
@@ -48,43 +48,45 @@ static uint8_t debounceR2    = 0;
 static uint8_t debouncepHP   = 0;
 static uint8_t debounceChlP  = 0;
 static uint8_t debounceWFM   = 0;
+static uint8_t debounceHPM   = 0;
 static uint8_t debounceWF    = 0;
 static uint8_t debounceWiFi  = 0;
 static uint8_t debounceMQL   = 0;
+static uint8_t debounceSolV  = 0;
 
-// New variables for salt status cycling
+// variables for salt status cycling
 static unsigned long lastSaltUpdate = 0;
 static int saltDisplayState = 0;                        // 0: Polarity, 1: Salt Current, 2: Salt Status
 static const unsigned long saltDisplayInterval = 2000;  // 2 seconds per state
-// cycling between Uptime, ResetReason, Firmware
+// cycling between Uptime, ResetReason, Firmware, ResetTimestamp
 static uint8_t displayState = 0;
 static unsigned long lastDisplaySwitch = 0;
-const unsigned long displayInterval = 2000;             // 2 seconds per state
+const unsigned long displayInterval = 2000;
 
 // Structure holding the measurement values to display on the Nextion display
 // Used to refresh only modified values
 static struct TFTStruct
 {
-  float pH, Orp, pHSP, OrpSP, WST, WIT, WBT, WWPT, WWTT, WTSP, AT, AH, AP, AIT, ST, SVLT, SRLT, PSI, flow, flow2, F1H, F1L, F2H, F2L, PsiH, PsiL, WTLow, pHPumpFR, ChlPumpFR, WaterFillFR, Ph_Kp, Ph_Ki, Ph_Kd, Orp_Kp, Orp_Ki, Orp_Kd, SaltCurrentValue, SaltNeeded, FiltPower, HeatPower, SaltCurrent_Raw, FilterCurrent_Raw, HeatCurrent_Raw;;
+  float pH, pHRaw, Orp, OrpRaw, pHSP, OrpSP, WST, WIT, WBT, WWPT, WWTT, WTSP, AT, AH, AP, AIT, ST, SVLT, SRLT, PSI, flow, flow2, F1H, F1L, F2H, F2L, PsiH, PsiL, WTLow, pHPumpFR, ChlPumpFR, WaterFillFR, Ph_Kp, Ph_Ki, Ph_Kd, Orp_Kp, Orp_Ki, Orp_Kd, SaltCurrentValue, SaltNeeded, FiltPower, HeatPower, SaltCurrent_Raw, FilterCurrent_Raw, HeatCurrent_Raw;
   uint8_t FSta, FSto, FStaT0, FStoT1, SStaT0, SStoT1, pHTkFill, OrpTkFill, PIDpH, PIDChl, PubInt, PumpMaxUp, WFMaxUp, FillDur, WFMinLvl, WFMaxLvl, DelayPID, pHPIDW, OrpPIDW, FLOW_Pulse, FLOW2_Pulse, SaltDiff, ResetReason;
   uint16_t MQTT_PORT;
   uint32_t Uptime;
-  boolean WIFI_OnOff, MqttLogin, BUSA_B, Mode, SolarLoEx, SolarMode, WaterFillMode, SaltMode, NetW, Filt, Robot, R0, R1, R2, pHUTErr, ChlUTErr, WFUTErr, WFErr, PSIErr, FLOWErr, FLOW2Err, pHTLErr, ChlTLErr, PhPump, ChlPump, Heat, HeatPump, SaltPump, SolarPump ,Salt_Chlor, SaltPolarity, ValveMode, CleanMode, ValveSwitch, WaterFill;
+  boolean WIFI_OnOff, MqttLogin, BUSA_B, Mode, SolarLoEx, SolarOnline, SolarMode, WaterFillMode, SaltMode, NetW, Filt, Robot, R0, R1, R2, pHUTErr, ChlUTErr, WFUTErr, WFErr, PSIErr, FLOWErr, FLOW2Err, pHTLErr, ChlTLErr, PhPump, ChlPump, Heat, HeatPump, SaltPump, SolarPump ,Salt_Chlor, SaltPolarity, ValveMode, CleanMode, ValveSwitch, WaterFill, HeatMode, SolarValve;
   unsigned long pHPpRT, OrpPpRT, SHRT, HPRT, SPUT, SPRT, SolPRT, FLRT, WFRT, WFAC;
   IPAddress MQTT_IP;
   DeviceAddress TW_Adr_1, TW_Adr_2, TW_Adr_3, TW_Adr_4, TW_Adr_5, TA_Adr_1, TA_Adr_2, TA_Adr_3, TA_Adr_4, TA_Adr_5;
-  String FW, SSID, PASSW, MQTT_USER, MQTT_PASS, MQTT_NAME, SaltStatus;
+  String FW, SSID, PASSW, MQTT_USER, MQTT_PASS, MQTT_NAME, SaltStatus, ResetTimestamp;
   std::string ELDTstate, ELDHstate, WPVstate, WPMstate, BOTTstate, SOLARstate;
 } TFTStruc =
 { //default values to force update on next refresh
-  -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., 0.0, -1., -1., -1., -1., -1.,
+  -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., 0.0, -1., -1., -1., -1., -1.,
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,0,
   MQTT_SERVER_PORT,
   0U,
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
   99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
   99,
-  "", "", "", "", "", "", "",
+  "", "", "", "", "", "", "", "",
   "", "", "", "", "", "",
 };
 
@@ -161,46 +163,58 @@ void UpdateTFT()
   myNex.writeStr("page0.vaTime.txt", HourBuffer);
 
   if (millis() - lastDisplaySwitch >= displayInterval || !refresh) {
-        xSemaphoreTake(mutex, portMAX_DELAY);
-        switch (displayState) {
-            case 0: // Uptime
-                if (storage.Uptime != TFTStruc.Uptime || !refresh) {
-                    TFTStruc.Uptime = storage.Uptime;
-                    temp = "Uptime: " + String(TFTStruc.Uptime) + " h";
-                    myNex.writeStr(F("page0.vaMCFW.txt"), temp);
-                    if (CurrentPage == 0) {
-                        myNex.writeStr(F("Status.txt"), temp);
-                    }
-                    Debug.print(DBG_VERBOSE, "[Nextion] Updated Uptime: %s", temp.c_str());
-                }
-                break;
-            case 1: // ResetReason
-                if (storage.ResetReason != TFTStruc.ResetReason || !refresh) {
-                    TFTStruc.ResetReason = storage.ResetReason;
-                    temp = "Reset: " + String(resetReasonToString(TFTStruc.ResetReason));
-                    myNex.writeStr(F("page0.vaMCFW.txt"), temp);
-                    if (CurrentPage == 0) {
-                        myNex.writeStr(F("Status.txt"), temp);
-                    }
-                    Debug.print(DBG_VERBOSE, "[Nextion] Updated ResetReason: %s", temp.c_str());
-                }
-                break;
-            case 2: // Firmware
-                if (Firmw != TFTStruc.FW || !refresh) {
-                    TFTStruc.FW = Firmw;
-                    temp = "MC fw: v " + TFTStruc.FW;
-                    myNex.writeStr(F("page0.vaMCFW.txt"), temp);
-                    if (CurrentPage == 0) {
-                        myNex.writeStr(F("Status.txt"), temp);
-                    }
-                    Debug.print(DBG_VERBOSE, "[Nextion] Updated Firmware: %s", temp.c_str());
-                }
-                break;
-        }
-        xSemaphoreGive(mutex);
-        displayState = (displayState + 1) % 3; // Zyklus: 0 -> 1 -> 2 -> 0
-        lastDisplaySwitch = millis();
-    }
+      xSemaphoreTake(mutex, portMAX_DELAY);
+      char temp[32]; // Buffer for formatted text
+      switch (displayState) {
+          case 0: // Uptime
+              if (storage.Uptime != TFTStruc.Uptime || !refresh) {
+                  TFTStruc.Uptime = storage.Uptime;
+                  snprintf(temp, sizeof(temp), "Uptime: %lu h", TFTStruc.Uptime);
+                  myNex.writeStr(F("page0.vaMCFW.txt"), temp);
+                  if (CurrentPage == 11) {
+                      myNex.writeStr(F("t1.txt"), temp);
+                  }
+                  Debug.print(DBG_VERBOSE, "[Nextion] Updated Uptime: %s", temp);
+              }
+              break;
+          case 1: // ResetReason
+              if (storage.ResetReason != TFTStruc.ResetReason || !refresh) {
+                  TFTStruc.ResetReason = storage.ResetReason;
+                  snprintf(temp, sizeof(temp), "Reset: %s", resetReasonToString(TFTStruc.ResetReason));
+                  myNex.writeStr(F("page0.vaMCFW.txt"), temp);
+                  if (CurrentPage == 11) {
+                      myNex.writeStr(F("t1.txt"), temp);
+                  }
+                  Debug.print(DBG_VERBOSE, "[Nextion] Updated ResetReason: %s", temp);
+              }
+              break;
+          case 2: // ResetTimestamp
+              if (storage.ResetTimestamp != TFTStruc.ResetTimestamp || !refresh) {
+                  TFTStruc.ResetTimestamp = storage.ResetTimestamp;
+                  snprintf(temp, sizeof(temp), "Reset at: %s", TFTStruc.ResetTimestamp.c_str());
+                  myNex.writeStr(F("page0.vaMCFW.txt"), temp);
+                  if (CurrentPage == 11) {
+                      myNex.writeStr(F("t1.txt"), temp);
+                  }
+                  Debug.print(DBG_VERBOSE, "[Nextion] Updated ResetTimestamp: %s", temp);
+              }
+              break;
+          case 3: // Firmware
+              if (Firmw != TFTStruc.FW || !refresh) {
+                  TFTStruc.FW = Firmw;
+                  snprintf(temp, sizeof(temp), "MC fw: v %s", TFTStruc.FW.c_str());
+                  myNex.writeStr(F("page0.vaMCFW.txt"), temp);
+                  if (CurrentPage == 11) {
+                      myNex.writeStr(F("t1.txt"), temp);
+                  }
+                  Debug.print(DBG_VERBOSE, "[Nextion] Updated Firmware: %s", temp);
+              }
+              break;
+      }
+      xSemaphoreGive(mutex);
+      displayState = (displayState + 1) % 4; // Cycle: 0 -> 1 -> 2 -> 3 -> 0
+      lastDisplaySwitch = millis();
+  }
 
   if (storage.WIFI_OnOff != TFTStruc.WIFI_OnOff || !refresh)
   {
@@ -403,6 +417,16 @@ void UpdateTFT()
       myNex.writeNum(F("pHg.val"), pHangle);
   }
 
+  // Übertragung der pH-Rohwerte
+  if (storage.PhRawValue != TFTStruc.pHRaw || !refresh)
+  {
+      TFTStruc.pHRaw = storage.PhRawValue;
+      myNex.writeStr(F("page0.vapHrw.txt"), String(TFTStruc.pHRaw, 2)); // Rohwert mit 2 Dezimalstellen
+      if (CurrentPage == 0) {
+          myNex.writeStr(F("vapHrw.txt"), String(TFTStruc.pHRaw, 2));
+      }
+  }
+
   if (storage.OrpValue != TFTStruc.Orp || !refresh)
   {
     TFTStruc.Orp = storage.OrpValue;
@@ -423,6 +447,16 @@ void UpdateTFT()
       myNex.writeNum(F("page0.Orpg.val"), Orpangle);
     if (CurrentPage == 0)  myNex.writeStr(F("Orp.txt"), String(TFTStruc.Orp, 0));
       myNex.writeNum(F("Orpg.val"), Orpangle);
+  }
+
+  // Übertragung der ORP-Rohwerte
+  if (storage.OrpRawValue != TFTStruc.OrpRaw || !refresh)
+  {
+      TFTStruc.OrpRaw = storage.OrpRawValue;
+      myNex.writeStr(F("page0.vaOrprw.txt"), String(TFTStruc.OrpRaw, 0)); // Rohwert ohne Dezimalstellen
+      if (CurrentPage == 0) {
+          myNex.writeStr(F("vaOrprw.txt"), String(TFTStruc.OrpRaw, 0));
+      }
   }
 
   if (storage.Ph_SetPoint != TFTStruc.pHSP || !refresh)
@@ -746,15 +780,20 @@ void UpdateTFT()
     else if (CurrentPage == 7)  myNex.writeStr(F("AP.txt"), temp);
   }
 
-  if (storage.SolarTemp != TFTStruc.ST || !refresh)
-  {
+  if (storage.SolarTemp != TFTStruc.ST || storage.SolarOnline != TFTStruc.SolarOnline || storage.SolarLocExt != TFTStruc.SolarLoEx || !refresh) {
     TFTStruc.ST = storage.SolarTemp;
-    temp = String(TFTStruc.ST, 1);
+    TFTStruc.SolarOnline = storage.SolarOnline;
+    TFTStruc.SolarLoEx = storage.SolarLocExt;
+    if (TFTStruc.SolarLoEx == 1 && !TFTStruc.SolarOnline) {
+        temp = "Offline"; // Externer Modus, aber keine MQTT-Daten
+    } else {
+        temp = String(TFTStruc.ST, 1); // Lokaler oder externer Wert anzeigen
+    }
     myNex.writeStr(F("page0.vaST.txt"), temp);
     if (CurrentPage == 0)  myNex.writeStr(F("S.txt"), temp);
     else if (CurrentPage == 2)  myNex.writeStr(F("S.txt"), temp);
     else if (CurrentPage == 7)  myNex.writeStr(F("S.txt"), temp);
-  }
+}
 
   if (storage.PSIValue != TFTStruc.PSI || !refresh)
   {
@@ -1096,25 +1135,25 @@ if (storage.FLOW2_Pulse != TFTStruc.FLOW2_Pulse || !refresh)
       debounceSolLE++;
   }
 
-  if (storage.SolarMode != TFTStruc.SolarMode || !refresh)
+  if (storage.HeatPumpMode != TFTStruc.HeatMode || !refresh)
   {
-    if ((debounceSolM == 0) || (debounceSolM > debounceCount))
+    if ((debounceHPM == 0) || (debounceHPM > debounceCount))
     {
-      debounceSolM = 0;
-      TFTStruc.SolarMode = storage.SolarMode;
-      myNex.writeNum(F("page4.vabSolMode.val"), TFTStruc.SolarMode);
-      if (CurrentPage == 2)
+      debounceHPM = 0;
+      TFTStruc.HeatMode = storage.HeatPumpMode;
+      myNex.writeNum(F("page3.vabHeatMode.val"), TFTStruc.HeatMode);
+      if (CurrentPage == 3)
       {
-        if (TFTStruc.SolarMode == 1)
-        myNex.writeStr(F("bSolMode.picc=11"));
+        if (TFTStruc.HeatMode == 1)
+        myNex.writeStr(F("bHeatMode.picc=9"));
         else
-        myNex.writeStr(F("bSolMode.picc=10"));
+        myNex.writeStr(F("bSolMode.picc=8"));
       }
     }
     else
-      debounceSolM++;
+      debounceHPM++;
   }
-
+  
   if (storage.ValveMode != TFTStruc.ValveMode || !refresh)
   {
     if ((debounceVM == 0) || (debounceVM > debounceCount))
@@ -1489,13 +1528,26 @@ if (ELD_Hinten.getStatus() != TFTStruc.ELDHstate || !refresh)
     }
   }
 
-  if ((Solarvalve.getStatus() != TFTStruc.SOLARstate) || !refresh)
-  {
-    TFTStruc.SOLARstate = Solarvalve.getStatus();
-
-    temp = String(TFTStruc.SOLARstate.c_str());
-    myNex.writeStr(F("page2.vaSOLVstate.txt"), temp);
-    if (CurrentPage == 2)  myNex.writeStr(F("SOLARstate.txt"), temp);
+    {
+      bool currentValveState = (storage.SolarLocExt == 0) ? Solarvalve.isOpen() : storage.ValveStatus;
+      if (currentValveState != TFTStruc.SolarValve || !refresh)
+      {
+          if ((debounceSolV == 0) || (debounceSolV > debounceCount))
+          {
+              debounceSolV = 0;
+              TFTStruc.SolarValve = currentValveState;
+              myNex.writeNum(F("page2.vabSolValve.val"), TFTStruc.SolarValve);
+              if (CurrentPage == 2)
+              {
+                  if (TFTStruc.SolarValve == 1)
+                      myNex.writeStr(F("bSolValve.picc=11"));
+                  else
+                      myNex.writeStr(F("bSolValve.picc=10"));
+              }
+          }
+          else
+              debounceSolV++;
+      }
   }
 
   if (storage.Salt_Chlor != TFTStruc.Salt_Chlor || !refresh)
@@ -1569,23 +1621,26 @@ if (ELD_Hinten.getStatus() != TFTStruc.ELDHstate || !refresh)
       debounceSP++;
   }
 
-  if (SolarPump.IsRunning() != TFTStruc.SolarPump || !refresh)
-  {
-    if ((debounceSolP == 0) || (debounceSolP > debounceCount))
     {
-      debounceSolP = 0;
-      TFTStruc.SolarPump = SolarPump.IsRunning();
-      myNex.writeNum(F("page2.vabSolPum.val"), TFTStruc.SolarPump);
-      if (CurrentPage == 2)
+      bool currentPumpState = (storage.SolarLocExt == 0) ? SolarPump.IsRunning() : storage.SolarPumpStatus;
+      if (currentPumpState != TFTStruc.SolarPump || !refresh)
       {
-        if (TFTStruc.SolarPump == 1)
-          myNex.writeStr(F("bSolPum.picc=11"));
-        else
-          myNex.writeStr(F("bSolPum.picc=10"));
+          if ((debounceSolP == 0) || (debounceSolP > debounceCount))
+          {
+              debounceSolP = 0;
+              TFTStruc.SolarPump = currentPumpState;
+              myNex.writeNum(F("page2.vabSolPum.val"), TFTStruc.SolarPump);
+              if (CurrentPage == 2)
+              {
+                  if (TFTStruc.SolarPump == 1)
+                      myNex.writeStr(F("bSolPum.picc=11"));
+                  else
+                      myNex.writeStr(F("bSolPum.picc=10"));
+              }
+          }
+          else
+              debounceSolP++;
       }
-    }
-    else
-      debounceSolP++;
   }
 
   // Salt status cyclic display
@@ -2157,9 +2212,11 @@ if (ELD_Hinten.getStatus() != TFTStruc.ELDHstate || !refresh)
     if (CurrentPage == 17)  myNex.writeStr(F("FillDur.txt"), temp);
   }
 
-  if(CurrentPage == 2) {
+  if(CurrentPage == 0) {
     myNex.writeStr(F("page0.vapH.txt"), String(storage.PhValue, 2));
     myNex.writeStr(F("page0.vaOrp.txt"), String(storage.OrpValue, 0));
+    myNex.writeStr(F("page0.vapHrw.txt"), String(storage.PhRawValue, 2));
+    myNex.writeStr(F("page0.vaOrprw.txt"), String(storage.OrpRawValue, 2));
   }
 
   //update time at top of displayed page
@@ -2872,5 +2929,19 @@ void trigger54()
 void trigger55()
 {
   CurrentPage = 22;
+  LastAction = millis();
+}
+
+//HEATPUMP MODE button was toggled
+//printh 23 02 54 38
+void trigger56()
+{
+  TFTStruc.HeatMode = (boolean)myNex.readNumber(F("vabHeatMode.val"));
+  debounceHPM = 1;
+  Debug.print(DBG_VERBOSE,"HEATPUMP MODE button");
+  char Cmd[100] = "{\"HeatPumpMode\":0}";
+  if(TFTStruc.HeatMode) Cmd[12] = '1';
+  xQueueSendToBack(queueIn,&Cmd,0);
+  Debug.print(DBG_VERBOSE,"Nextion HeatPumpMode cmd: %s",Cmd);
   LastAction = millis();
 }

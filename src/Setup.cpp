@@ -48,21 +48,20 @@ String Firmw = FIRMW;
 struct StoreStruct
 {
   uint8_t ConfigVersion;   // This is for testing if first time using eeprom or not
-  String SSID, WIFI_PASS, MQTT_USER, MQTT_PASS, MQTT_NAME, SaltStatus;
+  String SSID, WIFI_PASS, MQTT_USER, MQTT_PASS, MQTT_NAME, SaltStatus, ResetTimestamp;
   IPAddress MQTT_IP;
   uint32_t MQTT_PORT, Uptime, LastUptimeUpdate;
-  bool WIFI_OnOff, MQTTLOGIN_OnOff, BUS_A_B, Ph_RegulationOnOff, Orp_RegulationOnOff, AutoMode, SolarLocExt, SolarMode, Salt_Chlor, SaltMode, SaltPolarity, WinterMode, WaterHeat, ValveMode, CleanMode, ValveSwitch, WaterFillMode;
-  uint8_t FiltrationDuration, FiltrationStart, FiltrationStop, FiltrationStartMin, FiltrationStopMax, DelayPIDs, SolarStartMin, SolarStopMax, ResetReason;
+  bool WIFI_OnOff, MQTTLOGIN_OnOff, BUS_A_B, Ph_RegulationOnOff, Orp_RegulationOnOff, AutoMode, SolarLocExt, SolarOnline, SolarMode, Salt_Chlor, SaltMode, SaltPolarity, WinterMode, WaterHeat, ValveMode, CleanMode, ValveSwitch, WaterFillMode, HeatPumpMode;
+  uint8_t FiltrationDuration, FiltrationStart, FiltrationStop, FiltrationStartMin, FiltrationStopMax, DelayPIDs, SolarStartMin, SolarStopMax, ResetReason, SolarPumpStatus, ValveStatus;
   uint8_t address_A_0[8], address_A_1[8], address_A_2[8], address_A_3[8], address_A_4[8], Array_A[5];
   uint8_t address_W_0[8], address_W_1[8], address_W_2[8], address_W_3[8], address_W_4[8], Array_W[5];
   unsigned long PhPumpUpTimeLimit, ChlPumpUpTimeLimit, WaterFillUpTimeLimit, WaterFillDuration, SaltPumpRunTime, PublishPeriod;
   unsigned long PhPIDWindowSize, OrpPIDWindowSize, PhPIDwindowStartTime, OrpPIDwindowStartTime, WaterFillAnCon;
   double Ph_SetPoint, Orp_SetPoint, PSI_HighThreshold, PSI_MedThreshold, FLOW_Pulse, FLOW_HighThreshold, FLOW_MedThreshold, FLOW2_Pulse, FLOW2_HighThreshold, FLOW2_MedThreshold, WaterTempLowThreshold, WaterTemp_SetPoint, pHCalibCoeffs0, pHCalibCoeffs1, OrpCalibCoeffs0, OrpCalibCoeffs1, PSICalibCoeffs0, PSICalibCoeffs1, SaltDiff;
-  double Ph_Kp, Ph_Ki, Ph_Kd, Orp_Kp, Orp_Ki, Orp_Kd, PhPIDOutput, OrpPIDOutput, PhValue, OrpValue, PSIValue, FLOWValue, FLOW2Value;
+  double Ph_Kp, Ph_Ki, Ph_Kd, Orp_Kp, Orp_Ki, Orp_Kd, PhPIDOutput, OrpPIDOutput, PhValue, PhRawValue, OrpValue, OrpRawValue, PSIValue, FLOWValue, FLOW2Value;
   double WaterSTemp, WaterITemp, WaterBTemp, WaterWPTemp, WaterWTTemp, AirInTemp, AirTemp, AirHum, AirPress, SolarTemp, SolarVLTemp, SolarRLTemp; 
   double AcidFill, ChlFill, pHTankVol, ChlTankVol, pHPumpFR, ChlPumpFR, WaterFillFR, SaltCurrentValue, FilterCurrentValue, HeatCurrentValue, SaltCurrentCalibCoeffs0, SaltCurrentCalibCoeffs1, FilterCurrentCalibCoeffs0, FilterCurrentCalibCoeffs1, HeatCurrentCalibCoeffs0HeatCurrentCalibCoeffs1;
   float SaltConcentration, CellConstant, SaltNeeded, PoolVolume,;
-  } ;
 */
 
 #ifdef EXT_ADS1115
@@ -71,29 +70,29 @@ struct StoreStruct
 StoreStruct storage =
 { 
     CONFIG_VERSION,
-    WIFI_NETWORK, WIFI_PASSWORD, MQTT_SERVER_LOGIN, MQTT_SERVER_PWD, MQTT_SERVER_ID, "Unknown"/*SaltStatus*/,
+    WIFI_NETWORK, WIFI_PASSWORD, MQTT_SERVER_LOGIN, MQTT_SERVER_PWD, MQTT_SERVER_ID, "Unknown"/*SaltStatus*/,""/*ResetTimestamp*/,
     MQTT_SERVER_IP,
     MQTT_SERVER_PORT, 0U/*Uptime*/, 0U/*LastUptimeUpdate*/,
-    1/*bool WIFI_OnOff*/, 1/*MQTTLOGIN_OnOff*/, 1/*BUS_A_B*/, 1/*Ph_RegulationOnOff*/, 0/*Orp_RegulationOnOff*/, 1/*AutoMode*/, 1/*SolarLocExt*/, 1/*SolarMode*/, 1/*Salt_Chlor*/, 1/*SaltMode*/, 1/*SaltPolarity*/, 0/*WinterMode*/, 0/*WaterHeat*/, 1/*ValveMode*/, 0/*CleanMode*/, 0/*ValveSwitch*/, 0/*WaterFillMode*/,
-    13/*FiltrationDuration*/, 8/*FiltrationStart*/, 21/*FiltrationStop*/, 8/*FiltrationStartMin*/, 22/*FiltrationStopMax*/, 20/*DelayPIDs*/, 11/*SolarStartMin*/, 18/*SolarStopMax*/, 0U/*ResetReason*/,
+    1/*bool WIFI_OnOff*/, 1/*MQTTLOGIN_OnOff*/, 1/*BUS_A_B*/, 1/*Ph_RegulationOnOff*/, 0/*Orp_RegulationOnOff*/, 1/*AutoMode*/, 1/*SolarLocExt*/, 0/* SolarOnline*/, 1/*SolarMode*/, 1/*Salt_Chlor*/, 1/*SaltMode*/, 1/*SaltPolarity*/, 0/*WinterMode*/, 0/*WaterHeat*/, 1/*ValveMode*/, 0/*CleanMode*/, 0/*ValveSwitch*/, 0/*WaterFillMode*/, 0/*HeatPumpMode*/,
+    13/*FiltrationDuration*/, 8/*FiltrationStart*/, 21/*FiltrationStop*/, 8/*FiltrationStartMin*/, 22/*FiltrationStopMax*/, 20/*DelayPIDs*/, 11/*SolarStartMin*/, 18/*SolarStopMax*/, 0U/*ResetReason*/, 0/*SolarPumpStatus*/, 0/*ValveStatus*/,
     // Air/Solar temperature sensor addresses
-    {0x28, 0xAA, 0x6A, 0x96, 0x16, 0x13, 0x02, 0x57}, // address_A_0: AirInTemp
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // address_A_3: SolarTemp
     {0x28, 0xE1, 0xC4, 0xC0, 0x1B, 0x13, 0x01, 0x68}, // address_A_1: SolarVLTemp
     {0x28, 0x56, 0x26, 0xC6, 0x1B, 0x13, 0x01, 0xBA}, // address_A_2: SolarRLTemp
-    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // address_A_3: unused
-    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // address_A_4: unused
+    {0x28, 0xAA, 0x6A, 0x96, 0x16, 0x13, 0x02, 0x57}, // address_A_0: AirInTemp
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // address_A_4: AirTemp
     {0, 1, 2, 3, 4}, // Array_A
     // Water temperature sensor addresses
-    {0x28, 0xAA, 0x75, 0xA5, 0x13, 0x13, 0x02, 0xB1}, // address_W_0: WaterSTemp
-    {0x28, 0x3C, 0x32, 0x6D, 0x1E, 0x13, 0x01, 0xDD}, // address_W_1: WaterITemp
+    {0x28, 0x3C, 0x32, 0x6D, 0x1E, 0x13, 0x01, 0xDD}, // address_W_0: WaterSTemp -> Adresse ist ,it WaterITemp getauscht weil der Skimmer Sensor defekt ist!
+    {0x28, 0xAA, 0x75, 0xA5, 0x13, 0x13, 0x02, 0xB1}, // address_W_1: WaterITemp
     {0x28, 0xAA, 0x12, 0x90, 0x16, 0x13, 0x02, 0x0D}, // address_W_2: WaterBTemp
     {0x28, 0xAA, 0x0F, 0x8D, 0x16, 0x13, 0x02, 0x38}, // address_W_3: WaterWPTemp
     {0x28, 0xAA, 0xCA, 0x93, 0x13, 0x13, 0x02, 0xD0}, // address_W_4: WaterWTTemp
     {0, 1, 2, 3, 4}, // Array_W
     2700/*PhPumpUpTimeLimit*/, 2700/*ChlPumpUpTimeLimit*/, 900000/*WaterFillUpTimeLimit*/, 300000/* WaterFillDuration*/, 0/*SaltPumpRunTime*/, 30000/*PublishPeriod*/,
     1800000/*PhPIDWindowSize*/, 1800000/*OrpPIDWindowSize*/, 0/*PhPIDwindowStartTime*/, 0/*OrpPIDwindowStartTime*/, 0/*WaterFillAnCon*/,
-    7.2/*Ph_SetPoint*/, 740.0/*Orp_SetPoint*/, 1.5/*PSI_HighThreshold*/, 0.3/*PSI_MedThreshold*/, 0.2/*FLOW_Pulse*/, 200.0/*FLOW_HighThreshold*/, 40.0/*FLOW_MedThreshold*/, 4.5/*FLOW2_Pulse*/, 6.0/*FLOW2_HighThreshold*/, 1.0/*FLOW2_MedThreshold*/, 10.0/*WaterTempLowThreshold*/, 30.0/*WaterTemp_SetPoint*/, -2.2183/*pHCalibCoeffs0*/, 7.0/*pHCalibCoeffs1*/, 465.0/*OrpCalibCoeffs0*/, 0.0/*OrpCalibCoeffs1*/, 1.31/*PSICalibCoeffs0*/, -0.1/*PSICalibCoeffs1*/, 30.0/*SaltDiff*/,
-    2700000.0/*Ph_Kp*/, 0.0/*Ph_Ki*/, 0.0/*Ph_Kd*/, 18000.0/*Orp_Kp*/, 0.0/*Orp_Ki*/, 0.0/*Orp_Kd*/, 0.0/*PhPIDOutput*/, 0.0/*OrpPIDOutput*/, 6.8/*PhValue*/, 720./*OrpValue*/, 1.3/*PSIValue*/, 70/*FLOWValue*/, 9/*FLOW2Value*/,
+    7.2/*Ph_SetPoint*/, 740.0/*Orp_SetPoint*/, 1.5/*PSI_HighThreshold*/, 0.3/*PSI_MedThreshold*/, 0.2/*FLOW_Pulse*/, 200.0/*FLOW_HighThreshold*/, 40.0/*FLOW_MedThreshold*/, 4.5/*FLOW2_Pulse*/, 60/*FLOW2_HighThreshold*/, 1.0/*FLOW2_MedThreshold*/, 10.0/*WaterTempLowThreshold*/, 30.0/*WaterTemp_SetPoint*/, -2.3183/*pHCalibCoeffs0*/, 6.68/*pHCalibCoeffs1*/, 465.0/*OrpCalibCoeffs0*/, 0.0/*OrpCalibCoeffs1*/, 1.31/*PSICalibCoeffs0*/, -0.1/*PSICalibCoeffs1*/, 30.0/*SaltDiff*/,
+    2700000.0/*Ph_Kp*/, 0.0/*Ph_Ki*/, 0.0/*Ph_Kd*/, 18000.0/*Orp_Kp*/, 0.0/*Orp_Ki*/, 0.0/*Orp_Kd*/, 0.0/*PhPIDOutput*/, 0.0/*OrpPIDOutput*/, 6.8/*PhValue*/, 0.0/*PhRawValue*/, 720./*OrpValue*/, 0.0/*OrpRawValue*/, 1.3/*PSIValue*/, 70/*FLOWValue*/, 9/*FLOW2Value*/,
     0.0/*WaterSTemp*/, 0.0/*WaterITemp*/, 0.0/*WaterBTemp*/, 0.0/*WaterWPTemp*/, 0.0/*WaterWTTemp*/, 0.0/*AirInTemp*/, 0.0/*AirTemp*/, 0.0/*AirHum*/, 0.0/*AirPress*/, 0.0/*SolarTemp*/, 0.0/*SolarVLTemp*/, 0.0/*SolarRLTemp*/,
     25.0/*AcidFill*/, 60.0/*ChlFill*/, 20.0/*pHTankVol*/, 20.0/*ChlTankVol*/, 2.7/*pHPumpFR*/, 2.7/*ChlPumpFR*/, 15.0/*WaterFillFR*/, 0.0/*SaltCurrentValue*/, 0.0/*FilterCurrentValue*/, 0.0/*HeatCurrentValue*/, 10.0/*SaltCurrentCalibCoeffs0*/, -25.0/*SaltCurrentCalibCoeffs1 | 100 mV/A, 2.5V bei 0A*/, 10.0/*FilterCurrentCalibCoeffs0*/, -25.0/*FilterCurrentCalibCoeffs1 | 100 mV/A, 2.5V bei 0A */, 10.0/*HeatCurrentCalibCoeffs0*/, -25.0/*HeatCurrentCalibCoeffs1 | 100 mV/A, 2.5V bei 0A*/,
     0.0/*SaltConcentration*/, 5.0/*CellConstant*/, 0.0/*SaltNeeded*/, POOL_VOLUME/*PoolVolume*/,
@@ -103,16 +102,16 @@ StoreStruct storage =
 StoreStruct storage =
 {
     CONFIG_VERSION,
-    WIFI_NETWORK, WIFI_PASSWORD, MQTT_SERVER_LOGIN, MQTT_SERVER_PWD, MQTT_SERVER_ID, "Unknown"/*SaltStatus*/,
+    WIFI_NETWORK, WIFI_PASSWORD, MQTT_SERVER_LOGIN, MQTT_SERVER_PWD, MQTT_SERVER_ID, "Unknown"/*SaltStatus*/, ""/*ResetTimestamp*/,
     MQTT_SERVER_IP,
     MQTT_SERVER_PORT, 0U/*Uptime*/, 0U/*LastUptimeUpdate*/,
-    1/*bool WIFI_OnOff*/, 1/*MQTTLOGIN_OnOff*/, 1/*BUS_A_B*/, 1/*Ph_RegulationOnOff*/, 0/*Orp_RegulationOnOff*/, 1/*AutoMode*/, 1/*SolarLocExt*/, 1/*SolarMode*/, 1/*Salt_Chlor*/, 1/*SaltMode*/, 1/*SaltPolarity*/, 0/*WinterMode*/, 0/*WaterHeat*/, 1/*ValveMode*/, 0/*CleanMode*/, 0/*ValveSwitch*/, 0/*WaterFillMode*/,
-    13/*FiltrationDuration*/, 8/*FiltrationStart*/, 21/*FiltrationStop*/, 8/*FiltrationStartMin*/, 22/*FiltrationStopMax*/, 20/*DelayPIDs*/, 11/*SolarStartMin*/, 18/*SolarStopMax*/,  0U/*ResetReason*/,
+    1/*bool WIFI_OnOff*/, 1/*MQTTLOGIN_OnOff*/, 1/*BUS_A_B*/, 1/*Ph_RegulationOnOff*/, 0/*Orp_RegulationOnOff*/, 1/*AutoMode*/, 1/*SolarLocExt*/, 0/* SolarOnline*/, 1/*SolarMode*/, 1/*Salt_Chlor*/, 1/*SaltMode*/, 1/*SaltPolarity*/, 0/*WinterMode*/, 0/*WaterHeat*/, 1/*ValveMode*/, 0/*CleanMode*/, 0/*ValveSwitch*/, 0/*WaterFillMode*/, 0/*HeatPumpMode*/,
+    13/*FiltrationDuration*/, 8/*FiltrationStart*/, 21/*FiltrationStop*/, 8/*FiltrationStartMin*/, 22/*FiltrationStopMax*/, 20/*DelayPIDs*/, 11/*SolarStartMin*/, 18/*SolarStopMax*/, 0U/*ResetReason*/, 0/*SolarPumpStatus*/, 0/*ValveStatus*/,
     // Air/Solar temperature sensor addresses
-    {0x28, 0xAA, 0x6A, 0x96, 0x16, 0x13, 0x02, 0x57}, // address_A_0: AirInTemp
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // address_A_3: unused
     {0x28, 0xE1, 0xC4, 0xC0, 0x1B, 0x13, 0x01, 0x68}, // address_A_1: SolarVLTemp
     {0x28, 0x56, 0x26, 0xC6, 0x1B, 0x13, 0x01, 0xBA}, // address_A_2: SolarRLTemp
-    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // address_A_3: unused
+    {0x28, 0xAA, 0x6A, 0x96, 0x16, 0x13, 0x02, 0x57}, // address_A_0: AirInTemp
     {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // address_A_4: unused
     {0, 1, 2, 3, 4}, // Array_A
     // Water temperature sensor addresses
@@ -125,7 +124,7 @@ StoreStruct storage =
     2700/*PhPumpUpTimeLimit*/, 2700/*ChlPumpUpTimeLimit*/, 900000/*WaterFillUpTimeLimit*/, 300000/* WaterFillDuration*/, 0/*SaltPumpRunTime*/, 30000/*PublishPeriod*/,
     1800000/*PhPIDWindowSize*/, 1800000/*OrpPIDWindowSize*/, 0/*PhPIDwindowStartTime*/, 0/*OrpPIDwindowStartTime*/, 0/*WaterFillAnCon*/,
     7.2/*Ph_SetPoint*/, 740.0/*Orp_SetPoint*/, 1.5/*PSI_HighThreshold*/, 0.3/*PSI_MedThreshold*/, 0.2/*FLOW_Pulse*/, 200.0/*FLOW_HighThreshold*/, 40.0/*FLOW_MedThreshold*/, 4.5/*FLOW2_Pulse*/, 6.0/*FLOW2_HighThreshold*/, 1.0/*FLOW2_MedThreshold*/, 10.0/*WaterTempLowThreshold*/, 30.0/*WaterTemp_SetPoint*/, 3.61078313/*pHCalibCoeffs0*/, -3.88020422/*pHCalibCoeffs1*/, -966.946396/*OrpCalibCoeffs0*/, 2526.88809/*OrpCalibCoeffs1*/, 1.31/*PSICalibCoeffs0*/, -0.1/*PSICalibCoeffs1*/, 30.0/*SaltDiff*/,
-    2700000.0/*Ph_Kp*/, 0.0/*Ph_Ki*/, 0.0/*Ph_Kd*/, 18000.0/*Orp_Kp*/, 0.0/*Orp_Ki*/, 0.0/*Orp_Kd*/, 0.0/*PhPIDOutput*/, 0.0/*OrpPIDOutput*/, 6.8/*PhValue*/, 720./*OrpValue*/, 1.3/*PSIValue*/, 70/*FLOWValue*/, 9/*FLOW2Value*/,
+    2700000.0/*Ph_Kp*/, 0.0/*Ph_Ki*/, 0.0/*Ph_Kd*/, 18000.0/*Orp_Kp*/, 0.0/*Orp_Ki*/, 0.0/*Orp_Kd*/, 0.0/*PhPIDOutput*/, 0.0/*OrpPIDOutput*/, 6.8/*PhValue*/, 0.0/*PhRawValue*/, 720./*OrpValue*/, 0.0/*OrpRawValue*/, 1.3/*PSIValue*/, 70/*FLOWValue*/, 9/*FLOW2Value*/,
     0.0/*WaterSTemp*/, 0.0/*WaterITemp*/, 0.0/*WaterBTemp*/, 0.0/*WaterWPTemp*/, 0.0/*WaterWTTemp*/, 0.0/*AirInTemp*/, 0.0/*AirTemp*/, 0.0/*AirHum*/, 0.0/*AirPress*/, 0.0/*SolarTemp*/, 0.0/*SolarVLTemp*/, 0.0/*SolarRLTemp*/,
     25.0/*AcidFill*/, 60.0/*ChlFill*/, 20.0/*pHTankVol*/, 20.0/*ChlTankVol*/, 2.7/*pHPumpFR*/, 2.7/*ChlPumpFR*/, 15.0/*WaterFillFR*/, 0.0/*SaltCurrentValue*/, 0.0/*FilterCurrentValue*/, 0.0/*HeatCurrentValue*/, 10.0/*SaltCurrentCalibCoeffs0*/, -25.0/*SaltCurrentCalibCoeffs1 | 100 mV/A, 2.5V bei 0A*/, 10.0/*FilterCurrentCalibCoeffs0*/, -25.0/*FilterCurrentCalibCoeffs1 | 100 mV/A, 2.5V bei 0A */, 10.0/*HeatCurrentCalibCoeffs0*/, -25.0/*HeatCurrentCalibCoeffs1 | 100 mV/A, 2.5V bei 0A*/,
     0.0/*SaltConcentration*/, 5.0/*CellConstant*/, 0.0/*SaltNeeded*/, POOL_VOLUME/*PoolVolume*/,
@@ -279,6 +278,9 @@ void bme280Init(void);
 void saveSensorMapping(const char* sensorMapping[], uint8_t ds18b20Mapping[], uint8_t numSensors);
 void RTCInit(void);
 void createTasks(int app_cpu, TaskHandle_t* pubSetTaskHandle, TaskHandle_t* pubMeasTaskHandle);
+String formatUptime(uint32_t uptime);
+String resetReasonToString(esp_reset_reason_t reason);
+
 
 bool saveParam(const char* key, uint8_t val);
 bool saveParam(const char* key, bool val);
@@ -328,41 +330,6 @@ void setup()
   // Initialize Nextion TFT
   InitTFT();
   ResetTFT();
-
-  // reset JTAG-Pins
-  gpio_reset_pin(GPIO_NUM_39);  // IO39
-  gpio_reset_pin(GPIO_NUM_40);  // IO40
-  gpio_reset_pin(GPIO_NUM_41);  // IO41
-  gpio_reset_pin(GPIO_NUM_42);  // IO42
-
-  //Define pins directions
-  pinMode(LIGHT_POOL, OUTPUT);
-  pinMode(LIGHT_ROOM, OUTPUT);
-  pinMode(SALT_POL, OUTPUT);
-  pinMode(RELAY_R1, OUTPUT);
-  pinMode(RELAY_R2, OUTPUT);
-  pinMode(RELAY_R3, OUTPUT);
-  pinMode(RELAY_R4, OUTPUT);
-  pinMode(RELAY_R5, OUTPUT);
-
-  pinMode(BUZZER, OUTPUT);
-
-  // As the relays on the board are activated by a LOW level, set all levels HIGH at startup
-  digitalWrite(LIGHT_POOL,HIGH);
-  digitalWrite(LIGHT_ROOM,HIGH);
-  digitalWrite(SALT_POL,HIGH);
-  digitalWrite(RELAY_R1,HIGH);
-  digitalWrite(RELAY_R2,HIGH);
-  digitalWrite(RELAY_R3,HIGH);
-  digitalWrite(RELAY_R4,HIGH);  
-  digitalWrite(RELAY_R5,HIGH);
-  
-
-// Warning: pins used here have no pull-ups, provide external ones
-  pinMode(FLOW, INPUT);
-  pinMode(FLOW2, INPUT);
-  pinMode(WATER_MAX_LVL, INPUT_PULLUP);
-  pinMode(WATER_MIN_LVL, INPUT_PULLUP);
 
   // Create I2C sharing mutex zuerst, bevor irgendwelche I2C-Operationen
   mutex = xSemaphoreCreateRecursiveMutex();
@@ -444,6 +411,17 @@ void setup()
   setTime(timeinfo.tm_hour,timeinfo.tm_min,timeinfo.tm_sec,timeinfo.tm_mday,timeinfo.tm_mon+1,timeinfo.tm_year-100);
   Debug.print(DBG_INFO,"%d/%02d/%02d %02d:%02d:%02d",year(),month(),day(),hour(),minute(),second());
 
+  // Save reset reason and timestamp
+  storage.ResetReason = esp_reset_reason();
+  char timestamp[20];
+  snprintf(timestamp, sizeof(timestamp), "%04d-%02d-%02d %02d:%02d:%02d",
+          year(), month(), day(), hour(), minute(), second());
+  storage.ResetTimestamp = String(timestamp);
+  saveParam("ResetReason", storage.ResetReason);
+  saveParam("ResetTimestamp", storage.ResetTimestamp);
+  Debug.print(DBG_INFO, "[SETUP] Reset reason: %s, Timestamp: %s",
+              resetReasonToString(storage.ResetReason), storage.ResetTimestamp.c_str());
+
   // Initialize the mDNS library and OTA
   if (storage.WIFI_OnOff) {
     while (!MDNS.begin("PoolMaster")) {
@@ -462,12 +440,50 @@ void setup()
     ArduinoOTA.begin();
   }
 
+// reset JTAG-Pins
+  gpio_reset_pin(GPIO_NUM_39);  // IO39
+  gpio_reset_pin(GPIO_NUM_40);  // IO40
+  gpio_reset_pin(GPIO_NUM_41);  // IO41
+  gpio_reset_pin(GPIO_NUM_42);  // IO42
+
+  //Define pins directions
+  pinMode(LIGHT_POOL, OUTPUT);
+  pinMode(LIGHT_ROOM, OUTPUT);
+  pinMode(SALT_POL, OUTPUT);
+  pinMode(RELAY_R1, OUTPUT);
+  pinMode(RELAY_R2, OUTPUT);
+  pinMode(RELAY_R3, OUTPUT);
+  pinMode(RELAY_R4, OUTPUT);
+  pinMode(RELAY_R5, OUTPUT);
+
+  pinMode(BUZZER, OUTPUT);
+
+  // As the relays on the board are activated by a LOW level, set all levels HIGH at startup
+  digitalWrite(LIGHT_POOL,HIGH);
+  digitalWrite(LIGHT_ROOM,HIGH);
+  digitalWrite(SALT_POL,HIGH);
+  digitalWrite(RELAY_R1,HIGH);
+  digitalWrite(RELAY_R2,HIGH);
+  digitalWrite(RELAY_R3,HIGH);
+  digitalWrite(RELAY_R4,HIGH);  
+  digitalWrite(RELAY_R5,HIGH);
+  
+
+// Warning: pins used here have no pull-ups, provide external ones
+  pinMode(FLOW, INPUT);
+  pinMode(FLOW2, INPUT);
+  pinMode(WATER_MAX_LVL, INPUT_PULLUP);
+  pinMode(WATER_MIN_LVL, INPUT_PULLUP);
+
   // Scan I2C-Bus and check if there errors
-  scanI2CBus();
-  checkI2CBus();
+  //scanI2CBus();
+  //checkI2CBus();
 
   // Initalize the BME280 sensor
   bme280Init();
+
+  // Init Water and Air temperatures measurements with DS18B20-Sensors
+  TempInit();
 
   // Init pH, ORP and PSI analog measurements
   AnalogInit();
@@ -475,9 +491,6 @@ void setup()
   // Init Flow measurements
   FlowInit();
   Flow2Init();
-  
-  // Init Water and Air temperatures measurements with DS18B20-Sensors
-  TempInit();
 
   // Clear status LEDs
   clearStatusLEDs();
@@ -537,7 +550,7 @@ void setup()
     Debug.print(DBG_ERROR, "[SETUP] Failed to create queueIn");
     while (1);  // Stopp for debugging
   }
-  Debug.print(DBG_INFO, "[SETUP] Queue created");
+  Debug.print(DBG_INFO, "[SETUP] Queue created, handle: %p, item size: %d, items: %d", queueIn, QUEUE_ITEM_SIZE, QUEUE_ITEMS_NBR);
 
   int app_cpu = xPortGetCoreID();
   Debug.print(DBG_DEBUG, "Creating loop Tasks");
@@ -596,12 +609,14 @@ bool loadConfig() {
   storage.Orp_RegulationOnOff   = nvs.getBool("Orp_RegOnOff",false);  
   storage.AutoMode              = nvs.getBool("AutoMode",true);
   storage.SolarLocExt           = nvs.getBool("SolarLocExt",false);
+  storage.SolarOnline           = nvs.getBool("SolarOnline",false);
   storage.SolarMode             = nvs.getBool("SolarMode",true);
   storage.Salt_Chlor            = nvs.getBool("Salt_Chlor",true);
   storage.SaltMode              = nvs.getBool("SaltMode",true);
   storage.SaltPolarity          = nvs.getBool("SaltPolarity",false);
   storage.WinterMode            = nvs.getBool("WinterMode",false);
   storage.WaterHeat             = nvs.getBool("Heat",false);
+  storage.HeatPumpMode          = nvs.getBool("HeatPumpMode",true);
   storage.ValveMode             = nvs.getBool("ValveMode",true);
   storage.ValveSwitch           = nvs.getBool("ValveSwitch",false);
   storage.WaterFillMode         = nvs.getBool("WaterFillMode",true);
@@ -675,23 +690,24 @@ bool loadConfig() {
   storage.WaterFillUpTimeLimit  = nvs.getULong("WaterFillUTL",900000);
   storage.WaterFillDuration     = nvs.getULong("WaterFillDur",0);
   storage.SaltPumpRunTime       = nvs.getULong("SaltPumpRunTime",0);
-  storage.SaltCurrentValue      = nvs.getDouble("SaltCurrentValue",0.0);
-  storage.FilterCurrentValue    = nvs.getDouble("FilterCurrentValue",0.0);
-  storage.HeatCurrentValue      = nvs.getDouble("HeatCurrentValue",0.0);
+  storage.SaltCurrentValue      = nvs.getDouble("SaltCurrentVal",0.0);
+  storage.FilterCurrentValue    = nvs.getDouble("FilterCurrentVal",0.0);
+  storage.HeatCurrentValue      = nvs.getDouble("HeatCurrentVal",0.0);
   storage.SaltCurrentCalibCoeffs0 = nvs.getDouble("SaltCurrCalib0",10.0);
   storage.SaltCurrentCalibCoeffs1 = nvs.getDouble("SaltCurrCalib1",-25.0);
-  storage.FilterCurrentCalibCoeffs0 = nvs.getDouble("FilterCurrCalib0",10.0);
-  storage.FilterCurrentCalibCoeffs1 = nvs.getDouble("FilterCurrCalib1",-25.0);
+  storage.FilterCurrentCalibCoeffs0 = nvs.getDouble("FiltCurrCalib0",10.0);
+  storage.FilterCurrentCalibCoeffs1 = nvs.getDouble("FiltCurrCalib1",-25.0);
   storage.HeatCurrentCalibCoeffs0 = nvs.getDouble("HeatCurrCalib0",10.0);
   storage.HeatCurrentCalibCoeffs1 = nvs.getDouble("HeatCurrCalib1",-25.0);
-  storage.SaltConcentration     = nvs.getDouble("SaltConcentration",0.0);
+  storage.SaltConcentration     = nvs.getDouble("SaltConc",0.0);
   storage.CellConstant          = nvs.getDouble("CellConstant",0.0);
   storage.SaltStatus            = nvs.getBool("SaltStatus",false);
   storage.SaltNeeded            = nvs.getBool("SaltNeeded",false);
   storage.PoolVolume            = nvs.getDouble("PoolVolume",0.0);
   storage.Uptime                = nvs.getUInt("Uptime", 0U);
-  storage.LastUptimeUpdate      = nvs.getUInt("LastUptimeUpdate", 0U);
-  storage.ResetReason           = esp_reset_reason();
+  storage.LastUptimeUpdate      = nvs.getUInt("LastUpdt", 0U);
+  storage.ResetReason           = nvs.getUChar("ResetReason", 0U);
+  storage.ResetTimestamp        = nvs.getString("ResetTimestamp", "");
   nvs.getBytes("address_A_0", storage.address_A_0, 8);
   nvs.getBytes("address_A_1", storage.address_A_1, 8);
   nvs.getBytes("address_A_2", storage.address_A_2, 8);
@@ -711,7 +727,7 @@ bool loadConfig() {
   Debug.print(DBG_INFO, "Loaded MQTT_IP: %d.%d.%d.%d, MQTT_PORT: %u", storage.MQTT_IP[0], storage.MQTT_IP[1], storage.MQTT_IP[2], storage.MQTT_IP[3], storage.MQTT_PORT);
   Debug.print(DBG_INFO,"%d",storage.MQTT_PORT);
   Debug.print(DBG_INFO,"%s,%s,%s,%s,%s",storage.SSID.c_str(),storage.WIFI_PASS.c_str(),storage.MQTT_USER.c_str(),storage.MQTT_PASS.c_str(),storage.MQTT_NAME.c_str());
-  Debug.print(DBG_INFO,"%d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d",storage.WIFI_OnOff,storage.MQTTLOGIN_OnOff,storage.BUS_A_B,storage.Ph_RegulationOnOff,storage.Orp_RegulationOnOff,storage.AutoMode,storage.SolarLocExt,storage.SolarMode,storage.Salt_Chlor,storage.SaltMode,storage.SaltPolarity,storage.WinterMode,storage.WaterHeat,storage.ValveMode,storage.CleanMode,storage.ValveSwitch, storage.WaterFillMode);
+  Debug.print(DBG_INFO,"%d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d",storage.WIFI_OnOff,storage.MQTTLOGIN_OnOff,storage.BUS_A_B,storage.Ph_RegulationOnOff,storage.Orp_RegulationOnOff,storage.AutoMode,storage.SolarLocExt,storage.SolarOnline,storage.SolarMode,storage.Salt_Chlor,storage.SaltMode,storage.SaltPolarity,storage.WinterMode,storage.WaterHeat,storage.ValveMode,storage.CleanMode,storage.ValveSwitch, storage.WaterFillMode);
   Debug.print(DBG_INFO,"%d, %d, %d, %d, %d, %d, %d",storage.FiltrationDuration,storage.FiltrationStart,storage.FiltrationStop,
               storage.FiltrationStartMin,storage.FiltrationStopMax,storage.SolarStartMin,storage.SolarStopMax,storage.DelayPIDs);
   Debug.print(DBG_INFO, "Address_A: 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X", storage.address_A_0, storage.address_A_1, storage.address_A_2, storage.address_A_3, storage.address_A_4);
@@ -744,8 +760,8 @@ bool loadConfig() {
   Debug.print(DBG_INFO,"SaltConcentration: %4.2f, CellConstant: %4.2f", storage.SaltConcentration, storage.CellConstant);
   Debug.print(DBG_INFO,"SaltStatus: %d, SaltNeeded: %d", storage.SaltStatus, storage.SaltNeeded);
   Debug.print(DBG_INFO,"PoolVolume: %4.2f", storage.PoolVolume);
-  Debug.print(DBG_INFO,"Uptime: %u, LastUptimeUpdate: %u", storage.Uptime, storage.LastUptimeUpdate);
-  Debug.print(DBG_INFO,"ResetReason: %d", storage.ResetReason);
+  Debug.print(DBG_INFO,"System: Uptime: %s, LastUptimeUpdate: %u",formatUptime(storage.Uptime).c_str(),storage.LastUptimeUpdate);
+  Debug.print(DBG_INFO,"Reset: Reason: %s, Timestamp: %s", resetReasonToString(storage.ResetReason), storage.ResetTimestamp.c_str());
   Debug.print(DBG_INFO,"PhPIDwindowStartTime: %u, OrpPIDwindowStartTime: %u", storage.PhPIDwindowStartTime, storage.OrpPIDwindowStartTime);
 
   return (storage.ConfigVersion == CONFIG_VERSION);
@@ -772,12 +788,14 @@ bool saveConfig() {
   i += nvs.putBool("Orp_RegOnOff",storage.Orp_RegulationOnOff);  
   i += nvs.putBool("AutoMode",storage.AutoMode);
   i += nvs.putBool("SolarLocExt",storage.SolarLocExt);
+  i += nvs.putBool("SolarOnline",storage.SolarOnline);
   i += nvs.putBool("SolarMode",storage.SolarMode);
   i += nvs.putBool("Salt_Chlor",storage.Salt_Chlor);
   i += nvs.putBool("SaltMode",storage.SaltMode);
   i += nvs.putBool("SaltPolarity",storage.SaltPolarity);
   i += nvs.putBool("WinterMode",storage.WinterMode);
   i += nvs.putBool("Heat",storage.WaterHeat);
+  i += nvs.putBool("HeatPumpMode",storage.HeatPumpMode);
   i += nvs.putBool("ValveMode",storage.ValveMode);
   i += nvs.putBool("CleanMode",storage.CleanMode);
   i += nvs.putBool("ValveSwitch",storage.ValveSwitch);
@@ -852,22 +870,24 @@ bool saveConfig() {
   i += nvs.putULong("WaterFillUTL",storage.WaterFillUpTimeLimit);
   i += nvs.putULong("WaterFillDur",storage.WaterFillDuration);
   i += nvs.putULong("SaltPumpRunTime",storage.SaltPumpRunTime);
-  i += nvs.putDouble("SaltCurrentValue", storage.SaltCurrentValue);
-  i += nvs.putDouble("FilterCurrentValue", storage.FilterCurrentValue);
-  i += nvs.putDouble("HeatCurrentValue", storage.HeatCurrentValue);
+  i += nvs.putDouble("SaltCurrentVal", storage.SaltCurrentValue);
+  i += nvs.putDouble("FiltCurrentVal", storage.FilterCurrentValue);
+  i += nvs.putDouble("HeatCurrentVal", storage.HeatCurrentValue);
   i += nvs.putDouble("SaltCurrCalib0", storage.SaltCurrentCalibCoeffs0);
   i += nvs.putDouble("SaltCurrCalib1", storage.SaltCurrentCalibCoeffs1);
-  i += nvs.putDouble("FilterCurrCalib0", storage.FilterCurrentCalibCoeffs0);
-  i += nvs.putDouble("FilterCurrCalib1", storage.FilterCurrentCalibCoeffs1);
+  i += nvs.putDouble("FiltCurrCalib0", storage.FilterCurrentCalibCoeffs0);
+  i += nvs.putDouble("FiltCurrCalib1", storage.FilterCurrentCalibCoeffs1);
   i += nvs.putDouble("HeatCurrCalib0", storage.HeatCurrentCalibCoeffs0);
   i += nvs.putDouble("HeatCurrCalib1", storage.HeatCurrentCalibCoeffs1);
-  i += nvs.putDouble("SaltConcentration", storage.SaltConcentration);
+  i += nvs.putDouble("SaltConc", storage.SaltConcentration);
   i += nvs.putDouble("CellConstant", storage.CellConstant);
   i += nvs.putBool("SaltStatus", storage.SaltStatus);
   i += nvs.putBool("SaltNeeded", storage.SaltNeeded);
   i += nvs.putDouble("PoolVolume", storage.PoolVolume);
   i += nvs.putUInt("Uptime", storage.Uptime);
-  i += nvs.putUInt("LastUptimeUpdate", storage.LastUptimeUpdate);
+  i += nvs.putUInt("LastUpdt", storage.LastUptimeUpdate);
+  i += nvs.putUChar("ResetReason", storage.ResetReason);
+  i += nvs.putString("ResetTimestamp", storage.ResetTimestamp);
   i += nvs.putBytes("address_A_0",storage.address_A_0, 8);
   i += nvs.putBytes("address_A_1",storage.address_A_1, 8);
   i += nvs.putBytes("address_A_2",storage.address_A_2, 8);
@@ -880,8 +900,6 @@ bool saveConfig() {
   i += nvs.putBytes("address_W_4",storage.address_W_4, 8);
   i += nvs.putBytes("Array_A",storage.Array_A, 5);
   i += nvs.putBytes("Array_W",storage.Array_W, 5);
-
-  saveParam("ResetReason", &storage.ResetReason, sizeof(storage.ResetReason));
 
   nvs.end();
 
@@ -967,21 +985,23 @@ void stack_mon(UBaseType_t &hwm)
 
 
 // Get exclusive access of I2C bus
+static uint32_t lockFailCount = 0;
 bool lockI2C() {
-  if (mutex == NULL) {
-    Debug.print(DBG_ERROR, "[I2C] Mutex is NULL - Cannot lock I2C!");
+    if (mutex == NULL) {
+        Debug.print(DBG_ERROR, "[I2C] Mutex is NULL - Cannot lock I2C!");
+        return false;
+    }
+    const uint32_t timeout = 100;  // 100 ms timeout
+    if (xSemaphoreTakeRecursive(mutex, pdMS_TO_TICKS(timeout)) == pdTRUE) {
+        mutexOwner = xTaskGetCurrentTaskHandle();
+        #ifdef DEBUG_I2C_LOCK
+        Debug.print(DBG_DEBUG, "[I2C] Mutex locked by %s", pcTaskGetTaskName(NULL));
+        #endif
+        return true;
+    }
+    lockFailCount++;
+    Debug.print(DBG_WARNING, "[I2C] Failed to acquire recursive mutex after %d ms! (Fail count: %u)", timeout, lockFailCount);
     return false;
-  }
-  const uint32_t timeout = 2000;  // 2 seconds timeout
-  if (xSemaphoreTakeRecursive(mutex, pdMS_TO_TICKS(timeout)) == pdTRUE) {
-    mutexOwner = xTaskGetCurrentTaskHandle();
-    #ifdef DEBUG_I2C_LOCK
-    Debug.print(DBG_DEBUG, "[I2C] Mutex locked by %s", pcTaskGetTaskName(NULL));
-    #endif
-    return true;
-  }
-  Debug.print(DBG_WARNING, "[I2C] Failed to acquire recursive mutex after %d ms!", timeout);
-  return false;
 }
 
 // Release I2C bus access

@@ -4,7 +4,7 @@
 
 //Version of config stored in EEPROM
 //Random value. Change this value (to any other value) to revert the config to default values
-#define CONFIG_VERSION  3
+#define CONFIG_VERSION  12
 
 #define DEBUG_LEVEL     DBG_NONE    // Possible levels : NONE/ERROR/WARNING/INFO/DEBUG/VERBOSE
 
@@ -272,7 +272,7 @@
 #define OTA_NEXTION_PORT  80        // Port for Nextion OTA web server
 #define OTA_NEXTION_PATH  "/upload" // Endpoint for Nextion OTA uploads
 
-//#define CHRONO                    // Activate tasks timings traces for profiling
+#define CHRONO                    // Activate tasks timings traces for profiling
 //#define SIMU                      // Used to simulate pH/ORP sensors. Very simple simulation:
                                     // the sensor value is computed from the output of the PID 
                                     // loop to reach linearly the theorical value produced by this

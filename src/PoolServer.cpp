@@ -39,7 +39,7 @@ void ProcessCommand(void *pvParameters)
 {
   //Json Document
   StaticJsonDocument<200> command;
-  char JSONCommand[150] = "";                     // JSON command to process  
+  char JSONCommand[QUEUE_ITEM_SIZE] = "";                     // JSON command to process  
   Debug.print(DBG_INFO, "[TASKS] ProcessCommand started on core %d", xPortGetCoreID());
   while (!startTasks) ;
   Debug.print(DBG_DEBUG, "[TASKS] ProcessCommand running...");
@@ -62,19 +62,26 @@ void ProcessCommand(void *pvParameters)
     #endif
     //Is there any incoming JSON commands
     if (uxQueueMessagesWaiting(queueIn) != 0)
-    {  
-      xQueueReceive(queueIn,&JSONCommand,0);
-
-      //Parse Json object and find which command it is
-      DeserializationError error = deserializeJson(command,JSONCommand);
-
-      // Test if parsing succeeds.
-      if (error)
-      {
-        Debug.print(DBG_WARNING,"Json parseObject() failed");
-      }
-      else
-      {
+        {
+            char* JSONCommand = (char*)heap_caps_malloc(QUEUE_ITEM_SIZE, MALLOC_CAP_8BIT);
+            if (JSONCommand == NULL)
+            {
+                Debug.print(DBG_ERROR, "[ProcessCommand] Failed to allocate memory");
+                vTaskDelayUntil(&ticktime, period);
+                continue;
+            }
+            memset(JSONCommand, 0, QUEUE_ITEM_SIZE);
+            if (xQueueReceive(queueIn, JSONCommand, 0) == pdPASS)
+            {
+                StaticJsonDocument<512> command;
+                DeserializationError error = deserializeJson(command, JSONCommand);
+                if (error)
+                {
+                    Debug.print(DBG_ERROR, "[JSON] Deserialization failed: %s", error.c_str());
+                    mqttErrorPublish((String("[JSON] Deserialization failed! Full incoming command: ") + String(JSONCommand)).c_str());
+                }
+                else
+                {
         Debug.print(DBG_DEBUG,"Json parseObject() success: %s",JSONCommand);
 
         //Provide the external temperature. Should be updated regularly and will be used to start filtration for 10mins every hour when temperature is negative
@@ -87,8 +94,107 @@ void ProcessCommand(void *pvParameters)
         //Provide the external solar temperature.
         if (command.containsKey(F("TempSolar")))
         {
-          storage.SolarTemp = command["TempSolar"].as<float>();
-          Debug.print(DBG_DEBUG,"External Solar Temperature: %4.1f°C",storage.SolarTemp);
+            if (storage.SolarLocExt == 1) { // Nur im externen Modus aktualisieren
+                float tempSolar = command["TempSolar"].as<float>();
+                if (tempSolar >= -30 && tempSolar <= 100) { // Gültigkeitsprüfung
+                    storage.SolarTemp = tempSolar;
+                    Debug.print(DBG_DEBUG, "External Solar Temperature: %4.1f°C", storage.SolarTemp);
+                } else {
+                    Debug.print(DBG_WARNING, "Invalid External Solar Temperature received: %.2f°C, ignoring", tempSolar);
+                    storage.SolarTemp = -127; // Set to invalid value
+                }
+            } else {
+                Debug.print(DBG_DEBUG, "Ignoring External SolarTemp (Local Mode: SolarLocExt = 0)");
+            }
+        }
+        // Optional: LWT-Status verarbeiten
+        if (command.containsKey(F("SolarLWT")))
+        {
+            String lwtStatus = command["SolarLWT"].as<String>();
+            storage.SolarOnline = (lwtStatus == "Online" && storage.SolarLocExt == 1); // Nur im externen Modus berücksichtigen
+            Debug.print(DBG_DEBUG, "Solar LWT Status: %s", lwtStatus.c_str());
+        }
+
+        //Provide the external solar pump command.
+        if (command.containsKey(F("SolarPump")))
+        {
+            if (storage.SolarLocExt == 1) { // Nur im externen Modus aktualisieren
+                String solPumpCmd = command["SolarPump"].as<String>();
+                if (solPumpCmd == "on" || solPumpCmd == "1") {
+                    SolarPump.Start();
+                    storage.SolarPumpStatus = 1; // Speichere Status
+                    publishSolarMode(1); // Setzt SolarControl in "pool" Modus
+                    Debug.print(DBG_DEBUG, "External Solar Pump started");
+                } else if (solPumpCmd == "off" || solPumpCmd == "0") {
+                    SolarPump.Stop();
+                    storage.SolarPumpStatus = 0; // Speichere Status
+                    publishSolarMode(2); // Setzt SolarControl in "puffer" Modus
+                    Debug.print(DBG_DEBUG, "External Solar Pump stopped");
+                } else {
+                    Debug.print(DBG_WARNING, "Invalid Solar Pump command: %s", solPumpCmd.c_str());
+                }
+            } else {
+                int solPumpCmd = command["SolarPump"].as<int>();
+                if (solPumpCmd == 0) {
+                    SolarPump.Stop();
+                    storage.SolarPumpStatus = 0; // Speichere Status auch lokal
+                } else {
+                    SolarPump.Start();
+                    storage.SolarPumpStatus = 1; // Speichere Status auch lokal
+                }
+            }
+}
+
+        //Provide the external solar valve command.
+        if (command.containsKey(F("SolarValve")))
+        {
+            if (storage.SolarLocExt == 1) { // Nur im externen Modus aktualisieren
+                String solValveCmd = command["SolarValve"].as<String>();
+                if (solValveCmd == "on" || solValveCmd == "1") {
+                    Solarvalve.open();
+                    storage.ValveStatus = 1; // Speichere Status (Pool)
+                    Debug.print(DBG_DEBUG, "External Solar Valve opened");
+                } else if (solValveCmd == "off" || solValveCmd == "0") {
+                    Solarvalve.close();
+                    storage.ValveStatus = 0; // Speichere Status (Puffer)
+                    Debug.print(DBG_DEBUG, "External Solar Valve closed");
+                } else {
+                    Debug.print(DBG_WARNING, "Invalid Solar Valve command: %s", solValveCmd.c_str());
+                }
+            } else {
+                Debug.print(DBG_WARNING, "Ignoring SolarValve command in Local Mode (SolarLocExt = 0)");
+            }
+        }
+
+        //"SolarValve" command which turns the MotorValve of the Solar valve to desired position
+        else if (command.containsKey(F("SOLARVALVE")))
+        {
+          if (storage.SolarLocExt == 0) { // Nur im externen Modus aktualisieren
+            if (command[F("SOLARVALVE")] == "open")
+            {
+              Solarvalve.open(); //open MotorValve
+            }
+            else if (command[F("SOLARVALVE")] == "close")
+            {
+              Solarvalve.close(); //close MotorValve
+            }
+            else if (command[F("SOLARVALVE")] == "halfOpen")
+            {
+              Solarvalve.halfOpen(); //halfOpen MotorValve
+            }
+            else if (command[F("SOLARVALVE")] == "calibrate")
+            {
+              Solarvalve.calibrate(); //calibrate MotorValve
+            }
+            else
+            {
+              int target = (int)command[F("SOLARVALVE")].as<int>();
+              Solarvalve.setTargetAngle(target);
+            }
+          } else
+          {
+            Debug.print(DBG_WARNING, "Ignoring SOLARVALVE command in Local Mode (SolarLocExt = 0)");
+          }
         }
 
         //"WIFI_OnOff" command which switches WiFi On or Off
@@ -401,7 +507,7 @@ void ProcessCommand(void *pvParameters)
             storage.OrpCalibCoeffs1 += CalibPoints[1] - CalibPoints[0];
 
             //Set slope back to default value
-            storage.OrpCalibCoeffs0 = -1000;
+            storage.OrpCalibCoeffs0 = 1000;
 
             Debug.print(DBG_DEBUG,"Calibration completed. Coeffs are: %10.2f, %10.2f",storage.OrpCalibCoeffs0,storage.OrpCalibCoeffs1);
           }
@@ -614,6 +720,7 @@ void ProcessCommand(void *pvParameters)
             mqttErrorPublish("{\"error\":\"Invalid number of HeatCurrentCalib points\"}");
           }
         }
+
         //"Mode" command which sets regulation and filtration to manual or auto modes
         else if (command.containsKey(F("Mode")))
         {
@@ -757,6 +864,19 @@ void ProcessCommand(void *pvParameters)
           }
           saveParam("FillMode",storage.WaterFillMode);
         }
+        //"HeatPumpMode" command which sets regulation of HeatPump to manual or auto mode
+        else if (command.containsKey(F("HeatPumpMode")))
+        {
+          if ((int)command[F("HeatPumpMode")] == 0)
+          {
+            storage.HeatPumpMode = 0;
+          }
+          else
+          {
+            storage.HeatPumpMode = 1;
+          }
+          saveParam("HeatPumpMode",storage.HeatPumpMode);
+        }
         //"ELDT" command which turns the MotorValve of the ELDT-Nozzle to desired position
         else if (command.containsKey(F("ELDT")))
         {
@@ -882,30 +1002,19 @@ void ProcessCommand(void *pvParameters)
             Bodenablauf.setTargetAngle(target);
           }
         }
-        //"SolarValve" command which turns the MotorValve of the Solar valve to desired position
-        else if (command.containsKey(F("SOLARVALVE")))
+        //"WaterHeat" command which starts/stops water heating
+        else if (command.containsKey(F("WaterHeat"))) //"WaterHeat" command which starts/stops water heating
         {
-          if (command[F("SOLARVALVE")] == "open")
+          if ((int)command[F("WaterHeat")] == 0)
           {
-            Solarvalve.open(); //open MotorValve
-          }
-          else if (command[F("SOLARVALVE")] == "close")
-          {
-            Solarvalve.close(); //close MotorValve
-          }
-          else if (command[F("SOLARVALVE")] == "halfOpen")
-          {
-            Solarvalve.halfOpen(); //halfOpen MotorValve
-          }
-          else if (command[F("SOLARVALVE")] == "calibrate")
-          {
-            Solarvalve.calibrate(); //calibrate MotorValve
+            storage.WaterHeat = false;
+            WaterHeatPump.Stop();
           }
           else
           {
-            int target = (int)command[F("SOLARVALVE")].as<int>();
-            Solarvalve.setTargetAngle(target);
+            storage.WaterHeat = true;
           }
+          saveParam("WaterHeat",storage.WaterHeat);
         }
         else if (command.containsKey(F("Heat"))) //"Heat" command which starts/stops water heating
         {
@@ -1186,7 +1295,27 @@ void ProcessCommand(void *pvParameters)
         else if (command.containsKey(F("Settings")))//Pubilsh settings to refresh data on remote displays
         {
           PublishSettings();
-        }         
+        }
+        if (command.containsKey(F("ResetFilterMetrics"))) {
+            if (command[F("ResetFilterMetrics")] == 1) {
+              Debug.print(DBG_INFO, "[Filter] Reset metrics command received");
+              PublishMeasures(); // Notify Homebridge of reset
+            }
+        }
+        else if (command.containsKey(F("Reset"))) //"Reset" command which resets the system
+        {
+          Debug.print(DBG_INFO, "[Reset] Reset command received");
+          mqttErrorPublish("{\"error\":\"System reset requested\"}");
+          delay(1000);
+          ESP.restart();
+        }
+        else if (command.containsKey(F("Reboot"))) //"Reboot" command which reboots the system
+        {
+          Debug.print(DBG_INFO, "[Reboot] Reboot command received");
+          mqttErrorPublish("{\"error\":\"System reboot requested\"}");
+          delay(1000);
+          ESP.restart();
+        }  
         else if (command.containsKey(F("FiltPump"))) //"FiltPump" command which starts or stops the filtration pump
         {
           if ((int)command[F("FiltPump")] == 0)
@@ -1230,16 +1359,6 @@ void ProcessCommand(void *pvParameters)
             WaterFill.Start();   //start WaterFill tap
           }  
         }
-        else if (command.containsKey(F("SolarPump"))) //"SolarPump" command which starts or stops the Solar pump
-        {
-          if ((int)command[F("SolarPump")] == 0){
-            SolarPump.Stop();    //stop solar pump
-            publishSolarMode(2); //sets SolarControl to "puffer" mode
-          } else {
-            SolarPump.Start();   //start solar pump
-            publishSolarMode(1); //sets SolarControl to "pool" mode
-          }  
-        }
         else if (command.containsKey(F("SaltPump"))) //"SaltPump" command which starts or stops the Salt pump
         {
           if ((int)command[F("SaltPump")] == 0){
@@ -1256,10 +1375,19 @@ void ProcessCommand(void *pvParameters)
         }
         else if (command.containsKey(F("PhPump"))) //"PhPump" command which starts or stops the Acid pump
         {
-          if ((int)command[F("PhPump")] == 0)
+          if (PhPID.GetMode() == AUTOMATIC) {
+            Debug.print(DBG_WARNING, "[PhPump] Command ignored: pH regulation is in AUTOMATIC mode");
+            mqttErrorPublish("{\"error\":\"PhPump command ignored: pH regulation is in AUTOMATIC mode\"}");
+          } else if ((int)command[F("PhPump")] == 0) {
             PhPump.Stop();       //stop Acid pump
-          else
+            Debug.print(DBG_INFO, "[PhPump] Stopped via MQTT command");
+          } else if ((int)command[F("PhPump")] == 1 && FiltrationPump.IsRunning()) {
             PhPump.Start();      //start Acid pump
+            Debug.print(DBG_INFO, "[PhPump] Started via MQTT command");
+          } else if ((int)command[F("PhPump")] == 1 && !FiltrationPump.IsRunning()) {
+            Debug.print(DBG_WARNING, "[PhPump] Start command ignored: FiltrationPump not running");
+            mqttErrorPublish("{\"error\":\"PhPump start ignored: FiltrationPump not running\"}");
+          }
         }
         else if (command.containsKey(F("ChlPump"))) //"ChlPump" command which starts or stops the Acid pump
         {
@@ -1348,6 +1476,8 @@ void ProcessCommand(void *pvParameters)
         Debug.print(DBG_DEBUG, "[stack_mon] %s: %u bytes", pcTaskGetName(NULL), uxTaskGetStackHighWaterMark(NULL));
       }
     }
+    heap_caps_free(JSONCommand);
+  }
     #ifdef CHRONO
     t_act = millis() - td;
     if(t_act > t_max) t_max = t_act;

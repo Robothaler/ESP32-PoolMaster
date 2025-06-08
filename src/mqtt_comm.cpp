@@ -14,15 +14,20 @@ static TimerHandle_t mqttReconnectTimer;                        // Reconnect tim
 static TimerHandle_t wifiReconnectTimer;                        // Reconnect timer for WiFi
 
 #ifdef MQTT_LOGIN
- static const char* MqttServerClientID = MQTT_SERVER_ID;            
- static const char* MqttServerLogin    = MQTT_SERVER_LOGIN;                
- static const char* MqttServerPwd      = MQTT_SERVER_PWD;
+ static const char* MqttServerClientID  = MQTT_SERVER_ID;            
+ static const char* MqttServerLogin     = MQTT_SERVER_LOGIN;                
+ static const char* MqttServerPwd       = MQTT_SERVER_PWD;
 #else
-static const char* PoolTopicAPI       = "Home/Pool/API";
-static const char* PoolTopicStatus    = "Home/Pool/status";
-static const char* PoolTopicError     = "Home/Pool/Err";
-static const char* PoolTopicMode      = "POOL/Pool_Mode";
-static const char* SolarTopicMode     = "POOL/Solar_Mode";
+static const char* PoolTopicAPI         = "Home/Pool/API";
+static const char* PoolTopicStatus      = "Home/Pool/status";
+static const char* PoolTopicError       = "Home/Pool/Err";
+static const char* PoolTopicMode        = "POOL/Pool_Mode";
+static const char* SolarTopicMode       = "POOL/Solar_Mode";
+static const char* SolarControlTemp     = "/SolarControl/pt1";
+static const char* SolarControlLWT      = "SolarControl/LWT";
+static const char* SolarControlSolPump  = "SolarControl/SOLAR_PUMP";
+static const char* SolarControlSolVal   = "SolarControl/VALVE_POOL";
+
 #endif
 
 // Functions prototypes
@@ -95,7 +100,10 @@ void mqttInit() {
   }
 }
 
+static unsigned long lastMqttErrorTime = 0;
+const unsigned long MQTT_ERROR_INTERVAL = 60000; // 1 Minute
 void mqttErrorPublish(const char* Payload){
+  if (millis() - lastMqttErrorTime > MQTT_ERROR_INTERVAL) {
   if (mqttClient.publish(PoolTopicError, 1, true, Payload) !=0)
   {
     Debug.print(DBG_WARNING,"[MQTT] Payload: %s - Payload size: %d",Payload, sizeof(Payload));
@@ -103,6 +111,8 @@ void mqttErrorPublish(const char* Payload){
   else
   {
     Debug.print(DBG_WARNING,"[MQTT] Unable to publish the following payload: %s",Payload);
+  }
+  lastMqttErrorTime = millis();
   }
 }
 
@@ -217,12 +227,16 @@ void connectToWiFi() {
 void onMqttConnect(bool sessionPresent) {
   Debug.print(DBG_INFO, "[MQTT] Connected to MQTT, present session: %d", sessionPresent);
   mqttClient.subscribe(PoolTopicAPI, 2);
+  mqttClient.subscribe(SolarControlTemp, 2);  // Abonnieren des Temperatur-Topics
+  mqttClient.subscribe(SolarControlLWT, 2);   // Abonnieren des LWT-Topics (optional)
+  mqttClient.subscribe(SolarControlSolPump, 2); // Abonnieren des Solar-Pumpen-Topics
+  mqttClient.subscribe(SolarControlSolVal, 2);  // Abonnieren des Solar-Ventil-Topics
   mqttClient.publish(PoolTopicStatus, 1, true, "{\"PoolMaster Online\":1}");
   MQTTConnection = true;
   char resetPayload[64];
-    snprintf(resetPayload, sizeof(resetPayload), "{\"ResetReason\":\"%s\"}", resetReasonToString(storage.ResetReason));
-    mqttClient.publish(POOLTOPIC"ResetReason", 1, true, resetPayload);
-    Debug.print(DBG_INFO, "[MQTT] Published ResetReason: %s", resetPayload);
+  snprintf(resetPayload, sizeof(resetPayload), "{\"ResetReason\":\"%s\"}", resetReasonToString(storage.ResetReason));
+  mqttClient.publish(POOLTOPIC"ResetReason", 1, true, resetPayload);
+  Debug.print(DBG_INFO, "[MQTT] Published ResetReason: %s", resetPayload);
 }
 
 void onMqttDisconnect(AsyncMqttClientDisconnectReason reason) {
@@ -252,22 +266,101 @@ void onMqttPublish(uint16_t packetId){
 // Add the received command to a message queue for later processing and exit the callback
 void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total)
 {
-  //Pool commands. This check might be redundant since we only subscribed to this topic
-  if (strcmp(topic,PoolTopicAPI)==0)
-  {
-    char Command[100] = "";
-
-    for (uint8_t i=0 ; i<len ; i++){
-      Command[i] = payload[i];
+    if (queueIn == NULL) {
+    Debug.print(DBG_ERROR, "[MQTT] queueIn is NULL");
+    return;
+    }  
+    
+    if (len >= 150) {
+        Debug.print(DBG_ERROR, "[MQTT] Payload too large: %d", len);
+        return;
     }
-    if (xQueueSendToBack(queueIn, &Command, 0) == pdPASS)
+
+    // Dynamische Speicherallokation für die Nachricht
+    char* command = (char*)heap_caps_malloc(len + 1, MALLOC_CAP_8BIT);
+    if (command == NULL) {
+        Debug.print(DBG_ERROR, "[MQTT] Failed to allocate memory for command");
+        return;
+    }
+    strncpy(command, payload, len);
+    command[len] = '\0';
+
+    // Pool-Kommandos
+    if (strcmp(topic, PoolTopicAPI) == 0)
     {
-      Debug.print(DBG_INFO,"[MQTT] Command added to queue: %s",Command);
+        if (xQueueSendToBack(queueIn, command, pdMS_TO_TICKS(10)) == pdPASS)
+        {
+            Debug.print(DBG_INFO, "[MQTT] Command added to queue: %s", command);
+        }
+        else
+        {
+            Debug.print(DBG_ERROR, "[MQTT] Queue full, command: %s not added", command);
+        }
+    }
+    // Solarkollektor-Temperatur
+    else if (strcmp(topic, SolarControlTemp) == 0)
+    {
+        char tempStr[32];
+        snprintf(tempStr, sizeof(tempStr), "{\"TempSolar\":%.*s}", len, payload);
+        if (xQueueSendToBack(queueIn, tempStr, pdMS_TO_TICKS(10)) == pdPASS)
+        {
+            Debug.print(DBG_INFO, "[MQTT] Solar temperature added to queue: %s", tempStr);
+        }
+        else
+        {
+            Debug.print(DBG_ERROR, "[MQTT] Queue full, solar temperature: %s not added", tempStr);
+        }
+    }
+    // LWT-Status
+    else if (strcmp(topic, SolarControlLWT) == 0)
+    {
+        char lwtStr[32];
+        snprintf(lwtStr, sizeof(lwtStr), "{\"SolarLWT\":\"%.*s\"}", len, payload);
+        if (xQueueSendToBack(queueIn, lwtStr, pdMS_TO_TICKS(10)) == pdPASS)
+        {
+            Debug.print(DBG_INFO, "[MQTT] Solar LWT status added to queue: %s", lwtStr);
+        }
+        else
+        {
+            Debug.print(DBG_ERROR, "[MQTT] Queue full, solar LWT: %s not added", lwtStr);
+        }
+    }
+    // Solar-Pumpensteuerung
+    else if (strcmp(topic, SolarControlSolPump) == 0)
+    {
+        char solPumpStr[32];
+        snprintf(solPumpStr, sizeof(solPumpStr), "{\"SolarPump\":%.*s}", len, payload);
+        if (xQueueSendToBack(queueIn, solPumpStr, pdMS_TO_TICKS(10)) == pdPASS)
+        {
+            Debug.print(DBG_INFO, "[MQTT] Solar pump command added to queue: %s", solPumpStr);
+        }
+        else
+        {
+            Debug.print(DBG_ERROR, "[MQTT] Queue full, solar pump command: %s not added", solPumpStr);
+        }
+    }
+    // Solar-Ventilsteuerung
+    else if (strcmp(topic, SolarControlSolVal) == 0)
+    {
+        char solValStr[32];
+        snprintf(solValStr, sizeof(solValStr), "{\"SolarValve\":%.*s}", len, payload);
+        if (xQueueSendToBack(queueIn, solValStr, pdMS_TO_TICKS(10)) == pdPASS)
+        {
+            Debug.print(DBG_INFO, "[MQTT] Solar valve command added to queue: %s", solValStr);
+        }
+        else
+        {
+            Debug.print(DBG_ERROR, "[MQTT] Queue full, solar valve command: %s not added", solValStr);
+        }
     }
     else
     {
-      Debug.print(DBG_ERROR,"[MQTT] Queue full, command: %s not added", Command);
+        Debug.print(DBG_WARNING, "[MQTT] Unknown topic: %s", topic);
     }
-    Debug.print(DBG_DEBUG,"[MQTT] FreeRam: %d Queued messages: %d",freeRam(),uxQueueMessagesWaiting(queueIn));
-  }
+
+    // Speicher freigeben
+    heap_caps_free(command);
+
+    // Debugging-Informationen
+    Debug.print(DBG_DEBUG, "[MQTT] FreeRam: %d Queued messages: %d", freeRam(), uxQueueMessagesWaiting(queueIn));
 }
