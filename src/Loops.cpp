@@ -739,7 +739,11 @@ void FlowMeasures(void *pvParameters) {
     td = millis();
     #endif
 
-    if (flow_currentMillis - flow_previousMillis > flow_interval) {
+    // BUG FIX: flow_currentMillis was never updated inside this loop, so the
+    // condition relied on unsigned-integer underflow to work after the first
+    // iteration. Explicitly update it at the top of each check, same as flow2.
+    flow_currentMillis = millis();
+    if (flow_currentMillis - flow_previousMillis > (unsigned long)flow_interval) {
       portENTER_CRITICAL(&mux);
       detachInterrupt(digitalPinToInterrupt(FLOW));
       byte pulseCount = flow_pulseCount;
@@ -748,14 +752,17 @@ void FlowMeasures(void *pvParameters) {
       portEXIT_CRITICAL(&mux);
       flow_pulse1Sec = pulseCount;
       flow_calibrationFactor = storage.FLOW_Pulse;
-      storage.FLOWValue = ((1000.0 / (millis() - flow_previousMillis)) * flow_pulse1Sec) / flow_calibrationFactor;
+      unsigned long elapsed = flow_currentMillis - flow_previousMillis;
+      storage.FLOWValue = (elapsed > 0)
+          ? ((1000.0f / elapsed) * flow_pulse1Sec) / flow_calibrationFactor
+          : 0.0f;
       samples_Flow.add(storage.FLOWValue);
       storage.FLOWValue = samples_Flow.getAverage(5);
-      flow_previousMillis = millis();
+      flow_previousMillis = flow_currentMillis;
     }
 
     flow2_currentMillis = millis();
-    if (flow2_currentMillis - flow2_previousMillis > flow2_interval) {
+    if (flow2_currentMillis - flow2_previousMillis > (unsigned long)flow2_interval) {
       portENTER_CRITICAL(&mux);
       detachInterrupt(digitalPinToInterrupt(FLOW2));
       byte pulseCount = flow2_pulseCount;
@@ -764,10 +771,13 @@ void FlowMeasures(void *pvParameters) {
       portEXIT_CRITICAL(&mux);
       flow2_pulse1Sec = pulseCount;
       flow2_calibrationFactor = storage.FLOW2_Pulse;
-      storage.FLOW2Value = ((1000.0 / (millis() - flow2_previousMillis)) * flow2_pulse1Sec) / flow2_calibrationFactor;
+      unsigned long elapsed2 = flow2_currentMillis - flow2_previousMillis;
+      storage.FLOW2Value = (elapsed2 > 0)
+          ? ((1000.0f / elapsed2) * flow2_pulse1Sec) / flow2_calibrationFactor
+          : 0.0f;
       samples_Flow2.add(storage.FLOW2Value);
       storage.FLOW2Value = samples_Flow2.getAverage(5);
-      flow2_previousMillis = millis();
+      flow2_previousMillis = flow2_currentMillis;
     }
 
     static float lastFLOWValue = 0.0;

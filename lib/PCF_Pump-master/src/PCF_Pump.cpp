@@ -85,18 +85,28 @@ bool PCF_Pump::Start() {
 // Switch pump OFF (HIGH = ausschalten)
 bool PCF_Pump::Stop() {
     Debug.print(DBG_VERBOSE, "[PCF_Pump] Stop called for pin %d on 0x%02X, running=%d", _startPin.pin, _startPin.address, IsRunning());
+
+    // Accumulate final runtime slice BEFORE updating shadow/pumpState.
+    // IsRunning() would already return false after queueUpdate(), so we must
+    // check pumpState (the logical desired state) here, not IsRunning().
+    if (StartTime > 0 && pumpState) {
+        UpTime += getDurationSafe(StartTime, millis());
+        Debug.print(DBG_VERBOSE, "[PCF_Pump] UpTime updated on stop: %lu ms", UpTime);
+    }
+
+    StartTime = 0;
     pumpState = false;
+
     if (queueUpdate(_startPin.address, _startPin.pin, false)) {
-        if (StartTime > 0 && IsRunning()) { // Only update UpTime if pump was running
-            UpTime += getDurationSafe(StartTime, millis());
-            Debug.print(DBG_VERBOSE, "[PCF_Pump] UpTime updated on stop: %lu ms", UpTime);
-        }
-        StartTime = 0;
-        Debug.print(DBG_VERBOSE, "[PCF_Pump] Stop successful for pin %d on 0x%02X, pumpState=%d", _startPin.pin, _startPin.address, pumpState);
+        Debug.print(DBG_VERBOSE, "[PCF_Pump] Stop successful for pin %d on 0x%02X", _startPin.pin, _startPin.address);
         synchronizeWithShadow();
         return true;
     }
-    pumpState = true; // Rollback bei Fehler
+
+    // Rollback: hardware write queuing failed — pump is still running.
+    // Reset StartTime to now so loop() continues accumulating from this point.
+    pumpState = true;
+    StartTime = millis();
     Debug.print(DBG_WARNING, "[PCF_Pump] queueUpdate failed for pin %d on 0x%02X", _startPin.pin, _startPin.address);
     return false;
 }

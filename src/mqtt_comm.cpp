@@ -14,9 +14,7 @@ static TimerHandle_t mqttReconnectTimer;                        // Reconnect tim
 static TimerHandle_t wifiReconnectTimer;                        // Reconnect timer for WiFi
 
 #ifdef MQTT_LOGIN
- static const char* MqttServerClientID  = MQTT_SERVER_ID;            
- static const char* MqttServerLogin     = MQTT_SERVER_LOGIN;                
- static const char* MqttServerPwd       = MQTT_SERVER_PWD;
+ static const char* MqttServerClientID  = MQTT_SERVER_ID;
 #else
 static const char* PoolTopicAPI         = "Home/Pool/API";
 static const char* PoolTopicStatus      = "Home/Pool/status";
@@ -93,7 +91,7 @@ void mqttInit() {
   // MQTT-Login-Option
   if (storage.MQTTLOGIN_OnOff) {
     Debug.print(DBG_INFO, "[MQTT] MQTT Login with credentials is turned on in NVS");
-    mqttClient.setCredentials(MQTT_SERVER_LOGIN, MQTT_SERVER_PWD);
+    mqttClient.setCredentials(storage.MQTT_USER.c_str(), storage.MQTT_PASS.c_str());
     mqttClient.setClientId(MQTT_SERVER_ID);
   } else {
     mqttClient.setClientId(MQTT_SERVER_ID);
@@ -183,7 +181,7 @@ void connectToWiFi() {
     WiFi.begin(ssid_str.c_str(), pass_str.c_str());
   } else {
     Debug.print(DBG_INFO, "[WiFi] Using default credentials...");
-    WiFi.begin(WIFI_NETWORK, WIFI_PASSWORD);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   }
 }
 

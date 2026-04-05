@@ -35,7 +35,9 @@ void setStandardMotorValvePositions();
 void setStandardHeatPumpMotorValvePositions();
 void setMotorValvePositionsForHeatPump();
 void setMotorValvePositionsForCleanMode();
-void getDurationSafe();
+// BUG FIX: removed incorrect "void getDurationSafe();" prototype — the actual
+// function has signature unsigned long getDurationSafe(unsigned long, unsigned long)
+// and is already declared in PoolMaster.h.
 const char* resetReasonToString(uint8_t reason);
 // void smtpCallback(SMTP_Status);
 // bool SMTP_Connect(void);
@@ -109,7 +111,10 @@ void PoolMaster(void *pvParameters)
 
   bool DoneForTheDay = false;                     // Reset actions done once per day
   bool d_calc = false;                            // Filtration duration computed
-  bool cleaning_done = false;                     // daily cleaning done 
+  // BUG FIX: Do NOT redeclare cleaning_done here — use the global extern defined
+  // in Setup.cpp and declared in PoolMaster.h.  The old local variable shadowed
+  // the global, so MQTT commands from PoolServer (cleaning_done = true) had no
+  // effect on the PoolMaster loop.
 
   static UBaseType_t hwm=0;                       // free stack size
 
@@ -278,9 +283,10 @@ Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID())
         !PSIError && !FLOWError && hour() >= storage.FiltrationStart && hour() < storage.FiltrationStop )
         FiltrationPump.Start();
 
-    //start cleaning robot for 2 hours, 30mn after filtration start
+    //start cleaning robot after ROBOT_DELAY minutes after filtration start
+    // BUG FIX: was hardcoded 30 min; Config.h defines ROBOT_DELAY = 60 (minutes)
     if (FiltrationPump.IsRunning() && storage.AutoMode && !storage.WinterMode && !RobotPump.IsRunning() &&
-        ((millis() - FiltrationPump.LastStartTime) / 1000 / 60) >= 30 && !cleaning_done)
+        ((millis() - FiltrationPump.LastStartTime) / 1000 / 60) >= ROBOT_DELAY && !cleaning_done)
     {
         RobotPump.Start();
         Debug.print(DBG_INFO,"Robot Start 30mn after Filtration");    
@@ -418,41 +424,42 @@ Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID())
     }
 
     // Manage motor valves modes
-
-    bool timerStarted = false;
-    unsigned long timerStartTime;
+    // BUG FIX: timerStarted/timerStartTime must be static so the 30-minute
+    // CleanMode/ValveSwitch timeout actually accumulates across task iterations.
+    static bool timerStarted = false;
+    static unsigned long timerStartTime = 0;
 
     if (storage.ValveMode && FiltrationPump.IsRunning())
     {
-        // Manage CleanMode Valves
+        // Manage CleanMode Valves (highest priority — overrides heat pump positions)
         if (storage.CleanMode)
         {
             setMotorValvePositionsForCleanMode();
-        } 
-        else 
+        }
+        else
         {
             // Manage Heatpump Valves
-            if (HeatPump.IsRunning()) 
+            if (HeatPump.IsRunning())
             {
                 setMotorValvePositionsForHeatPump();
-            } 
-            else 
+            }
+            else
             {
                 setStandardHeatPumpMotorValvePositions();
             }
 
-            // Manage WaterHeat Valves
+            // Manage WaterHeat Valves (Solar bypass)
             if (storage.WaterHeat)
             {
                 Solarvalve.open();
-            } 
-            else 
+            }
+            else
             {
                 Solarvalve.close();
             }
         }
 
-        // Start or reset timer for CleanMode or ValveSwitch
+        // 30-minute auto-reset timer for CleanMode / ValveSwitch
         if (storage.CleanMode || storage.ValveSwitch)
         {
             if (!timerStarted)
@@ -460,45 +467,38 @@ Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID())
                 timerStarted = true;
                 timerStartTime = millis();
             }
-            else if (millis() - timerStartTime >= 1800000) // 30 minutes in milliseconds
+            else if (millis() - timerStartTime >= 1800000UL) // 30 minutes
             {
                 storage.CleanMode = 0;
                 storage.ValveSwitch = 0;
                 timerStarted = false;
+                Debug.print(DBG_INFO, "[ValveTimer] CleanMode/ValveSwitch auto-reset after 30 min");
             }
         }
         else
         {
             timerStarted = false;
         }
-    } 
-    if (storage.ValveMode && !FiltrationPump.IsRunning() && !HeatPump.IsRunning())
+    }
+    else if (storage.ValveMode && !FiltrationPump.IsRunning())
     {
+        // Pump stopped: return to standard positions and cancel active modes
         setStandardMotorValvePositions();
-
-        // Reset CleanMode and ValveSwitch
         if (storage.CleanMode || storage.ValveSwitch)
         {
             storage.CleanMode = 0;
             storage.ValveSwitch = 0;
+            Debug.print(DBG_INFO, "[ValveTimer] CleanMode/ValveSwitch cleared: filtration stopped");
         }
-
-        timerStarted = false;
-    }
-    if (storage.ValveMode && !storage.CleanMode && !HeatPump.IsRunning())
-    {
-        setStandardMotorValvePositions();
-        timerStarted = false;
-    }
-    else
-    {
         timerStarted = false;
     }
 
     // ******************************************************************************************
     // Manage WaterLevel and WaterFillMode
     // ******************************************************************************************
-    unsigned long lastUpTime = 0;
+    // BUG FIX: lastUpTime must be static so WaterFill consumption is only accumulated
+    // for the NEW runtime since the previous task iteration, not the total UpTime every 500ms.
+    static unsigned long lastUpTime = 0;
     float waterConsumption = 0.0;
     float flowRate = storage.WaterFillFR;
 

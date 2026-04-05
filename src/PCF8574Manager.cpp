@@ -118,17 +118,21 @@ void PCF8574Manager::updateTask(void* parameter) {
                 uint8_t result = Wire.endTransmission();
 
                 if (result == 0) {
-                    // Update shadow state on successful write
+                    // RACE CONDITION FIX: Do NOT overwrite shadowState here with update.state.
+                    // update.state was captured at queue-time; by write-time another queuePinUpdate()
+                    // may have already updated shadowState to a newer value.  Overwriting would
+                    // silently lose those newer pin changes.  The shadow is authoritative — it is
+                    // updated atomically in queuePinUpdate() and is always the desired state.
+                    // We only clear pendingWrite and the error counter here.
                     if (xSemaphoreTake(manager->stateMutex, portMAX_DELAY) == pdTRUE) {
                         for (int i = 0; i < 4; i++) {
                             if (PCF_ADDRESSES[i] == update.address) {
-                                manager->states[i].shadowState = update.state;
                                 manager->states[i].pendingWrite = false;
                                 manager->states[i].errorCount = 0;
                                 response.success = true;
-                                I2CError = false; // Reset I2CError on success
-                                Debug.print(DBG_VERBOSE, "[PCF_Update] Shadow state updated to 0x%02X for 0x%02X",
-                                            update.state, update.address);
+                                I2CError = false;
+                                Debug.print(DBG_VERBOSE, "[PCF_Update] Write OK for 0x%02X (shadow preserved: 0x%02X)",
+                                            update.address, manager->states[i].shadowState);
                                 break;
                             }
                         }

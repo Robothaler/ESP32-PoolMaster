@@ -2,6 +2,9 @@
 #include "PoolMaster.h"
 #include "Ota.h"
 #include "Config.h"
+#ifdef MATTER_ENABLED
+#include "MatterBridge.h"
+#endif
 
 void createTasks(int app_cpu, TaskHandle_t* pubSetTaskHandle, TaskHandle_t* pubMeasTaskHandle) {
   BaseType_t result;
@@ -152,5 +155,19 @@ void createTasks(int app_cpu, TaskHandle_t* pubSetTaskHandle, TaskHandle_t* pubM
 
   Debug.print(DBG_INFO, "[TASKS] OTA task created");
   vTaskDelay(DT13); // Apply start offset for OTA task */
+
+  // T14: Matter Bridge state sync (only when Matter is compiled in)
+#ifdef MATTER_ENABLED
+  xTaskCreatePinnedToCore(
+    MatterSyncTask,   // Pushes pool state → Matter attribute cache every PT14 ms
+    "MatterSync",
+    STACK_T14,
+    NULL,
+    PRIORITY_T14,
+    nullptr,
+    app_cpu           // Core 1 — CHIP stack lock handles cross-core safety
+  );
+  Debug.print(DBG_INFO, "[TASKS] MatterSyncTask created (period=%d ms)", PT14);
+#endif
 }
 

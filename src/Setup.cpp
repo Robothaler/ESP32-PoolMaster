@@ -13,6 +13,9 @@
 #include "Ota.h"
 #include "Tasks.h"
 #include "PCF8574Manager.h"
+#ifdef MATTER_ENABLED
+#include "MatterBridge.h"
+#endif
 
 #include <soc/gpio_struct.h>
 #include <hal/gpio_ll.h>
@@ -70,7 +73,7 @@ struct StoreStruct
 StoreStruct storage =
 { 
     CONFIG_VERSION,
-    WIFI_NETWORK, WIFI_PASSWORD, MQTT_SERVER_LOGIN, MQTT_SERVER_PWD, MQTT_SERVER_ID, "Unknown"/*SaltStatus*/,""/*ResetTimestamp*/,
+    WIFI_SSID, WIFI_PASSWORD, ""/*MQTT_USER*/, ""/*MQTT_PASS*/, MQTT_SERVER_ID/*MQTT_NAME*/, "Unknown"/*SaltStatus*/,""/*ResetTimestamp*/,
     MQTT_SERVER_IP,
     MQTT_SERVER_PORT, 0U/*Uptime*/, 0U/*LastUptimeUpdate*/,
     1/*bool WIFI_OnOff*/, 1/*MQTTLOGIN_OnOff*/, 1/*BUS_A_B*/, 1/*Ph_RegulationOnOff*/, 0/*Orp_RegulationOnOff*/, 1/*AutoMode*/, 1/*SolarLocExt*/, 0/* SolarOnline*/, 1/*SolarMode*/, 1/*Salt_Chlor*/, 1/*SaltMode*/, 1/*SaltPolarity*/, 0/*WinterMode*/, 0/*WaterHeat*/, 1/*ValveMode*/, 0/*CleanMode*/, 0/*ValveSwitch*/, 0/*WaterFillMode*/, 0/*HeatPumpMode*/,
@@ -102,7 +105,7 @@ StoreStruct storage =
 StoreStruct storage =
 {
     CONFIG_VERSION,
-    WIFI_NETWORK, WIFI_PASSWORD, MQTT_SERVER_LOGIN, MQTT_SERVER_PWD, MQTT_SERVER_ID, "Unknown"/*SaltStatus*/, ""/*ResetTimestamp*/,
+    WIFI_SSID, WIFI_PASSWORD, ""/*MQTT_USER*/, ""/*MQTT_PASS*/, MQTT_SERVER_ID/*MQTT_NAME*/, "Unknown"/*SaltStatus*/, ""/*ResetTimestamp*/,
     MQTT_SERVER_IP,
     MQTT_SERVER_PORT, 0U/*Uptime*/, 0U/*LastUptimeUpdate*/,
     1/*bool WIFI_OnOff*/, 1/*MQTTLOGIN_OnOff*/, 1/*BUS_A_B*/, 1/*Ph_RegulationOnOff*/, 0/*Orp_RegulationOnOff*/, 1/*AutoMode*/, 1/*SolarLocExt*/, 0/* SolarOnline*/, 1/*SolarMode*/, 1/*Salt_Chlor*/, 1/*SaltMode*/, 1/*SaltPolarity*/, 0/*WinterMode*/, 0/*WaterHeat*/, 1/*ValveMode*/, 0/*CleanMode*/, 0/*ValveSwitch*/, 0/*WaterFillMode*/, 0/*HeatPumpMode*/,
@@ -184,6 +187,10 @@ PCF_Pin HEAT_ON_PIN         = {HEAT_ON, PCF8574_III_ADR};       // P7
 // Mutex to share access to I2C bus among tasks: AnalogPoll, StatusLights, RTC, BME280
 SemaphoreHandle_t mutex = NULL;
 TaskHandle_t mutexOwner = NULL;
+
+// Separate mutex for MQTT publish operations (must NOT reuse the I2C mutex —
+// holding I2C while waiting for MQTT would stall all I2C peripherals).
+SemaphoreHandle_t mqttMutex = NULL;
 
 // Mutex to protect I2C states and outputs
 SemaphoreHandle_t i2cStatesMutex = NULL;
@@ -278,8 +285,16 @@ void bme280Init(void);
 void saveSensorMapping(const char* sensorMapping[], uint8_t ds18b20Mapping[], uint8_t numSensors);
 void RTCInit(void);
 void createTasks(int app_cpu, TaskHandle_t* pubSetTaskHandle, TaskHandle_t* pubMeasTaskHandle);
-String formatUptime(uint32_t uptime);
-String resetReasonToString(esp_reset_reason_t reason);
+// Formats an uptime value (milliseconds) as "DDd HHh MMm SSs"
+String formatUptime(uint32_t uptimeMs) {
+    uint32_t s  = uptimeMs / 1000;
+    uint32_t m  = s / 60;  s %= 60;
+    uint32_t h  = m / 60;  m %= 60;
+    uint32_t d  = h / 24;  h %= 24;
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%ud %02uh %02um %02us", (unsigned)d, (unsigned)h, (unsigned)m, (unsigned)s);
+    return String(buf);
+}
 
 
 bool saveParam(const char* key, uint8_t val);
@@ -338,6 +353,13 @@ void setup()
       while (1);  // Abbruch bei Fehler
   }
 
+  // Create dedicated MQTT mutex (separate from I2C to avoid cross-blocking)
+  mqttMutex = xSemaphoreCreateMutex();
+  if (!mqttMutex) {
+      Debug.print(DBG_ERROR, "[SETUP] Failed to create MQTT mutex");
+      while (1);
+  }
+
   // Start I2C
   static bool i2cInitialized = false;
   if (!i2cInitialized) {
@@ -392,6 +414,14 @@ void setup()
   // Initalize the RTC module
   RTCInit();
 
+  // ── Matter Phase 1: create node + endpoints (BEFORE WiFi) ──────────────────
+  // NVS is ready here (storage loaded), CHIP stack does not need WiFi yet.
+  // BLE commissioning advertisement will start in Phase 2 (after WiFi).
+#ifdef MATTER_ENABLED
+  Debug.print(DBG_INFO, "[SETUP] Matter Phase 1: creating endpoints...");
+  matterBridgeInit();
+#endif
+
   Debug.print(DBG_INFO, "[SETUP] Initializing MQTT...");
   mqttInit();
 
@@ -405,6 +435,14 @@ void setup()
     delay(500);
     Serial.print(".");
   }
+
+  // ── Matter Phase 2: start CHIP stack + BLE commissioning (AFTER WiFi) ──────
+  // The Matter stack operates on the WiFi network; BLE is used for initial
+  // commissioning only and is automatically stopped after pairing.
+#ifdef MATTER_ENABLED
+  Debug.print(DBG_INFO, "[SETUP] Matter Phase 2: starting CHIP stack...");
+  matterBridgeStart();
+#endif
 
   StartTime();
   readLocalTime();
@@ -432,7 +470,7 @@ void setup()
 
     ArduinoOTA.setPort(OTA_PORT);
     ArduinoOTA.setHostname(OTA_HOST);
-    ArduinoOTA.setPasswordHash(OTA_PWDHASH);
+    ArduinoOTA.setPassword(OTA_PASSWORD);
     ArduinoOTA.onStart([]() { /* ... */ });
     ArduinoOTA.onEnd([]() { /* ... */ });
     ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) { /* ... */ });
@@ -701,8 +739,8 @@ bool loadConfig() {
   storage.HeatCurrentCalibCoeffs1 = nvs.getDouble("HeatCurrCalib1",-25.0);
   storage.SaltConcentration     = nvs.getDouble("SaltConc",0.0);
   storage.CellConstant          = nvs.getDouble("CellConstant",0.0);
-  storage.SaltStatus            = nvs.getBool("SaltStatus",false);
-  storage.SaltNeeded            = nvs.getBool("SaltNeeded",false);
+  storage.SaltStatus            = nvs.getString("SaltStatus","Unknown");
+  storage.SaltNeeded            = nvs.getDouble("SaltNeeded",0.0);
   storage.PoolVolume            = nvs.getDouble("PoolVolume",0.0);
   storage.Uptime                = nvs.getUInt("Uptime", 0U);
   storage.LastUptimeUpdate      = nvs.getUInt("LastUpdt", 0U);
@@ -758,7 +796,7 @@ bool loadConfig() {
               storage.FilterCurrentCalibCoeffs0, storage.FilterCurrentCalibCoeffs1,
               storage.HeatCurrentCalibCoeffs0, storage.HeatCurrentCalibCoeffs1);
   Debug.print(DBG_INFO,"SaltConcentration: %4.2f, CellConstant: %4.2f", storage.SaltConcentration, storage.CellConstant);
-  Debug.print(DBG_INFO,"SaltStatus: %d, SaltNeeded: %d", storage.SaltStatus, storage.SaltNeeded);
+  Debug.print(DBG_INFO,"SaltStatus: %s, SaltNeeded: %.2f", storage.SaltStatus.c_str(), (double)storage.SaltNeeded);
   Debug.print(DBG_INFO,"PoolVolume: %4.2f", storage.PoolVolume);
   Debug.print(DBG_INFO,"System: Uptime: %s, LastUptimeUpdate: %u",formatUptime(storage.Uptime).c_str(),storage.LastUptimeUpdate);
   Debug.print(DBG_INFO,"Reset: Reason: %s, Timestamp: %s", resetReasonToString(storage.ResetReason), storage.ResetTimestamp.c_str());
@@ -881,8 +919,8 @@ bool saveConfig() {
   i += nvs.putDouble("HeatCurrCalib1", storage.HeatCurrentCalibCoeffs1);
   i += nvs.putDouble("SaltConc", storage.SaltConcentration);
   i += nvs.putDouble("CellConstant", storage.CellConstant);
-  i += nvs.putBool("SaltStatus", storage.SaltStatus);
-  i += nvs.putBool("SaltNeeded", storage.SaltNeeded);
+  i += nvs.putString("SaltStatus", storage.SaltStatus);
+  i += nvs.putDouble("SaltNeeded", storage.SaltNeeded);
   i += nvs.putDouble("PoolVolume", storage.PoolVolume);
   i += nvs.putUInt("Uptime", storage.Uptime);
   i += nvs.putUInt("LastUpdt", storage.LastUptimeUpdate);
@@ -979,7 +1017,7 @@ void stack_mon(UBaseType_t &hwm)
   if(!hwm || temp < hwm)
   {
     hwm = temp;
-    Debug.print(DBG_DEBUG,"[stack_mon] %s: %d bytes",pcTaskGetTaskName(NULL), hwm);
+    Debug.print(DBG_DEBUG,"[stack_mon] %s: %d bytes",pcTaskGetName(NULL), hwm);
   }  
 }
 
@@ -995,7 +1033,7 @@ bool lockI2C() {
     if (xSemaphoreTakeRecursive(mutex, pdMS_TO_TICKS(timeout)) == pdTRUE) {
         mutexOwner = xTaskGetCurrentTaskHandle();
         #ifdef DEBUG_I2C_LOCK
-        Debug.print(DBG_DEBUG, "[I2C] Mutex locked by %s", pcTaskGetTaskName(NULL));
+        Debug.print(DBG_DEBUG, "[I2C] Mutex locked by %s", pcTaskGetName(NULL));
         #endif
         return true;
     }
@@ -1011,12 +1049,12 @@ void unlockI2C() {
     return;
   }
   if (mutexOwner != xTaskGetCurrentTaskHandle()) {
-    Debug.print(DBG_ERROR, "[I2C] Unlock attempted by non-owner: %s!", pcTaskGetTaskName(NULL));
+    Debug.print(DBG_ERROR, "[I2C] Unlock attempted by non-owner: %s!", pcTaskGetName(NULL));
     return;
   }
   mutexOwner = NULL;
   #ifdef DEBUG_I2C_LOCK
-  Debug.print(DBG_DEBUG, "[I2C] Mutex unlocked by %s", pcTaskGetTaskName(NULL));
+  Debug.print(DBG_DEBUG, "[I2C] Mutex unlocked by %s", pcTaskGetName(NULL));
   #endif
   xSemaphoreGiveRecursive(mutex);
 }

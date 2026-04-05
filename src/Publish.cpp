@@ -40,12 +40,14 @@ extern MotorValve Solarvalve;
 int freeRam(void);
 void stack_mon(UBaseType_t&);
 
-// Publishes a JSON document or string payload to a single topic
+// Publishes a JSON document or string payload to a single topic.
+// BUG FIX: uses the dedicated mqttMutex (not the I2C mutex) so MQTT publishing
+// cannot block I2C operations in CombinedPollingTask / PCF8574Manager.
 void PublishTopic(const char* topic, const char* payload, size_t n)
 {
-    // Attempt to take mutex with timeout to avoid deadlocks
-    if (!xSemaphoreTake(mutex, pdMS_TO_TICKS(1000))) {
-        Debug.print(DBG_ERROR, "[PublishTopic] Failed to take mutex for topic %s", topic);
+    if (!mqttMutex) return; // Guard against pre-init calls
+    if (!xSemaphoreTake(mqttMutex, pdMS_TO_TICKS(1000))) {
+        Debug.print(DBG_ERROR, "[PublishTopic] Failed to take mqttMutex for topic %s", topic);
         return;
     }
     bool publishSuccess = mqttClient.publish(topic, 1, true, payload, n) != 0;
@@ -54,7 +56,7 @@ void PublishTopic(const char* topic, const char* payload, size_t n)
     } else {
         Debug.print(DBG_ERROR, "[PublishTopic] Failed to publish to %s: %s", topic, payload);
     }
-    xSemaphoreGive(mutex);
+    xSemaphoreGive(mqttMutex);
 }
 
 // Publishes system settings to MQTT broker

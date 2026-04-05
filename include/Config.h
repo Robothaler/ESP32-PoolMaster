@@ -272,6 +272,36 @@
 #define OTA_NEXTION_PORT  80        // Port for Nextion OTA web server
 #define OTA_NEXTION_PATH  "/upload" // Endpoint for Nextion OTA uploads
 
+// =============================================================================
+// Matter Bridge Configuration
+// =============================================================================
+// Uncomment MATTER_ENABLED here to build with Matter support, OR pass
+// -D MATTER_ENABLED via the [env:matter_serial] / [env:matter_ota] PlatformIO
+// environment (recommended — keeps non-Matter builds unaffected).
+// #define MATTER_ENABLED
+
+// Matter device identity  (override via -D in platformio.ini if desired)
+// Use 0xFFF1/0x8000 range for test/development.
+// Replace with Connectivity Standards Alliance (CSA) assigned IDs for production.
+#define MATTER_VENDOR_ID        0xFFF1    // Test vendor ID
+#define MATTER_PRODUCT_ID       0xCA01    // PoolMaster Bridge product ID
+#define MATTER_DISCRIMINATOR    3840      // BLE discriminator for commissioning (0–4095)
+#define MATTER_PASSCODE         20202021  // Setup passcode — CHANGE FOR PRODUCTION
+#define MATTER_DEVICE_NAME      "PoolMaster Bridge"
+
+// Sync period: how often pool state is pushed to Matter attribute cache (ms)
+#define MATTER_SYNC_PERIOD_MS   5000
+
+// T14: Matter sync task parameters (used by createTasks() when MATTER_ENABLED)
+#ifndef STACK_T14
+  #define STACK_T14             4096
+#endif
+#ifndef PT14
+  #define PT14                  MATTER_SYNC_PERIOD_MS
+#endif
+#define DT14                    (2000 / portTICK_PERIOD_MS)  // Start offset
+#define PRIORITY_T14            1
+
 #define CHRONO                    // Activate tasks timings traces for profiling
 //#define SIMU                      // Used to simulate pH/ORP sensors. Very simple simulation:
                                     // the sensor value is computed from the output of the PID 

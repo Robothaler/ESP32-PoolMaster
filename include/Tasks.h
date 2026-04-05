@@ -21,6 +21,11 @@ extern void MeasuresPublish(void*);
 extern void StatusLights(void*);
 extern void otaTask(void*);
 
+// T14: Matter state sync task (compiled only when MATTER_ENABLED is set)
+#ifdef MATTER_ENABLED
+extern void MatterSyncTask(void*);
+#endif
+
 // Globale Variablen
 void createTasks(int app_cpu, TaskHandle_t* pubSetTaskHandle, TaskHandle_t* pubMeasTaskHandle);
 

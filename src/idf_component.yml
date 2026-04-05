@@ -1,0 +1,17 @@
+## IDF Component Manager Manifest File
+## Used to integrate the esp_matter component for Matter protocol support.
+## Requires pioarduino platform with ESP-IDF 5.x (arduino-esp32 3.x).
+##
+## To install components: run `idf.py add-dependency` or let PlatformIO resolve them.
+## More info: https://docs.espressif.com/projects/idf-component-manager/
+
+dependencies:
+  ## Required for Matter (Connected Home IP) protocol stack
+  espressif/esp_matter:
+    version: ">=1.3.0"
+    rules:
+      - if: "idf_version >=5.1.0"
+
+  ## IDF version constraint
+  idf:
+    version: ">=5.1.0"

@@ -27,6 +27,17 @@
 #include "ADS1115.h"              // ADS1115 sensors library
 #include "PCF8574.h"              // IO-Portexpander
 #include <credentials.h>          // WIFI Credentials
+// credentials.h defines MQTT_USER and MQTT_PORT as macros which clash with the
+// identically named StoreStruct member fields below. Undefine them immediately
+// so the struct compiles correctly. All runtime access goes through storage.MQTT_USER
+// and storage.MQTT_PORT (struct members). Compile-time defaults use MQTT_SERVER_PORT
+// and MQTT_SERVER_ID from Config.h.
+#ifdef MQTT_USER
+  #undef MQTT_USER
+#endif
+#ifdef MQTT_PORT
+  #undef MQTT_PORT
+#endif
 #include "RTClib.h"               // Real Time Clock library
 #include <SPI.h>
 #include <Adafruit_Sensor.h>
@@ -79,13 +90,14 @@ extern StoreStruct storage;
 extern const PCF_Pin NO_PIN;
 
 extern SemaphoreHandle_t mutex;           // Mutex for I2C access
+extern SemaphoreHandle_t mqttMutex;       // Mutex for MQTT publish (separate from I2C)
 extern SemaphoreHandle_t i2cStatesMutex;  // Mutex for I2C states
 extern SemaphoreHandle_t i2cOutputMutex;  // Mutex for I2C output states
 
 bool lockI2C(); // Declaration of the lockI2C function
 void unlockI2C(); // Declaration of the unlockI2C function
 unsigned long getDurationSafe(unsigned long start, unsigned long current);
-const char* resetReasonToString(uint8_t reason);
+// Forward declaration — full inline definition is below near line 155
 
 //Queue object to store incoming JSON commands (up to 10)
 #define QUEUE_ITEMS_NBR 20
@@ -138,9 +150,9 @@ void publishSolarMode(int event);
 void connectToWiFi();
 void connectToMqtt();
 
-// Converts ESP32 reset reason enum to a human-readable string
-// Returns a String describing the reset reason
-String resetReasonToString(esp_reset_reason_t reason) {
+// Converts ESP32 reset reason to a human-readable C-string literal.
+// inline to avoid multiple-definition errors when included in several TUs.
+inline const char* resetReasonToString(esp_reset_reason_t reason) {
     switch (reason) {
         case ESP_RST_UNKNOWN:    return "Unknown";
         case ESP_RST_POWERON:    return "Power-on";
@@ -155,6 +167,10 @@ String resetReasonToString(esp_reset_reason_t reason) {
         case ESP_RST_SDIO:       return "SDIO";
         default:                 return "Invalid";
     }
+}
+// uint8_t overload — storage.ResetReason is uint8_t, not esp_reset_reason_t
+inline const char* resetReasonToString(uint8_t reason) {
+    return resetReasonToString(static_cast<esp_reset_reason_t>(reason));
 }
 
 // DS18B20 SENSOR-Mapping to save the sensoradress and Indexnumber to nvs
