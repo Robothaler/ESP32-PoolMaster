@@ -14,9 +14,7 @@ const uint8_t PCF8574Manager::PCF_ADDRESSES[] = {PCF8574_ADR, PCF8574_I_ADR, PCF
 
 PCF8574Manager::PCF8574Manager() : updateQueue(NULL), stateMutex(NULL), taskHandle(NULL) {
     for (int i = 0; i < 4; i++) {
-        states[i].shadowState = 0xFF; // Initialize shadow register to all high (default)
-        states[i].pendingWrite = false;
-        states[i].outputState = 0xFF;
+        states[i].shadowState = 0xFF; // Shadow-Register auf HIGH (inaktiv, active-low) vorinitialisieren
         states[i].lastUpdate = 0;
         states[i].errorCount = 0;
     }
@@ -33,9 +31,6 @@ void PCF8574Manager::init() {
 
     for (int i = 0; i < 4; i++) {
         states[i].shadowState = 0xFF;
-        states[i].pendingWrite = false;
-        states[i].outputState = 0xFF;
-        states[i].outputMutex = xSemaphoreCreateMutex();
         states[i].lastUpdate = 0;
         states[i].errorCount = 0;
         queueUpdate(PCF_ADDRESSES[i], 0xFF, NULL); // Initialize hardware to match shadow
@@ -45,40 +40,47 @@ void PCF8574Manager::init() {
     Debug.print(DBG_INFO, "[PCF8574Manager] Initialized and update task started");
 }
 
-void PCF8574Manager::queuePinUpdate(uint8_t address, uint8_t pin, bool state, QueueHandle_t responseQueue) {
-    if (pin > 7) return;
-    
-    // Update shadow register
+bool PCF8574Manager::queuePinUpdate(uint8_t address, uint8_t pin, bool state, QueueHandle_t responseQueue) {
+    if (pin > 7) return false;
+
+    // Shadow-Register atomar aktualisieren
     if (xSemaphoreTake(this->stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
         for (int i = 0; i < 4; i++) {
             if (PCF_ADDRESSES[i] == address) {
                 uint8_t pinMask = (1 << pin);
-                states[i].shadowState = state ? (states[i].shadowState & ~pinMask) : (states[i].shadowState | pinMask); // Active-Low
-                Debug.print(DBG_VERBOSE, "[PCF8574Manager] Shadow state updated for 0x%02X, pin %d to %d (new shadow: 0x%02X)",
+                // Active-Low: state=true → Pin LOW (Bit=0), state=false → Pin HIGH (Bit=1)
+                states[i].shadowState = state ? (states[i].shadowState & ~pinMask) : (states[i].shadowState | pinMask);
+                Debug.print(DBG_VERBOSE, "[PCF8574Manager] Shadow 0x%02X: pin %d → %d (shadow=0x%02X)",
                             address, pin, state ? 0 : 1, states[i].shadowState);
                 break;
             }
         }
         xSemaphoreGive(this->stateMutex);
     } else {
-        Debug.print(DBG_WARNING, "[PCF8574Manager] Failed to take state mutex for shadow update");
+        Debug.print(DBG_WARNING, "[PCF8574Manager] Mutex-Timeout beim Shadow-Update für 0x%02X", address);
+        return false;
     }
 
-    // Queue update to hardware
-    queueUpdate(address, getShadowState(address), responseQueue);
+    // Schreib-Signal in Queue stellen (updateTask liest Shadow zur Schreibzeit, nicht jetzt)
+    return queueUpdate(address, 0 /*ignoriert*/, responseQueue);
 }
 
-void PCF8574Manager::queueUpdate(uint8_t address, uint8_t state, QueueHandle_t responseQueue) {
+bool PCF8574Manager::queueUpdate(uint8_t address, uint8_t /*state_ignored*/, QueueHandle_t responseQueue) {
+    // Hinweis: Der state-Parameter wird hier nicht mehr in die Queue gelegt.
+    // Der updateTask liest den Shadow zur Schreibzeit, damit keine veralteten
+    // Snapshots auf die Hardware geschrieben werden (verhindert Glitches).
     PCFUpdate update;
     update.address = address;
-    update.state = state;
+    update.state = 0; // Platzhalter — updateTask liest aktuellen Shadow
     update.responseQueue = responseQueue;
 
-    Debug.print(DBG_VERBOSE, "[PCF8574Manager] Queuing update for 0x%02X with state 0x%02X", address, state);
+    Debug.print(DBG_VERBOSE, "[PCF8574Manager] Queue-Signal für 0x%02X", address);
     if (xQueueSend(this->updateQueue, &update, pdMS_TO_TICKS(10)) != pdTRUE) {
-        Debug.print(DBG_ERROR, "[PCF8574Manager] Failed to queue update for 0x%02X: Queue full", address);
-        I2CError = true; // Set I2CError on queue full
+        Debug.print(DBG_ERROR, "[PCF8574Manager] Queue voll für 0x%02X — Write-Signal verloren", address);
+        I2CError = true;
+        return false;
     }
+    return true;
 }
 
 uint8_t PCF8574Manager::getState(uint8_t address) {
@@ -112,26 +114,35 @@ void PCF8574Manager::updateTask(void* parameter) {
             response.errorCode = 0;
 
             if (lockI2C()) {
-                Debug.print(DBG_VERBOSE, "[PCF_Update] Writing state 0x%02X to 0x%02X", update.state, update.address);
+                // Shadow zur Schreibzeit lesen — nicht den Queue-Snapshot.
+                // Damit werden mehrere gestaute Queue-Einträge für dieselbe Adresse
+                // alle mit dem aktuellsten Sollwert geschrieben → keine Glitches durch
+                // veraltete Zwischenzustände (z.B. kurzes OFF bei MotorValve-Richtungswechsel).
+                uint8_t stateToWrite = 0xFF;
+                if (xSemaphoreTake(manager->stateMutex, portMAX_DELAY) == pdTRUE) {
+                    for (int i = 0; i < 4; i++) {
+                        if (PCF_ADDRESSES[i] == update.address) {
+                            stateToWrite = manager->states[i].shadowState;
+                            break;
+                        }
+                    }
+                    xSemaphoreGive(manager->stateMutex);
+                }
+
+                Debug.print(DBG_VERBOSE, "[PCF_Update] Schreibe 0x%02X → 0x%02X", update.address, stateToWrite);
                 Wire.beginTransmission(update.address);
-                Wire.write(update.state);
+                Wire.write(stateToWrite);
                 uint8_t result = Wire.endTransmission();
 
                 if (result == 0) {
-                    // RACE CONDITION FIX: Do NOT overwrite shadowState here with update.state.
-                    // update.state was captured at queue-time; by write-time another queuePinUpdate()
-                    // may have already updated shadowState to a newer value.  Overwriting would
-                    // silently lose those newer pin changes.  The shadow is authoritative — it is
-                    // updated atomically in queuePinUpdate() and is always the desired state.
-                    // We only clear pendingWrite and the error counter here.
                     if (xSemaphoreTake(manager->stateMutex, portMAX_DELAY) == pdTRUE) {
                         for (int i = 0; i < 4; i++) {
                             if (PCF_ADDRESSES[i] == update.address) {
-                                manager->states[i].pendingWrite = false;
                                 manager->states[i].errorCount = 0;
+                                manager->states[i].lastUpdate = millis();
                                 response.success = true;
                                 I2CError = false;
-                                Debug.print(DBG_VERBOSE, "[PCF_Update] Write OK for 0x%02X (shadow preserved: 0x%02X)",
+                                Debug.print(DBG_VERBOSE, "[PCF_Update] OK 0x%02X (shadow=0x%02X)",
                                             update.address, manager->states[i].shadowState);
                                 break;
                             }
@@ -140,16 +151,15 @@ void PCF8574Manager::updateTask(void* parameter) {
                     }
                 } else {
                     response.errorCode = result;
-                    Debug.print(DBG_ERROR, "[PCF_Update] Write failed to 0x%02X, error: %d", update.address, result);
+                    Debug.print(DBG_ERROR, "[PCF_Update] Fehler 0x%02X, I2C-Code: %d", update.address, result);
                     if (xSemaphoreTake(manager->stateMutex, portMAX_DELAY) == pdTRUE) {
                         for (int i = 0; i < 4; i++) {
                             if (PCF_ADDRESSES[i] == update.address) {
                                 manager->states[i].errorCount++;
                                 if (manager->states[i].errorCount >= 5) {
-                                    I2CError = true; // Set I2CError on critical error threshold
-                                    Debug.print(DBG_ERROR, "[PCF_Update] Critical error threshold reached for 0x%02X: %d errors",
+                                    I2CError = true;
+                                    Debug.print(DBG_ERROR, "[PCF_Update] Kritische Fehlergrenze 0x%02X: %d Fehler",
                                                 update.address, manager->states[i].errorCount);
-                                    // Optional: Reset attempt could be implemented here
                                 }
                                 break;
                             }

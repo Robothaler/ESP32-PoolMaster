@@ -139,8 +139,8 @@
 #define TIMETOMAX_45      45   // Time to reach to maximum in Seconds
 #define TIMETOMAX_90      90   // Time to reach to maximum in Seconds
 
-#define WDT_TIMEOUT       10
-#define MWDT_TIMEOUT_MS   15000 // 15 Sekunden
+#define WDT_TIMEOUT       10000  // ms — Task WDT timeout (10 s); was incorrectly 10 ms
+#define MWDT_TIMEOUT_MS   15000  // ms — Motor WDT timeout (15 s)
 
 // Server port
 #define SERVER_PORT       8060
@@ -247,7 +247,7 @@
 #define STACK_T10         4096  // StatusLights
 #define STACK_T11         4096  // PublishMeasures
 #define STACK_T12         5120  // PublishSettings
-#define STACK_T13         3072  // OTATask (increased to 12 KB and placed in PSRAM if possible)
+#define STACK_T13         6144  // OTATask — SPIFFS + HardwareSerial + 512 B file buffer
 
 // Task priorities angepasst für bessere Synchronisation
 #define PRIORITY_T1       1    // CombinedPolling höchste Priorität

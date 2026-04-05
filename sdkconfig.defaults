@@ -18,6 +18,12 @@ CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
 CONFIG_SPIRAM_RODATA=y
 
+# ── ESP32-S3 Instruction Cache / IRAM balance ──────────────────────────────────
+# S3 Bank 0 = 48KB split between I-Cache and IRAM:
+#   32KB cache → 16KB IRAM  (default, leads to 100% IRAM usage with Matter)
+#   16KB cache →  32KB IRAM  ← use this; SPIRAM_FETCH_INSTRUCTIONS compensates the smaller cache
+CONFIG_ESP32S3_INSTRUCTION_CACHE_16KB=y
+
 # ── Arduino compatibility ───────────────────────────────────────────────────────
 CONFIG_AUTOSTART_ARDUINO=y
 CONFIG_ARDUINO_SELECTIVE_COMPILATION=y

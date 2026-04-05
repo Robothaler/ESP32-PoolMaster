@@ -162,7 +162,7 @@ PCF_Pin ROBOT_PUMP_PIN      = {ROBOT_PUMP, PCF8574_I_ADR};      // P3
 PCF_Pin PH_PUMP_PIN         = {PH_PUMP, PCF8574_I_ADR};         // P4
 PCF_Pin CHL_PUMP_PIN        = {CHL_PUMP, PCF8574_I_ADR};        // P5
 PCF_Pin SOLAR_PUMP_PIN      = {SOLAR_PUMP, PCF8574_I_ADR};      // P6
-PCF_Pin SALT_POL_PIN        = {SALT_POL, PCF8574_I_ADR};        // P7
+// SALT_POL (GPIO 13) ist kein PCF8574-Pin — Polaritätsumschaltung via direktem digitalWrite() in Loops.cpp
 
 // Define RELAY-PINS for MotorValves (Third PCF8574_II)
 PCF_Pin ESD_TRE_OPEN_PIN    = {ESD_TRE_OPEN, PCF8574_II_ADR};   // P0

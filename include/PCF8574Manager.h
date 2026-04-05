@@ -16,10 +16,7 @@ struct PCFUpdateResponse {
 };
 
 struct PCF8574State {
-    uint8_t shadowState;    // Shadow-Register für den gewünschten Zustand
-    bool pendingWrite;
-    uint8_t outputState;
-    SemaphoreHandle_t outputMutex;
+    uint8_t shadowState;    // Shadow-Register für den gewünschten Zustand (einzige Quelle der Wahrheit)
     unsigned long lastUpdate;
     uint8_t errorCount;
 };
@@ -31,8 +28,8 @@ public:
         return instance;
     }
     void init();
-    void queuePinUpdate(uint8_t address, uint8_t pin, bool state, QueueHandle_t responseQueue = NULL);
-    void queueUpdate(uint8_t address, uint8_t state, QueueHandle_t responseQueue = NULL);
+    bool queuePinUpdate(uint8_t address, uint8_t pin, bool state, QueueHandle_t responseQueue = NULL);
+    bool queueUpdate(uint8_t address, uint8_t state, QueueHandle_t responseQueue = NULL);
     uint8_t getState(uint8_t address);
 
 private:

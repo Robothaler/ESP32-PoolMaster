@@ -141,8 +141,9 @@ void createTasks(int app_cpu, TaskHandle_t* pubSetTaskHandle, TaskHandle_t* pubM
     app_cpu
   );
 
-  // OTA task for Nextion display
-  /*Debug.print(DBG_INFO, "[TASKS] Creating OTA task...");
+  // OTA task: sets up SPIFFS, the Nextion web-upload server, and flashes
+  // the Nextion display when a new .tft file has been uploaded.
+  Debug.print(DBG_INFO, "[TASKS] Creating OTA task...");
   xTaskCreatePinnedToCore(
     otaTask,
     "OTATask",
@@ -152,9 +153,7 @@ void createTasks(int app_cpu, TaskHandle_t* pubSetTaskHandle, TaskHandle_t* pubM
     nullptr,
     app_cpu
   );
-
   Debug.print(DBG_INFO, "[TASKS] OTA task created");
-  vTaskDelay(DT13); // Apply start offset for OTA task */
 
   // T14: Matter Bridge state sync (only when Matter is compiled in)
 #ifdef MATTER_ENABLED

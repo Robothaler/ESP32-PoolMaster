@@ -111,7 +111,7 @@ void MotorValve::loop() {
             currentAngle = (calibrationDirection == CLOCKWISE) ? startAngle : maxAngle;
             Debug.print(DBG_DEBUG, "[MotorValve] %s: Calibration stopped at angle: %d, openState: 0x%02X, closeState: 0x%02X",
                         instanceName, currentAngle, getCurrentState(openPin.address), getCurrentState(closePin.address));
-            synchronizeWithShadow(); // synchronize after calibration
+            // synchronizeWithShadow() nicht nötig — setIdle() hat Shadow gerade korrekt gesetzt.
         }
     }
 
@@ -176,42 +176,37 @@ void MotorValve::setOpenSignal() {
     }
     Debug.print(DBG_INFO, "[MotorValve] %s: Queued openPin %d on 0x%02X to ON, closePin %d on 0x%02X to OFF",
                 instanceName, openPin.pin, openPin.address, closePin.pin, closePin.address);
-    synchronizeWithShadow(); // imidiate synchronization
+    // Kein synchronizeWithShadow() hier — Shadow wurde soeben korrekt gesetzt,
+    // ein sofortiger Check wäre immer ein No-Op und kostet unnötige Mutex-Acquires.
 }
 
 void MotorValve::setCloseSignal() {
     PCF8574Manager& manager = PCF8574Manager::getInstance();
-    // Update Register
     openPinState = false;
     closePinState = true;
-    // deactivate Open-Pin first
+    // Erst Open-Pin deaktivieren, dann Close-Pin aktivieren
     if (openPin.address != 0xFF && openPin.pin <= 7) {
-        manager.queuePinUpdate(openPin.address, openPin.pin, false);   // OFF = HIGH at activeLow
+        manager.queuePinUpdate(openPin.address, openPin.pin, false);   // OFF = HIGH (active-low)
     }
-    // Aactivate Close-Pin
     if (closePin.address != 0xFF && closePin.pin <= 7) {
-        manager.queuePinUpdate(closePin.address, closePin.pin, true);  // ON = LOW at activeLow
+        manager.queuePinUpdate(closePin.address, closePin.pin, true);  // ON = LOW (active-low)
     }
     Debug.print(DBG_INFO, "[MotorValve] %s: Queued closePin %d on 0x%02X to ON, openPin %d on 0x%02X to OFF",
                 instanceName, closePin.pin, closePin.address, openPin.pin, openPin.address);
-    synchronizeWithShadow(); // imidiate synchronization
 }
 
 void MotorValve::setIdle() {
     PCF8574Manager& manager = PCF8574Manager::getInstance();
-    // Update Register
     openPinState = false;
     closePinState = false;
-    // Deaktiviere beide Pins
     if (openPin.address != 0xFF && openPin.pin <= 7) {
-        manager.queuePinUpdate(openPin.address, openPin.pin, false);   // OFF = HIGH at activeLow
+        manager.queuePinUpdate(openPin.address, openPin.pin, false);   // OFF = HIGH (active-low)
     }
     if (closePin.address != 0xFF && closePin.pin <= 7) {
-        manager.queuePinUpdate(closePin.address, closePin.pin, false); // OFF = HIGH at activeLow
+        manager.queuePinUpdate(closePin.address, closePin.pin, false); // OFF = HIGH (active-low)
     }
     Debug.print(DBG_INFO, "[MotorValve] %s: Queued both pins to OFF (openPin %d on 0x%02X, closePin %d on 0x%02X)",
                 instanceName, openPin.pin, openPin.address, closePin.pin, closePin.address);
-    synchronizeWithShadow(); // imimediate synchronization
 }
 
 void MotorValve::synchronizeWithShadow() {
@@ -308,27 +303,17 @@ bool MotorValve::isCalibrating() {
 
 const char* MotorValve::getStatus() {
     static char status[30];
-    uint8_t currentState = getCurrentState(openPin.address);
 
     if (calibrating) {
         snprintf(status, sizeof(status), "calibr...");
     } else if (operating) {
-        unsigned long elapsedTime = millis() - operationStartTime;
-        int angleDiff = abs(currentAngle - targetAngle);
-        int operatingDuration = abs(angleDiff * timeToMaxAngle * 1000 / (maxAngle - startAngle));
-        float progress = (float)elapsedTime / operatingDuration;
-        if (progress > 1.0) progress = 1.0;
-
-        int calculatedAngle = opening ? currentAngle - (angleDiff * progress) : currentAngle + (angleDiff * progress);
-        if (opening && calculatedAngle < targetAngle) calculatedAngle = targetAngle;
-        if (closing && calculatedAngle > targetAngle) calculatedAngle = targetAngle;
-        snprintf(status, sizeof(status), "%d°", calculatedAngle);
+        snprintf(status, sizeof(status), opening ? "öffne" : "schließe");
     } else if (currentAngle == startAngle) {
-        snprintf(status, sizeof(status), "OPEN");
+        snprintf(status, sizeof(status), "AUF");
     } else if (currentAngle == halfAngle) {
-        snprintf(status, sizeof(status), "HALFOPEN");
+        snprintf(status, sizeof(status), "HALB");
     } else if (currentAngle == maxAngle) {
-        snprintf(status, sizeof(status), "CLOSED");
+        snprintf(status, sizeof(status), "ZU");
     } else {
         snprintf(status, sizeof(status), "%d°", currentAngle);
     }

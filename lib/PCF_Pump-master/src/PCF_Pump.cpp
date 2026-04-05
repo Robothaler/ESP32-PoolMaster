@@ -209,6 +209,5 @@ void PCF_Pump::SetTankFill(double TankFill) {
 
 bool PCF_Pump::queueUpdate(uint8_t address, uint8_t pin, bool state) {
     PCF8574Manager& manager = PCF8574Manager::getInstance();
-    manager.queuePinUpdate(address, pin, state);
-    return true;
+    return manager.queuePinUpdate(address, pin, state);
 }

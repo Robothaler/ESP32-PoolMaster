@@ -16,10 +16,16 @@ AsyncWebServer server(OTA_NEXTION_PORT);
 
 // Forward declarations
 void updateNextion();
+// Flag set by the upload handler; polled by otaTask to trigger Nextion flash
+// from the task context (never call updateNextion() from the AsyncTCP callback).
+static volatile bool s_nextion_update_pending = false;
+
 void handleFileUpload(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
   static File file;
+  static bool writeError = false;
 
   if (!index) {
+    writeError = false;
     Debug.print(DBG_INFO, "[OTA] Starting upload: %s", filename.c_str());
     file = SPIFFS.open("/nextion.tft", FILE_WRITE);
     if (!file) {
@@ -32,13 +38,21 @@ void handleFileUpload(AsyncWebServerRequest *request, String filename, size_t in
   if (len) {
     if (file.write(data, len) != len) {
       Debug.print(DBG_ERROR, "[OTA] Write error");
+      writeError = true;
     }
   }
 
   if (final) {
     file.close();
-    Debug.print(DBG_INFO, "[OTA] Upload completed");
-    request->send(200, "text/plain", "File uploaded successfully");
+    if (writeError) {
+      request->send(500, "text/plain", "Write error — Nextion update aborted");
+    } else {
+      Debug.print(DBG_INFO, "[OTA] Upload completed — scheduling Nextion flash");
+      s_nextion_update_pending = true;   // otaTask will call updateNextion()
+      request->send(200, "text/html",
+        "<p>Upload OK. Nextion wird jetzt geflasht (~30 s).</p>"
+        "<p>Seite nach 40 Sekunden neu laden.</p>");
+    }
   }
 }
 
@@ -95,6 +109,16 @@ void otaTask(void *pvParameters) {
   for (;;) {
     esp_task_wdt_reset();
 
+    // Check if a new .tft file was uploaded and needs to be sent to Nextion.
+    // updateNextion() uses delay() internally — call it only from this task,
+    // never from the AsyncTCP upload callback.
+    if (s_nextion_update_pending) {
+      s_nextion_update_pending = false;
+      Debug.print(DBG_INFO, "[OTA] Flashing Nextion...");
+      updateNextion();
+      Debug.print(DBG_INFO, "[OTA] Nextion flash done");
+    }
+
     #ifdef CHRONO
     td = millis();
     #endif
@@ -115,11 +139,14 @@ void otaTask(void *pvParameters) {
 }
 
 void updateNextion() {
+  // Send "whmi-wri" command: write firmware at 115200 baud, from internal flash
   nextionSerial.print("whmi-wri 1,115200,0");
   nextionSerial.write(0xFF);
   nextionSerial.write(0xFF);
   nextionSerial.write(0xFF);
-  delay(1000);
+  // Give Nextion time to enter update mode; use vTaskDelay to feed the WDT
+  esp_task_wdt_reset();
+  vTaskDelay(pdMS_TO_TICKS(1500));
 
   File file = SPIFFS.open("/nextion.tft", FILE_READ);
   if (!file) {
@@ -127,13 +154,22 @@ void updateNextion() {
     return;
   }
 
+  size_t totalBytes = file.size();
+  size_t sentBytes  = 0;
+  uint8_t buffer[512];
+
   while (file.available()) {
-    uint8_t buffer[512];
     size_t bytesRead = file.readBytes((char *)buffer, sizeof(buffer));
     nextionSerial.write(buffer, bytesRead);
-    delay(10);
+    sentBytes += bytesRead;
+    // Yield every ~32 KB so the WDT stays happy during large uploads (~4 MB file)
+    if ((sentBytes % (32 * 1024)) < sizeof(buffer)) {
+      esp_task_wdt_reset();
+      vTaskDelay(pdMS_TO_TICKS(5));
+    }
   }
   file.close();
+  esp_task_wdt_reset();
 
-  Debug.print(DBG_INFO, "[OTA] Nextion update completed");
+  Debug.print(DBG_INFO, "[OTA] Nextion update completed (%u bytes)", (unsigned)sentBytes);
 }
