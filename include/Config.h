@@ -302,6 +302,27 @@
 #define DT14                    (2000 / portTICK_PERIOD_MS)  // Start offset
 #define PRIORITY_T14            1
 
+// =============================================================================
+// Matter SolarControl integration — NVS keys and constants
+// =============================================================================
+// These keys store the SolarControl's Matter NodeId and endpoint IDs in NVS so
+// they survive reboots.  Configure them once via the serial command:
+//   SET_SOLAR_NODE <nodeId_hex> <epPump> <epValve> <epCirc> <epIllum>
+// Example:
+//   SET_SOLAR_NODE 0000000000000002 5 6 7 8
+// =============================================================================
+#ifdef MATTER_ENABLED
+constexpr char NVS_KEY_SOLAR_NODE_ID[]  = "solar_node_id";  // uint64_t — SolarControl Matter NodeId
+constexpr char NVS_KEY_SOLAR_EP_PUMP[]  = "solar_ep_pump";  // uint16_t — SolarControl pump EP (default 5)
+constexpr char NVS_KEY_SOLAR_EP_VALVE[] = "solar_ep_valve"; // uint16_t — SolarControl valve EP (default 6)
+constexpr char NVS_KEY_SOLAR_EP_CIRC[]  = "solar_ep_circ";  // uint16_t — SolarControl circulation EP (default 7)
+constexpr char NVS_KEY_SOLAR_EP_ILLUM[] = "solar_ep_illum"; // uint16_t — SolarControl illumination EP (default 8)
+
+// Hysteresis for the Solar-Mode-Request endpoint:
+// Solar heating is requested when PoolTemp < (PoolSolltemp - SOLAR_MODE_HYSTERESIS)
+#define SOLAR_MODE_HYSTERESIS  1.0f   // °C
+#endif // MATTER_ENABLED
+
 #define CHRONO                    // Activate tasks timings traces for profiling
 //#define SIMU                      // Used to simulate pH/ORP sensors. Very simple simulation:
                                     // the sensor value is computed from the output of the PID 

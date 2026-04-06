@@ -57,10 +57,22 @@
 
 // ── CHIP cluster IDs (from Matter specification) ──────────────────────────────
 #include <app/clusters/on-off-server/on-off-server.h>
-// Use raw IDs for ElectricalMeasurement to avoid include-path fragility
-// across esp_matter versions. Cluster 0x0B04, ActivePower attribute 0x050B.
-static constexpr uint32_t kElecMeasClusterId = 0x0B04;
-static constexpr uint32_t kActivePowerAttrId  = 0x050B;
+// Use raw IDs to avoid include-path fragility across esp_matter versions.
+static constexpr uint32_t kElecMeasClusterId  = 0x0B04; // ElectricalMeasurement
+static constexpr uint32_t kActivePowerAttrId  = 0x050B; // ActivePower
+static constexpr uint32_t kTempMeasClusterId  = 0x0402; // TemperatureMeasurement
+static constexpr uint32_t kTempMeasAttrId     = 0x0000; // MeasuredValue (int16, 0.01°C)
+static constexpr uint32_t kOnOffClusterId     = 0x0006; // OnOff
+static constexpr uint32_t kOnOffAttrId        = 0x0000; // OnOff attribute
+static constexpr uint32_t kBoolStateClusterId = 0x0045; // BooleanState
+static constexpr uint32_t kBoolStateAttrId    = 0x0000; // StateValue
+
+// ── Matter Controller headers (optional — requires CONFIG_ESP_MATTER_CONTROLLER_ENABLE) ──
+#ifdef CONFIG_ESP_MATTER_CONTROLLER_ENABLE
+#include <esp_matter_controller_cluster_command.h>
+#include <esp_matter_controller_subscribe_command.h>
+#include <Preferences.h>
+#endif
 
 using namespace esp_matter;
 using namespace esp_matter::attribute;
@@ -102,7 +114,7 @@ static const char *TAG = "MatterBridge";
 static node_t   *s_node     = nullptr;
 static bool      s_started  = false;
 
-// Endpoint IDs — populated after endpoint::create(), invalid until then
+// Pump/electrolysis endpoint IDs (bridged, always/conditionally reachable)
 static uint16_t s_ep_filt = chip::kInvalidEndpointId;
 static uint16_t s_ep_ph   = chip::kInvalidEndpointId;
 static uint16_t s_ep_heat = chip::kInvalidEndpointId;
@@ -111,6 +123,26 @@ static uint16_t s_ep_chl  = chip::kInvalidEndpointId;
 
 // Last-known reachability for conditional endpoints (Salt/Chl)
 static bool s_salt_chl_was_active = false;
+
+// Native (non-bridged) endpoints exposed for SolarControl to subscribe to
+static uint16_t s_ep_pool_temp  = chip::kInvalidEndpointId; // Pool water temperature
+static uint16_t s_ep_pool_soll  = chip::kInvalidEndpointId; // Pool target temperature
+static uint16_t s_ep_solar_mode = chip::kInvalidEndpointId; // Solar-mode request (OnOff)
+
+// Last synced values — used to avoid redundant attribute writes
+static float s_last_pool_temp  = -999.0f;
+static float s_last_pool_soll  = -999.0f;
+static bool  s_last_solar_mode = false;
+
+#ifdef CONFIG_ESP_MATTER_CONTROLLER_ENABLE
+// SolarControl Matter configuration — loaded from NVS, set via SET_SOLAR_NODE
+static uint64_t s_solar_node_id    = 0;       // SolarControl NodeId
+static uint16_t s_solar_ep_pump    = 5;       // SolarControl pump status EP
+static uint16_t s_solar_ep_valve   = 6;       // SolarControl valve position EP
+static uint16_t s_solar_ep_circ    = 7;       // SolarControl circulation command EP
+static uint16_t s_solar_ep_illum   = 8;       // SolarControl illumination command EP
+static bool     s_solar_subscribed = false;   // Subscription active
+#endif
 
 // =============================================================================
 //  Internal helpers
@@ -182,6 +214,123 @@ static void setReachable(uint16_t ep_id, bool reachable)
 
     esp_matter::lock::chip_stack_unlock();
 }
+
+/**
+ * @brief Update a TemperatureMeasurement::MeasuredValue attribute.
+ *        Value is in °C; stored as int16 * 100 per Matter spec (0.01 °C units).
+ */
+static void updateTemperature(uint16_t ep_id, float temp_c)
+{
+    if (ep_id == chip::kInvalidEndpointId) return;
+    if (esp_matter::lock::chip_stack_lock(pdMS_TO_TICKS(MATTER_LOCK_TIMEOUT_MS)) != ESP_OK) return;
+
+    const int16_t val_i16 = static_cast<int16_t>(temp_c * 100.0f);
+    esp_matter_attr_val_t val = esp_matter_int16(val_i16);
+    attribute::update(ep_id, kTempMeasClusterId, kTempMeasAttrId, &val);
+
+    esp_matter::lock::chip_stack_unlock();
+}
+
+// =============================================================================
+//  SolarControl Matter Controller — subscription callback + helpers
+// =============================================================================
+#ifdef CONFIG_ESP_MATTER_CONTROLLER_ENABLE
+
+/**
+ * @brief Attribute report callback for SolarControl subscriptions.
+ *        Decodes TLV values and writes them into storage.solarXxx fields.
+ *        Called on the CHIP task (Core 0) — storage writes are atomic for
+ *        the scalar types used here (float, bool), no mutex needed.
+ */
+static void solarReportCallback(uint64_t /*remote_node_id*/,
+                                 const chip::app::ConcreteDataAttributePath &path,
+                                 chip::TLV::TLVReader *data)
+{
+    if (!data) return;
+
+    const uint16_t ep  = path.mEndpointId;
+    const uint32_t cid = path.mClusterId;
+    const uint32_t aid = path.mAttributeId;
+
+    // ── TemperatureMeasurement::MeasuredValue (int16, 0.01°C) ────────────────
+    if (cid == kTempMeasClusterId && aid == kTempMeasAttrId) {
+        int16_t raw = 0;
+        if (data->Get(raw) == CHIP_NO_ERROR) {
+            const float temp = raw / 100.0f;
+            if      (ep == 1) { storage.solarRoofTemp    = temp; }
+            else if (ep == 2) { storage.solarBoilerTemp  = temp; }
+            else if (ep == 3) { storage.solarStorageTemp = temp; }
+            else if (ep == 4) { storage.solarBackflowTemp = temp; }
+            ESP_LOGD(TAG, "SolarControl EP%u temp: %.2f°C", ep, temp);
+        }
+    }
+    // ── OnOff::OnOff (bool) ───────────────────────────────────────────────────
+    else if (cid == kOnOffClusterId && aid == kOnOffAttrId) {
+        bool val = false;
+        if (data->Get(val) == CHIP_NO_ERROR) {
+            if      (ep == s_solar_ep_pump)  { storage.solarPumpRunning = val; }
+            else if (ep == s_solar_ep_valve) { storage.solarValvePool   = val; }
+            ESP_LOGD(TAG, "SolarControl EP%u OnOff: %d", ep, (int)val);
+        }
+    }
+    // ── BooleanState::StateValue (bool) ──────────────────────────────────────
+    else if (cid == kBoolStateClusterId && aid == kBoolStateAttrId) {
+        bool val = false;
+        if (data->Get(val) == CHIP_NO_ERROR) {
+            if (ep == 9) { storage.solarValveOK = val; }
+            ESP_LOGD(TAG, "SolarControl EP%u BoolState: %d", ep, (int)val);
+        }
+    }
+}
+
+/**
+ * @brief Load SolarControl Matter config from NVS.
+ *        Called during matterBridgeInit().
+ */
+static void loadSolarConfig()
+{
+    Preferences nvs;
+    if (!nvs.begin("PoolMaster", true)) {
+        ESP_LOGW(TAG, "NVS open failed — using default solar config");
+        return;
+    }
+    uint64_t nodeId = nvs.getULong64(NVS_KEY_SOLAR_NODE_ID, 0);
+    if (nodeId != 0) {
+        s_solar_node_id  = nodeId;
+        s_solar_ep_pump  = nvs.getUShort(NVS_KEY_SOLAR_EP_PUMP,  5);
+        s_solar_ep_valve = nvs.getUShort(NVS_KEY_SOLAR_EP_VALVE, 6);
+        s_solar_ep_circ  = nvs.getUShort(NVS_KEY_SOLAR_EP_CIRC,  7);
+        s_solar_ep_illum = nvs.getUShort(NVS_KEY_SOLAR_EP_ILLUM, 8);
+        ESP_LOGI(TAG, "Solar config loaded: NodeId=0x%016llX pump=%u valve=%u circ=%u illum=%u",
+                 s_solar_node_id, s_solar_ep_pump, s_solar_ep_valve,
+                 s_solar_ep_circ, s_solar_ep_illum);
+    } else {
+        ESP_LOGI(TAG, "No SolarControl NodeId in NVS — use SET_SOLAR_NODE to configure");
+    }
+    nvs.end();
+}
+
+/**
+ * @brief Save SolarControl Matter config to NVS.
+ *        Called after SET_SOLAR_NODE serial command.
+ */
+static void saveSolarConfig()
+{
+    Preferences nvs;
+    if (!nvs.begin("PoolMaster", false)) {
+        ESP_LOGE(TAG, "NVS open for write failed");
+        return;
+    }
+    nvs.putULong64(NVS_KEY_SOLAR_NODE_ID, s_solar_node_id);
+    nvs.putUShort(NVS_KEY_SOLAR_EP_PUMP,  s_solar_ep_pump);
+    nvs.putUShort(NVS_KEY_SOLAR_EP_VALVE, s_solar_ep_valve);
+    nvs.putUShort(NVS_KEY_SOLAR_EP_CIRC,  s_solar_ep_circ);
+    nvs.putUShort(NVS_KEY_SOLAR_EP_ILLUM, s_solar_ep_illum);
+    nvs.end();
+    ESP_LOGI(TAG, "Solar config saved to NVS");
+}
+
+#endif // CONFIG_ESP_MATTER_CONTROLLER_ENABLE
 
 // =============================================================================
 //  Matter callback: attribute update from controller
@@ -264,12 +413,21 @@ static void on_device_event(const chip::DeviceLayer::ChipDeviceEvent *event, int
     switch (event->Type) {
         case chip::DeviceLayer::DeviceEventType::kCommissioningComplete:
             ESP_LOGI(TAG, "Matter commissioning complete!");
+#ifdef CONFIG_ESP_MATTER_CONTROLLER_ENABLE
+            // Automatically subscribe to SolarControl if already configured
+            if (s_solar_node_id != 0 && !s_solar_subscribed) {
+                subscribeToSolarControl(s_solar_node_id);
+            }
+#endif
             break;
         case chip::DeviceLayer::DeviceEventType::kInternetConnectivityChange:
             ESP_LOGI(TAG, "Matter internet connectivity changed");
             break;
         case chip::DeviceLayer::DeviceEventType::kFabricRemoved:
             ESP_LOGW(TAG, "Matter fabric removed");
+#ifdef CONFIG_ESP_MATTER_CONTROLLER_ENABLE
+            s_solar_subscribed = false;
+#endif
             break;
         default:
             break;
@@ -367,22 +525,73 @@ void matterBridgeInit()
     }
     ESP_LOGI(TAG, "Aggregator endpoint id=%u", endpoint::get_id(aggregator));
 
-    // ── Create pump child endpoints ────────────────────────────────────────────
+    // ── Create pump child endpoints (bridged) ─────────────────────────────────
     endpoint_t *ep_filt = createPumpEndpoint(s_node, "Filterpumpe",    true);   // with power
     endpoint_t *ep_ph   = createPumpEndpoint(s_node, "PH-Pumpe",       false);  // no power meter
     endpoint_t *ep_heat = createPumpEndpoint(s_node, "Waermepumpe",    true);   // with power
     endpoint_t *ep_salt = createPumpEndpoint(s_node, "Salzelektrolyse",true);   // with power, conditional
     endpoint_t *ep_chl  = createPumpEndpoint(s_node, "Chlor-Pumpe",   false);  // no power, conditional
 
-    // ── Store endpoint IDs for later attribute updates ─────────────────────────
+    // ── Store pump endpoint IDs ────────────────────────────────────────────────
     if (ep_filt) s_ep_filt = endpoint::get_id(ep_filt);
     if (ep_ph)   s_ep_ph   = endpoint::get_id(ep_ph);
     if (ep_heat) s_ep_heat = endpoint::get_id(ep_heat);
     if (ep_salt) s_ep_salt = endpoint::get_id(ep_salt);
     if (ep_chl)  s_ep_chl  = endpoint::get_id(ep_chl);
 
-    ESP_LOGI(TAG, "Endpoints — filt:%u  ph:%u  heat:%u  salt:%u  chl:%u",
+    ESP_LOGI(TAG, "Pump EPs — filt:%u  ph:%u  heat:%u  salt:%u  chl:%u",
              s_ep_filt, s_ep_ph, s_ep_heat, s_ep_salt, s_ep_chl);
+
+    // ── Create native temperature-sensor endpoints (read by SolarControl) ─────
+    {
+        endpoint::temperature_sensor::config_t cfgPoolTemp;
+        memset(&cfgPoolTemp, 0, sizeof(cfgPoolTemp));
+        endpoint_t *ep = endpoint::temperature_sensor::create(
+            s_node, &cfgPoolTemp, ENDPOINT_FLAG_NONE, nullptr);
+        if (ep) {
+            s_ep_pool_temp = endpoint::get_id(ep);
+            ESP_LOGI(TAG, "EP Pool-Temp: %u", s_ep_pool_temp);
+        } else {
+            ESP_LOGE(TAG, "Failed to create Pool-Temp endpoint");
+        }
+    }
+    {
+        endpoint::temperature_sensor::config_t cfgPoolSoll;
+        memset(&cfgPoolSoll, 0, sizeof(cfgPoolSoll));
+        endpoint_t *ep = endpoint::temperature_sensor::create(
+            s_node, &cfgPoolSoll, ENDPOINT_FLAG_NONE, nullptr);
+        if (ep) {
+            s_ep_pool_soll = endpoint::get_id(ep);
+            ESP_LOGI(TAG, "EP Pool-Soll: %u", s_ep_pool_soll);
+        } else {
+            ESP_LOGE(TAG, "Failed to create Pool-Soll endpoint");
+        }
+    }
+
+    // ── Create Solar-Mode-Request OnOff endpoint (read by SolarControl) ───────
+    {
+        endpoint::on_off_plugin_unit::config_t cfgSolarMode;
+        memset(&cfgSolarMode, 0, sizeof(cfgSolarMode));
+        cfgSolarMode.on_off.on_off = false;
+        endpoint_t *ep = endpoint::on_off_plugin_unit::create(
+            s_node, &cfgSolarMode, ENDPOINT_FLAG_NONE, nullptr);
+        if (ep) {
+            s_ep_solar_mode = endpoint::get_id(ep);
+            ESP_LOGI(TAG, "EP Solar-Mode-Request: %u", s_ep_solar_mode);
+        } else {
+            ESP_LOGE(TAG, "Failed to create Solar-Mode-Request endpoint");
+        }
+    }
+
+    ESP_LOGI(TAG, "SolarControl EPs — pool_temp:%u  pool_soll:%u  solar_mode:%u",
+             s_ep_pool_temp, s_ep_pool_soll, s_ep_solar_mode);
+    ESP_LOGI(TAG, ">>> SET_POOL_NODE: use EP pool_temp=%u pool_soll=%u solar_mode=%u on SolarControl",
+             s_ep_pool_temp, s_ep_pool_soll, s_ep_solar_mode);
+
+#ifdef CONFIG_ESP_MATTER_CONTROLLER_ENABLE
+    // ── Load SolarControl config from NVS ─────────────────────────────────────
+    loadSolarConfig();
+#endif
 
     // ── Use example/test Device Attestation Credentials ───────────────────────
     // IMPORTANT: Replace with real DAC for production devices!
@@ -489,11 +698,254 @@ void matterBridgeSync()
         }
     }
 
+    // ── Pool-Temp endpoint (TemperatureMeasurement) ───────────────────────────
+    {
+        const float poolTemp = static_cast<float>(storage.WaterSTemp);
+        if (fabsf(poolTemp - s_last_pool_temp) >= 0.05f) {   // update on >0.05°C change
+            updateTemperature(s_ep_pool_temp, poolTemp);
+            s_last_pool_temp = poolTemp;
+        }
+    }
+
+    // ── Pool-Soll endpoint (TemperatureMeasurement) ───────────────────────────
+    {
+        const float poolSoll = static_cast<float>(storage.WaterTemp_SetPoint);
+        if (fabsf(poolSoll - s_last_pool_soll) >= 0.05f) {
+            updateTemperature(s_ep_pool_soll, poolSoll);
+            s_last_pool_soll = poolSoll;
+        }
+    }
+
+    // ── Solar-Mode-Request endpoint (OnOff) ───────────────────────────────────
+    // true  = PoolMaster requests solar pool heating
+    //         conditions: AutoMode active AND PoolTemp < (Solltemp − Hysteresis)
+    // false = no heating request (SolarControl heats boiler or stays idle)
+    {
+        const bool solarRequest = storage.AutoMode &&
+            (storage.WaterSTemp < (storage.WaterTemp_SetPoint - SOLAR_MODE_HYSTERESIS));
+        if (solarRequest != s_last_solar_mode) {
+            updateOnOff(s_ep_solar_mode, solarRequest);
+            s_last_solar_mode = solarRequest;
+            ESP_LOGI(TAG, "Solar-Mode-Request → %s", solarRequest ? "ON (pool heating)" : "OFF");
+        }
+    }
+
     ESP_LOGV(TAG, "Matter sync complete");
 }
 
 // =============================================================================
-//  T14: MatterSyncTask — periodic state sync, Core 1
+//  Public: Subscribe to SolarControl attributes
+// =============================================================================
+void subscribeToSolarControl(uint64_t solarNodeId)
+{
+#ifdef CONFIG_ESP_MATTER_CONTROLLER_ENABLE
+    using namespace esp_matter::controller;
+    using chip::app::AttributePathParams;
+    using chip::Platform::ScopedMemoryBufferWithSize;
+
+    if (solarNodeId == 0) {
+        ESP_LOGW(TAG, "subscribeToSolarControl: invalid NodeId 0 — skipping");
+        return;
+    }
+
+    ESP_LOGI(TAG, "Subscribing to SolarControl NodeId=0x%016llX ...", solarNodeId);
+
+    // Build 7 attribute paths covering all SolarControl data points:
+    //   EP1-EP4: TemperatureMeasurement::MeasuredValue (temperatures)
+    //   EP5:     OnOff::OnOff (pump running, EP from NVS)
+    //   EP6:     OnOff::OnOff (valve position, EP from NVS)
+    //   EP9:     BooleanState::StateValue (valve OK)
+    ScopedMemoryBufferWithSize<AttributePathParams> attr_paths;
+    ScopedMemoryBufferWithSize<chip::app::EventPathParams>  event_paths;
+
+    attr_paths.Alloc(7);
+    if (!attr_paths.Get()) {
+        ESP_LOGE(TAG, "Failed to allocate attribute paths for SolarControl subscription");
+        return;
+    }
+
+    // EP1-EP4: temperatures
+    attr_paths[0] = AttributePathParams(1, kTempMeasClusterId, kTempMeasAttrId);
+    attr_paths[1] = AttributePathParams(2, kTempMeasClusterId, kTempMeasAttrId);
+    attr_paths[2] = AttributePathParams(3, kTempMeasClusterId, kTempMeasAttrId);
+    attr_paths[3] = AttributePathParams(4, kTempMeasClusterId, kTempMeasAttrId);
+    // EP5 / EP6: pump & valve (from NVS config)
+    attr_paths[4] = AttributePathParams(s_solar_ep_pump,  kOnOffClusterId, kOnOffAttrId);
+    attr_paths[5] = AttributePathParams(s_solar_ep_valve, kOnOffClusterId, kOnOffAttrId);
+    // EP9: valve end-stop OK
+    attr_paths[6] = AttributePathParams(9, kBoolStateClusterId, kBoolStateAttrId);
+
+    // Allocate with new — subscription must outlive this function call.
+    // auto_resubscribe=true ensures the subscription is re-established after loss.
+    auto *sub = new subscribe_command(
+        solarNodeId,
+        std::move(attr_paths),
+        std::move(event_paths),
+        10,    // min report interval (s)
+        60,    // max report interval (s)
+        true,  // auto_resubscribe
+        solarReportCallback,
+        nullptr  // no event callback
+    );
+
+    if (sub->send_command() == ESP_OK) {
+        s_solar_subscribed = true;
+        s_solar_node_id    = solarNodeId;
+        ESP_LOGI(TAG, "SolarControl subscription sent successfully");
+    } else {
+        ESP_LOGE(TAG, "SolarControl subscription failed");
+        delete sub;
+    }
+#else
+    ESP_LOGW(TAG, "subscribeToSolarControl: CONFIG_ESP_MATTER_CONTROLLER_ENABLE not set");
+    (void)solarNodeId;
+#endif
+}
+
+// =============================================================================
+//  Public: Send OnOff commands to SolarControl
+// =============================================================================
+void sendCirculationCommand(bool on)
+{
+#ifdef CONFIG_ESP_MATTER_CONTROLLER_ENABLE
+    if (s_solar_node_id == 0 || s_solar_ep_circ == 0) {
+        ESP_LOGW(TAG, "sendCirculationCommand: SolarControl not configured");
+        return;
+    }
+    const uint32_t cmdId = on
+        ? chip::app::Clusters::OnOff::Commands::On::Id
+        : chip::app::Clusters::OnOff::Commands::Off::Id;
+    esp_err_t err = esp_matter::controller::send_invoke_cluster_command(
+        s_solar_node_id, s_solar_ep_circ,
+        chip::app::Clusters::OnOff::Id,
+        cmdId, nullptr);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "sendCirculationCommand failed: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "Circulation command → %s (EP%u)", on ? "ON" : "OFF", s_solar_ep_circ);
+    }
+#else
+    ESP_LOGW(TAG, "sendCirculationCommand: CONFIG_ESP_MATTER_CONTROLLER_ENABLE not set");
+    (void)on;
+#endif
+}
+
+void sendIlluminationCommand(bool on)
+{
+#ifdef CONFIG_ESP_MATTER_CONTROLLER_ENABLE
+    if (s_solar_node_id == 0 || s_solar_ep_illum == 0) {
+        ESP_LOGW(TAG, "sendIlluminationCommand: SolarControl not configured");
+        return;
+    }
+    const uint32_t cmdId = on
+        ? chip::app::Clusters::OnOff::Commands::On::Id
+        : chip::app::Clusters::OnOff::Commands::Off::Id;
+    esp_err_t err = esp_matter::controller::send_invoke_cluster_command(
+        s_solar_node_id, s_solar_ep_illum,
+        chip::app::Clusters::OnOff::Id,
+        cmdId, nullptr);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "sendIlluminationCommand failed: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "Illumination command → %s (EP%u)", on ? "ON" : "OFF", s_solar_ep_illum);
+    }
+#else
+    ESP_LOGW(TAG, "sendIlluminationCommand: CONFIG_ESP_MATTER_CONTROLLER_ENABLE not set");
+    (void)on;
+#endif
+}
+
+// =============================================================================
+//  Serial command handler — called from MatterSyncTask
+// =============================================================================
+/**
+ * @brief Non-blocking serial line reader + command dispatcher.
+ *
+ *  Supported commands:
+ *    SET_SOLAR_NODE <nodeId_hex> <epPump> <epValve> <epCirc> <epIllum>
+ *      — Stores the SolarControl NodeId and endpoint numbers to NVS,
+ *        then immediately starts subscriptions.
+ *      Example: SET_SOLAR_NODE 0000000000000002 5 6 7 8
+ *
+ *    GET_SOLAR_CONFIG
+ *      — Prints current SolarControl NodeId and endpoint config to Serial.
+ *
+ *    GET_ENDPOINTS
+ *      — Prints PoolMaster's new native EP IDs (pool_temp, pool_soll, solar_mode)
+ *        for use in the SolarControl's SET_POOL_NODE command.
+ */
+static void handleSerialCommands()
+{
+    static char s_line_buf[96];
+    static uint8_t s_line_len = 0;
+
+    while (Serial.available()) {
+        char c = static_cast<char>(Serial.read());
+        if (c == '\r') continue;   // ignore CR
+        if (c == '\n' || s_line_len >= sizeof(s_line_buf) - 1) {
+            s_line_buf[s_line_len] = '\0';
+            s_line_len = 0;
+
+            // ── SET_SOLAR_NODE ──────────────────────────────────────────────
+            if (strncmp(s_line_buf, "SET_SOLAR_NODE ", 15) == 0) {
+#ifdef CONFIG_ESP_MATTER_CONTROLLER_ENABLE
+                char hexId[20] = {};
+                uint16_t epPump = 5, epValve = 6, epCirc = 7, epIllum = 8;
+                int parsed = sscanf(s_line_buf + 15, "%19s %hu %hu %hu %hu",
+                                    hexId, &epPump, &epValve, &epCirc, &epIllum);
+                if (parsed >= 1) {
+                    uint64_t nodeId = strtoull(hexId, nullptr, 16);
+                    if (nodeId == 0) {
+                        Serial.println("[Matter] ERROR: Invalid NodeId (0)");
+                    } else {
+                        s_solar_node_id  = nodeId;
+                        s_solar_ep_pump  = epPump;
+                        s_solar_ep_valve = epValve;
+                        s_solar_ep_circ  = epCirc;
+                        s_solar_ep_illum = epIllum;
+                        saveSolarConfig();
+                        Serial.printf("[Matter] SolarControl configured: NodeId=0x%016llX "
+                                      "pump=%u valve=%u circ=%u illum=%u\r\n",
+                                      nodeId, epPump, epValve, epCirc, epIllum);
+                        // Start subscriptions immediately if already commissioned
+                        if (s_started) {
+                            s_solar_subscribed = false;
+                            subscribeToSolarControl(s_solar_node_id);
+                        }
+                    }
+                } else {
+                    Serial.println("[Matter] Usage: SET_SOLAR_NODE <nodeId_hex> <epPump> <epValve> <epCirc> <epIllum>");
+                }
+#else
+                Serial.println("[Matter] ERROR: CONFIG_ESP_MATTER_CONTROLLER_ENABLE not set");
+#endif
+            }
+            // ── GET_SOLAR_CONFIG ────────────────────────────────────────────
+            else if (strcmp(s_line_buf, "GET_SOLAR_CONFIG") == 0) {
+#ifdef CONFIG_ESP_MATTER_CONTROLLER_ENABLE
+                Serial.printf("[Matter] SolarControl NodeId=0x%016llX  pump=%u  valve=%u  circ=%u  illum=%u  subscribed=%d\r\n",
+                              s_solar_node_id, s_solar_ep_pump, s_solar_ep_valve,
+                              s_solar_ep_circ, s_solar_ep_illum, (int)s_solar_subscribed);
+#else
+                Serial.println("[Matter] CONFIG_ESP_MATTER_CONTROLLER_ENABLE not set");
+#endif
+            }
+            // ── GET_ENDPOINTS ───────────────────────────────────────────────
+            else if (strcmp(s_line_buf, "GET_ENDPOINTS") == 0) {
+                Serial.printf("[Matter] PoolMaster EPs — pool_temp:%u  pool_soll:%u  solar_mode:%u\r\n",
+                              s_ep_pool_temp, s_ep_pool_soll, s_ep_solar_mode);
+                Serial.printf("[Matter] Pump EPs — filt:%u  ph:%u  heat:%u  salt:%u  chl:%u\r\n",
+                              s_ep_filt, s_ep_ph, s_ep_heat, s_ep_salt, s_ep_chl);
+            }
+            // Unknown command (ignore silently — avoid noise from other serial traffic)
+        } else {
+            s_line_buf[s_line_len++] = c;
+        }
+    }
+}
+
+// =============================================================================
+//  T14: MatterSyncTask — periodic state sync + serial command handler, Core 1
 // =============================================================================
 void MatterSyncTask(void *pvParameters)
 {
@@ -503,8 +955,18 @@ void MatterSyncTask(void *pvParameters)
     for (;;) {
         vTaskDelayUntil(&lastWake, period);
 
+        // Process serial commands (SET_SOLAR_NODE etc.)
+        handleSerialCommands();
+
         if (startTasks && s_started) {
             matterBridgeSync();
+
+#ifdef CONFIG_ESP_MATTER_CONTROLLER_ENABLE
+            // Start subscriptions once Matter is running and config is available
+            if (s_solar_node_id != 0 && !s_solar_subscribed) {
+                subscribeToSolarControl(s_solar_node_id);
+            }
+#endif
         }
     }
 }

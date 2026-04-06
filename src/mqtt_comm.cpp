@@ -20,11 +20,14 @@ static const char* PoolTopicAPI         = "Home/Pool/API";
 static const char* PoolTopicStatus      = "Home/Pool/status";
 static const char* PoolTopicError       = "Home/Pool/Err";
 static const char* PoolTopicMode        = "POOL/Pool_Mode";
+#ifndef MATTER_ENABLED
+// Solar MQTT topics — replaced by Matter subscriptions/endpoints when MATTER_ENABLED
 static const char* SolarTopicMode       = "POOL/Solar_Mode";
 static const char* SolarControlTemp     = "/SolarControl/pt1";
 static const char* SolarControlLWT      = "SolarControl/LWT";
 static const char* SolarControlSolPump  = "SolarControl/SOLAR_PUMP";
 static const char* SolarControlSolVal   = "SolarControl/VALVE_POOL";
+#endif // !MATTER_ENABLED
 
 #endif
 
@@ -127,6 +130,9 @@ void publishPoolMode(int event) {
 }
 
 void publishSolarMode(int event) {
+#ifndef MATTER_ENABLED
+  // When MATTER_ENABLED the Solar-Mode-Request is an OnOff Matter endpoint
+  // (updated by matterBridgeSync) — no MQTT publish needed.
   static unsigned long lastPublishedTime = 0;
   static int lastPublishedValue = -1;
   unsigned long now = millis();
@@ -136,6 +142,9 @@ void publishSolarMode(int event) {
     mqttClient.publish(SolarTopicMode, 1, true, event == 1 ? "pool" : event == 2 ? "puffer" : "off");
     lastPublishedTime = now;
   }
+#else
+  (void)event; // suppressed when MATTER_ENABLED
+#endif
 }
 
 void connectToMqtt() {
@@ -225,10 +234,13 @@ void connectToWiFi() {
 void onMqttConnect(bool sessionPresent) {
   Debug.print(DBG_INFO, "[MQTT] Connected to MQTT, present session: %d", sessionPresent);
   mqttClient.subscribe(PoolTopicAPI, 2);
-  mqttClient.subscribe(SolarControlTemp, 2);  // Abonnieren des Temperatur-Topics
-  mqttClient.subscribe(SolarControlLWT, 2);   // Abonnieren des LWT-Topics (optional)
-  mqttClient.subscribe(SolarControlSolPump, 2); // Abonnieren des Solar-Pumpen-Topics
-  mqttClient.subscribe(SolarControlSolVal, 2);  // Abonnieren des Solar-Ventil-Topics
+#ifndef MATTER_ENABLED
+  // Solar MQTT subscriptions — replaced by Matter attribute subscriptions when MATTER_ENABLED
+  mqttClient.subscribe(SolarControlTemp, 2);     // Kollektor-Temperatur
+  mqttClient.subscribe(SolarControlLWT, 2);      // Last-Will (online/offline)
+  mqttClient.subscribe(SolarControlSolPump, 2);  // Pumpensteuerung
+  mqttClient.subscribe(SolarControlSolVal, 2);   // Ventilsteuerung
+#endif
   mqttClient.publish(PoolTopicStatus, 1, true, "{\"PoolMaster Online\":1}");
   MQTTConnection = true;
   char resetPayload[64];
@@ -295,6 +307,10 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
             Debug.print(DBG_ERROR, "[MQTT] Queue full, command: %s not added", command);
         }
     }
+#ifndef MATTER_ENABLED
+    // Solar MQTT handlers — active only when Matter is NOT enabled.
+    // When MATTER_ENABLED, solar data arrives via Matter attribute subscriptions
+    // (solarReportCallback in MatterBridge.cpp writes directly to storage).
     // Solarkollektor-Temperatur
     else if (strcmp(topic, SolarControlTemp) == 0)
     {
@@ -351,6 +367,7 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
             Debug.print(DBG_ERROR, "[MQTT] Queue full, solar valve command: %s not added", solValStr);
         }
     }
+#endif // !MATTER_ENABLED
     else
     {
         Debug.print(DBG_WARNING, "[MQTT] Unknown topic: %s", topic);

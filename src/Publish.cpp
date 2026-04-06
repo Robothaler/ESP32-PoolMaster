@@ -26,8 +26,11 @@ static const char* HomeTopicSetTanks      = POOLTOPIC"Settings/Tanks";
 static const char* HomeTopicSetModes      = POOLTOPIC"Settings/Modes";
 static const char* HomeTopicSystem        = POOLTOPIC"System";
 
-// SolarControl-compatible topic
+#ifndef MATTER_ENABLED
+// SolarControl-compatible MQTT topic — replaced by Matter TemperatureMeasurement
+// endpoint (s_ep_pool_temp) when MATTER_ENABLED.
 static const char* PoolTopicTemperature   = "POOL/temperature";
+#endif
 
 // External MotorValve instances
 extern MotorValve ELD_Treppe;
@@ -295,7 +298,9 @@ void MeasuresPublish(void *pvParameters)
     StaticJsonDocument<JSON_OBJECT_SIZE(3)> systemRoot;    // For System
 
     // Track last published values for change detection
-    static float lastWaterTemp = -100.0; // Track last published water temperature
+#ifndef MATTER_ENABLED
+    static float lastWaterTemp = -100.0; // MQTT POOL/temperature change tracking
+#endif
     static StaticJsonDocument<JSON_OBJECT_SIZE(12)> lastTempRoot;
     static StaticJsonDocument<JSON_OBJECT_SIZE(15)> lastMeasurementsRoot;
     static StaticJsonDocument<JSON_OBJECT_SIZE(8)> lastPumpsRoot;
@@ -375,13 +380,17 @@ void MeasuresPublish(void *pvParameters)
                 lastTempRoot = tempRoot;
             }
 
-            // Publish POOL/temperature for SolarControl
-            if (fabs(storage.WaterSTemp - lastWaterTemp) >= 0.1) { // Only publish if temperature changes by 0.1°C
+#ifndef MATTER_ENABLED
+            // Publish POOL/temperature for SolarControl via MQTT.
+            // When MATTER_ENABLED this is handled by the EP_POOL_TEMP Matter endpoint
+            // in MatterBridge.cpp (matterBridgeSync → updateTemperature).
+            if (fabs(storage.WaterSTemp - lastWaterTemp) >= 0.1) {
                 char tempPayload[10];
                 snprintf(tempPayload, sizeof(tempPayload), "%.1f", storage.WaterSTemp);
                 PublishTopic(PoolTopicTemperature, tempPayload, strlen(tempPayload));
                 lastWaterTemp = storage.WaterSTemp;
             }
+#endif
 
             // Measurements (non-temperature)
             root.clear();

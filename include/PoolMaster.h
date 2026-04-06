@@ -83,6 +83,16 @@ struct StoreStruct
     double WaterSTemp, WaterITemp, WaterBTemp, WaterWPTemp, WaterWTTemp, AirInTemp, AirTemp, AirHum, AirPress, SolarTemp, SolarVLTemp, SolarRLTemp;
     double AcidFill, ChlFill, pHTankVol, ChlTankVol, pHPumpFR, ChlPumpFR, WaterFillFR, SaltCurrentValue, FilterCurrentValue, HeatCurrentValue, SaltCurrentCalibCoeffs0, SaltCurrentCalibCoeffs1, FilterCurrentCalibCoeffs0, FilterCurrentCalibCoeffs1, HeatCurrentCalibCoeffs0, HeatCurrentCalibCoeffs1;
     float SaltConcentration, CellConstant, SaltNeeded, PoolVolume;
+
+    // Solar subsystem data received from SolarControl (via MQTT or Matter subscription).
+    // Transient — not persisted to NVS, refreshed at runtime.
+    float solarRoofTemp;      // EP1: Dach-Kollektor-Temperatur (°C)
+    float solarBoilerTemp;    // EP2: Boiler-Temperatur (°C)
+    float solarStorageTemp;   // EP3: Puffer-Temperatur (°C)
+    float solarBackflowTemp;  // EP4: Rücklauf-Temperatur (°C)
+    bool  solarPumpRunning;   // EP5: Solarpumpe aktiv
+    bool  solarValvePool;     // EP6: Ventil auf Pool-Seite (true=Pool, false=Boiler)
+    bool  solarValveOK;       // EP9: Ventil-Endstopp OK
   };
 
 extern StoreStruct storage;

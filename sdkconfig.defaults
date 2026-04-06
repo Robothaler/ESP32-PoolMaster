@@ -59,9 +59,15 @@ CONFIG_ESP32_WIFI_NAN_ENABLE=n
 # ── Matter / CHIP stack ────────────────────────────────────────────────────────
 CONFIG_ESP_MATTER_NVS_USE_COMPACT_ATTR_STORAGE=y
 
-# Matter Bridge: scale attribute/endpoint counts for 5 bridged devices
-# (FiltrationPump, PhPump, ChlPump, SolarPump, HeatPump)
-CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT=8
+# Matter Bridge + native Solar endpoints:
+#   Bridged:  Aggregator + 5 pumps = 6
+#   Native:   Pool-Temp + Pool-Soll + Solar-Mode-Request = 3
+#   Total:    9 → use 12 for comfortable headroom
+CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT=12
+
+# Matter Controller: required for PoolMaster to send commands to SolarControl
+# and subscribe to SolarControl attribute reports.
+CONFIG_ESP_MATTER_CONTROLLER_ENABLE=y
 
 # ── NVS ───────────────────────────────────────────────────────────────────────
 # NVS partition (64 KB) shared between PoolMaster config (~16 KB) and Matter (~32 KB)
