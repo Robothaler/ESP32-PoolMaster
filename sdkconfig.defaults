@@ -24,16 +24,52 @@ CONFIG_SPIRAM_RODATA=y
 #   16KB cache →  32KB IRAM  ← use this; SPIRAM_FETCH_INSTRUCTIONS compensates the smaller cache
 CONFIG_ESP32S3_INSTRUCTION_CACHE_16KB=y
 
+# ── Power / Brownout ──────────────────────────────────────────────────────────
+# Disable brownout detector: WiFi RF calibration fallback causes a momentary
+# current spike that triggers the detector before the power rail stabilises.
+# For production: ensure a stable 3.3 V supply ≥ 500 mA and re-enable.
+CONFIG_ESP_BROWNOUT_DET=n
+
+# ── Console / Serial ───────────────────────────────────────────────────────────
+# Use UART0 instead of USB-JTAG as system console.
+# Fixes crash: Brownout-ISR calls HWCDC::isConnected() → usb_serial_jtag_is_connected()
+# before the USB connection monitor is initialized (null-pointer at 0x00000000).
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=n
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED=n
+
 # ── Arduino compatibility ───────────────────────────────────────────────────────
 CONFIG_AUTOSTART_ARDUINO=y
 CONFIG_ARDUINO_SELECTIVE_COMPILATION=y
-# Disable heavy Arduino subsystems not needed
-CONFIG_ARDUINO_SELECTIVE_ArduinoBLE=n
+# Disable Arduino libraries not needed by PoolMaster
+# Bluetooth / radio stacks
+CONFIG_ARDUINO_SELECTIVE_BLE=n
+CONFIG_ARDUINO_SELECTIVE_BluetoothSerial=n
 CONFIG_ARDUINO_SELECTIVE_SimpleBLE=n
 CONFIG_ARDUINO_SELECTIVE_WiFiProv=n
+CONFIG_ARDUINO_SELECTIVE_OpenThread=n
+CONFIG_ARDUINO_SELECTIVE_Zigbee=n
+# Cloud / insights
 CONFIG_ARDUINO_SELECTIVE_RainMaker=n
 CONFIG_ARDUINO_SELECTIVE_Insights=n
-CONFIG_ARDUINO_SELECTIVE_Zigbee=n
+# Audio / speech
+CONFIG_ARDUINO_SELECTIVE_ESP_SR=n
+# HTTP (project uses AsyncMqttClient + ESPAsyncWebServer, not HTTPClient)
+CONFIG_ARDUINO_SELECTIVE_HTTPClient=n
+CONFIG_ARDUINO_SELECTIVE_HTTPUpdate=n
+# Storage (project uses SPIFFS, not SD / FFat / LittleFS / EEPROM)
+CONFIG_ARDUINO_SELECTIVE_EEPROM=n
+CONFIG_ARDUINO_SELECTIVE_SD=n
+CONFIG_ARDUINO_SELECTIVE_SD_MMC=n
+CONFIG_ARDUINO_SELECTIVE_FFat=n
+CONFIG_ARDUINO_SELECTIVE_LittleFS=n
+# Networking extras not used
+CONFIG_ARDUINO_SELECTIVE_Ethernet=n
+CONFIG_ARDUINO_SELECTIVE_PPP=n
+CONFIG_ARDUINO_SELECTIVE_AsyncUDP=n
+CONFIG_ARDUINO_SELECTIVE_DNSServer=n
+CONFIG_ARDUINO_SELECTIVE_NetBIOS=n
+CONFIG_ARDUINO_SELECTIVE_WebServer=n
 
 # ── FreeRTOS ───────────────────────────────────────────────────────────────────
 CONFIG_FREERTOS_HZ=1000

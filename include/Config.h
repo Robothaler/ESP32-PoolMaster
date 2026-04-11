@@ -1,3 +1,5 @@
+#pragma once 
+
 // Firmware revision
 #define FIRMW           "ESP-3.0"
 #define TFT_FIRMW       "TFT-2.0"

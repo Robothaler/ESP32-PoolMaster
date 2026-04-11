@@ -1,6 +1,7 @@
 #ifndef OTA_H
 #define OTA_H
 
+#pragma once
 #include <Arduino.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>

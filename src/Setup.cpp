@@ -404,12 +404,18 @@ void setup()
 
   }
 
-  // Initialize watch-dog
+  // Configure watch-dog (TWDT is already initialized by the framework;
+  // use reconfigure to avoid the "TWDT already initialized" error in IDF 5.x)
   esp_task_wdt_config_t wdt_config = {
     .timeout_ms = WDT_TIMEOUT,
     .trigger_panic = true,
   };
-  esp_task_wdt_init(&wdt_config);
+  esp_err_t wdt_err = esp_task_wdt_reconfigure(&wdt_config);
+  if (wdt_err != ESP_OK) {
+    // Fallback: deinit + reinit (e.g. if framework left it uninitialized)
+    esp_task_wdt_deinit();
+    esp_task_wdt_init(&wdt_config);
+  }
 
   // Initalize the RTC module
   RTCInit();
