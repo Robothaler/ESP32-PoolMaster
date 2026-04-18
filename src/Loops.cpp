@@ -1425,8 +1425,10 @@ void readBME280(void* pvParameters) {
                 storage.AirPress = samples_AP.getAverage(5);
             }
 
-            Debug.print(DBG_INFO, "[BME280] T=%.2f°C, P=%.2fhPa, H=%.2f%%, Free Heap: %d",
-                        storage.AirTemp, storage.AirPress, storage.AirHum, ESP.getFreeHeap());
+            Debug.print(DBG_INFO, "[BME280] T=%.2f°C, P=%.2fhPa, H=%.2f%%, Heap int=%u psram=%u",
+                        storage.AirTemp, storage.AirPress, storage.AirHum,
+                        heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                        heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
             unlockI2C();
         } else {
             Debug.print(DBG_WARNING, "[BME280] BME280 not initialized");

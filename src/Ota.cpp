@@ -138,13 +138,20 @@ void otaTask(void *pvParameters) {
     Debug.print(DBG_WARNING, "[OTA] No web server - SPIFFS unavailable");
   }
 
-  // Periodic WebSocket broadcast timer: every 5 s
-  TimerHandle_t wsTimer = xTimerCreate("wsBC", pdMS_TO_TICKS(5000), pdTRUE, nullptr,
-    [](TimerHandle_t){ webUIBroadcast(); });
-  if (wsTimer) xTimerStart(wsTimer, 0);
+  // WebSocket broadcast runs directly in this task loop every 5 s (every 5 × 980 ms ticks).
+  // Previously used a FreeRTOS software timer, but timer callbacks run in the shared
+  // timer task whose stack (~4 KB) is too small for StaticJsonDocument<1280> +
+  // SPIFFS Logger::record() I/O → stack overflow → MMU fault (null ptr in String::write).
+  uint8_t broadcastTick = 0;
 
   for (;;) {
     esp_task_wdt_reset();
+
+    // WebSocket status broadcast every ~5 s
+    if (++broadcastTick >= 5) {
+      broadcastTick = 0;
+      webUIBroadcast();
+    }
 
     // Check if a new .tft file was uploaded and needs to be sent to Nextion.
     // updateNextion() uses delay() internally — call it only from this task,

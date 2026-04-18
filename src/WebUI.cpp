@@ -372,7 +372,7 @@ void init() {
 
 // ─── WebSocket helpers ────────────────────────────────────────────────────────
 static String buildStatusJson() {
-    StaticJsonDocument<1280> doc;
+    StaticJsonDocument<2048> doc;
     doc["type"] = "status";
     doc["ts"]   = (uint32_t)(millis() / 1000);
 
@@ -645,6 +645,14 @@ void initWebUI() {
 void webUIBroadcast() {
     recordHistory();      // fast RAM ring buffer (30s interval)
     Logger::record();     // SPIFFS delta logger (60s+ interval)
-    ws.cleanupClients();
-    if (ws.count() > 0) ws.textAll(buildStatusJson());
+    ws.cleanupClients(3); // drop excess/stale clients; cap at 3 to limit TX heap pressure
+    if (ws.count() == 0) return;
+    // Skip broadcast when internal heap is dangerously low — throttled clients
+    // accumulate TX buffers in internal RAM and can corrupt the heap allocator.
+    if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) < 20000) return;
+    String json = buildStatusJson();
+    for (auto& client : ws.getClients()) {
+        if (client.status() == WS_CONNECTED && !client.queueIsFull())
+            client.text(json);
+    }
 }

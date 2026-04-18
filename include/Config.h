@@ -11,7 +11,7 @@
 // Matter NVS version — bump to force re-commissioning (erases chip-kvs/chip-counters/chip-config)
 #define MATTER_NVS_VERSION  3
 
-#define DEBUG_LEVEL     DBG_NONE    // Possible levels : NONE/ERROR/WARNING/INFO/DEBUG/VERBOSE
+#define DEBUG_LEVEL     DBG_INFO    // Possible levels : NONE/ERROR/WARNING/INFO/DEBUG/VERBOSE
 
 // WiFi credentials
 // ------  Credentials are stored in include/credentials.h
@@ -250,7 +250,7 @@
 #define STACK_T8          3072  // pHRegulation
 #define STACK_T9          3072  // FlowMeasures
 #define STACK_T10         4096  // StatusLights
-#define STACK_T11         4096  // PublishMeasures
+#define STACK_T11         8192  // PublishMeasures
 #define STACK_T12         5120  // PublishSettings
 #define STACK_T13         6144  // OTATask — SPIFFS + HardwareSerial + 512 B file buffer
 
