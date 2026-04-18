@@ -1,6 +1,9 @@
 #include "Ota.h"
 #include <WiFi.h>
 #include <SPIFFS.h>
+#ifdef MATTER_ENABLED
+#include "esp_wifi.h"
+#endif
 #include <HardwareSerial.h>
 #include "Arduino_DebugUtils.h"
 #include "Config.h"
@@ -65,7 +68,6 @@ void otaTask(void *pvParameters) {
   Debug.print(DBG_DEBUG, "[TASKS] otaTask running...");
   vTaskDelay(DT13);
 
-  esp_task_wdt_add(NULL);
   TickType_t period = pdMS_TO_TICKS(980);
   TickType_t ticktime = xTaskGetTickCount();
 
@@ -76,6 +78,8 @@ void otaTask(void *pvParameters) {
   int n=1;
   #endif
 
+  // SPIFFS.begin(true) formats the partition on first boot — this can take >10 s,
+  // which exceeds the TWDT timeout. Register with TWDT only after mount completes.
   Debug.print(DBG_INFO, "[OTA] Initializing SPIFFS...");
   bool spiffsOk = false;
   if (!SPIFFS.begin(true)) { // true = format on fail
@@ -84,17 +88,42 @@ void otaTask(void *pvParameters) {
     Debug.print(DBG_INFO, "[OTA] SPIFFS mounted successfully");
     spiffsOk = true;
   }
+  esp_task_wdt_add(NULL);  // register AFTER potentially slow SPIFFS format
 
   Debug.print(DBG_INFO, "[OTA] Initializing serial...");
   nextionSerial.begin(115200, SERIAL_8N1, RXD2, TXD2);
 
+  // Wait for WiFi — with timeout so we never block forever.
+  // In MATTER_ENABLED mode, WiFi.status() always returns WL_DISCONNECTED because
+  // Arduino's WiFi stack is never initialized (CHIP manages WiFi via esp-idf).
+  // Use esp_wifi_sta_get_ap_info() instead to check actual connection state.
   Debug.print(DBG_INFO, "[OTA] Waiting for WiFi...");
-  while (WiFi.status() != WL_CONNECTED) {
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    esp_task_wdt_reset();
+  {
+    uint32_t wifiDeadline = millis() + 60000UL;
+    bool connected = false;
+    while (millis() < wifiDeadline) {
+#ifdef MATTER_ENABLED
+      wifi_ap_record_t ap_info;
+      connected = (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK);
+#else
+      connected = (WiFi.status() == WL_CONNECTED);
+#endif
+      if (connected) break;
+      vTaskDelay(pdMS_TO_TICKS(1000));
+      esp_task_wdt_reset();
+    }
+    if (!connected)
+      Debug.print(DBG_WARNING, "[OTA] WiFi not available — OTA web server disabled");
   }
+  // Re-check connection state for server start decision
+#ifdef MATTER_ENABLED
+  wifi_ap_record_t _ota_ap;
+  bool otaWiFiUp = (esp_wifi_sta_get_ap_info(&_ota_ap) == ESP_OK);
+#else
+  bool otaWiFiUp = (WiFi.status() == WL_CONNECTED);
+#endif
 
-  if (spiffsOk) {
+  if (spiffsOk && otaWiFiUp) {
     Debug.print(DBG_INFO, "[OTA] Setting up server...");
     server.on("/upload", HTTP_GET, [](AsyncWebServerRequest *request) {
       request->send(200, "text/html", "<form method='POST' action='/upload' enctype='multipart/form-data'><input type='file' name='file' accept='.tft'><input type='submit' value='Upload'></form>");

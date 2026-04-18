@@ -17,6 +17,12 @@ CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
 CONFIG_SPIRAM_RODATA=y
+# Route malloc()>=512B to PSRAM instead of internal RAM (default threshold was 16384).
+# This prevents heap fragmentation in the 181KB internal region caused by hundreds of
+# medium-sized allocations (WiFi task stack 6.6KB, Matter endpoint objects ~1-2KB each,
+# NimBLE host buffers, lwIP etc.). BLE controller still gets its contiguous block because
+# it uses heap_caps_malloc(MALLOC_CAP_INTERNAL) explicitly and is not affected by this.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512
 
 # ── ESP32-S3 Instruction Cache / IRAM balance ──────────────────────────────────
 # S3 Bank 0 = 48KB split between I-Cache and IRAM:
@@ -25,10 +31,7 @@ CONFIG_SPIRAM_RODATA=y
 CONFIG_ESP32S3_INSTRUCTION_CACHE_16KB=y
 
 # ── Power / Brownout ──────────────────────────────────────────────────────────
-# Disable brownout detector: WiFi RF calibration fallback causes a momentary
-# current spike that triggers the detector before the power rail stabilises.
-# For production: ensure a stable 3.3 V supply ≥ 500 mA and re-enable.
-CONFIG_ESP_BROWNOUT_DET=n
+CONFIG_ESP_BROWNOUT_DET=y
 
 # ── Console / Serial ───────────────────────────────────────────────────────────
 # Use UART0 instead of USB-JTAG as system console.
@@ -82,6 +85,24 @@ CONFIG_BT_CONTROLLER_DISABLED=n
 # BLE advertising used by Matter for commissioning; disable after commissioned if desired
 CONFIG_ENABLE_CHIPOBLE=y
 
+# ── BLE / BT controller memory reduction (prevents OOM crash on boot) ──────────
+# BT controller TLSF heap ≈ 50KB base + 10KB × MAX_ACT.
+# Default MAX_ACT=6 → ~110KB heap. After WiFi init the largest free internal block
+# shrinks below that threshold → assert in block_locate_free → reboot loop.
+# MAX_ACT=2 (1 adv + 1 connection) → ~70KB heap — comfortably fits.
+CONFIG_BT_CTRL_BLE_MAX_ACT=2
+# Reduce scan ADV-report and duplicate-filter caches (not needed for commissioning)
+CONFIG_BT_CTRL_BLE_ADV_REPORT_FLOW_CTRL_NUM=20
+CONFIG_BT_CTRL_SCAN_DUPL_CACHE_SIZE=20
+
+# NimBLE host buffers: use default (PSRAM-capable) allocator instead of INTERNAL.
+# With SPIRAM_USE_MALLOC=y this moves ~20KB of NimBLE ACL/event buffers to PSRAM,
+# freeing contiguous internal RAM for the BT controller heap.
+CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_DEFAULT=y
+
+# Reduce NimBLE max connections to 1: only 1 BLE link needed for commissioning
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+
 # ── OpenThread — disabled (Wi-Fi only, no Thread border router) ────────────────
 CONFIG_OPENTHREAD_ENABLED=n
 CONFIG_OPENTHREAD_RADIO_NATIVE=n
@@ -91,6 +112,9 @@ CONFIG_ESP32_WIFI_ENABLED=y
 CONFIG_ESP32_WIFI_TASK_PINNED_TO_CORE_1=y
 CONFIG_ESP32_WIFI_SOFTAP_SUPPORT=n
 CONFIG_ESP32_WIFI_NAN_ENABLE=n
+# Static RX buffers must be DMA-capable internal RAM. 10×1600=16KB (default);
+# 4×1600=6.4KB is the minimum. Saves ~9.6KB of contiguous DMA-capable RAM.
+CONFIG_ESP32_WIFI_STATIC_RX_BUFFER_NUM=4
 
 # ── Matter / CHIP stack ────────────────────────────────────────────────────────
 CONFIG_ESP_MATTER_NVS_USE_COMPACT_ATTR_STORAGE=y

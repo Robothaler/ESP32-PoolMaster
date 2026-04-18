@@ -613,6 +613,12 @@ void matterBridgeStart()
 
     ESP_LOGI(TAG, "Starting Matter stack (Phase 2)...");
 
+    // Diagnostic: heap state before WiFi+BLE init inside esp_matter::start()
+    ESP_LOGI(TAG, "HEAP before start: int_free=%u int_max=%u psram_free=%u",
+             heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+             heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+
     esp_err_t err = esp_matter::start(on_device_event);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_matter::start() failed: %s", esp_err_to_name(err));

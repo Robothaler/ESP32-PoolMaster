@@ -72,7 +72,7 @@ struct StoreStruct
 // Initialize StoreStruct with default values for External ADS1115
 StoreStruct storage =
 { 
-    CONFIG_VERSION,
+    CONFIG_VERSION, MATTER_NVS_VERSION/*MatterVersion*/,
     WIFI_SSID, WIFI_PASSWORD, ""/*MQTT_USER*/, ""/*MQTT_PASS*/, MQTT_SERVER_ID/*MQTT_NAME*/, "Unknown"/*SaltStatus*/,""/*ResetTimestamp*/,
     MQTT_SERVER_IP,
     MQTT_SERVER_PORT, 0U/*Uptime*/, 0U/*LastUptimeUpdate*/,
@@ -104,7 +104,7 @@ StoreStruct storage =
 // Initialize StoreStruct with default values for Internal ADS1115
 StoreStruct storage =
 {
-    CONFIG_VERSION,
+    CONFIG_VERSION, MATTER_NVS_VERSION/*MatterVersion*/,
     WIFI_SSID, WIFI_PASSWORD, ""/*MQTT_USER*/, ""/*MQTT_PASS*/, MQTT_SERVER_ID/*MQTT_NAME*/, "Unknown"/*SaltStatus*/, ""/*ResetTimestamp*/,
     MQTT_SERVER_IP,
     MQTT_SERVER_PORT, 0U/*Uptime*/, 0U/*LastUptimeUpdate*/,
@@ -420,12 +420,40 @@ void setup()
   // Initalize the RTC module
   RTCInit();
 
-  // ── Matter Phase 1: create node + endpoints (BEFORE WiFi) ──────────────────
-  // NVS is ready here (storage loaded), CHIP stack does not need WiFi yet.
-  // BLE commissioning advertisement will start in Phase 2 (after WiFi).
+  // ── Matter NVS version check ─────────────────────────────────────────────────
+#ifdef MATTER_ENABLED
+  if (storage.MatterVersion != MATTER_NVS_VERSION) {
+    Debug.print(DBG_WARNING, "[SETUP] Matter NVS version mismatch (%d->%d), erasing Matter NVS...",
+                storage.MatterVersion, MATTER_NVS_VERSION);
+    Preferences matterNvs;
+    for (const char* ns : {"chip-kvs", "chip-counters", "chip-config"}) {
+      if (matterNvs.begin(ns, false)) {
+        matterNvs.clear();
+        matterNvs.end();
+        Debug.print(DBG_INFO, "[SETUP] Erased NVS namespace: %s", ns);
+      }
+    }
+    storage.MatterVersion = MATTER_NVS_VERSION;
+    saveConfig();
+    Debug.print(DBG_INFO, "[SETUP] Matter NVS reset — re-commissioning required");
+  }
+#endif
+
+  // ── Matter Phase 1: create node + endpoints ────────────────────────────────
 #ifdef MATTER_ENABLED
   Debug.print(DBG_INFO, "[SETUP] Matter Phase 1: creating endpoints...");
   matterBridgeInit();
+#endif
+
+  // ── Matter Phase 2: start CHIP stack + BLE (BEFORE WiFi) ───────────────────
+  // BLE controller requires a large contiguous internal-RAM block. WiFi driver
+  // init (esp_wifi_init inside WiFi.begin()) fragments the heap heavily, leaving
+  // no block large enough for BLE → crash. Starting Matter/BLE here, before
+  // WiFi allocates its buffers, ensures BLE gets the contiguous block it needs.
+  // The CHIP stack handles WiFi-readiness internally via platform events.
+#ifdef MATTER_ENABLED
+  Debug.print(DBG_INFO, "[SETUP] Matter Phase 2: starting CHIP stack (before WiFi)...");
+  matterBridgeStart();
 #endif
 
   Debug.print(DBG_INFO, "[SETUP] Initializing MQTT...");
@@ -436,20 +464,23 @@ void setup()
   initTimers();
   connectToWiFi();
 
-  delay(500);    // let task start-up and wait for connection
-  while(WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+  // Wait for WiFi — but never block the core startup.
+  // In Matter mode the CHIP stack manages WiFi asynchronously; WiFi.status() may
+  // never return WL_CONNECTED from Arduino's perspective even though the station
+  // is associated.  In non-Matter mode we give WiFi up to 15 s, then continue.
+  // Either way: time (RTC fallback), sensors, PIDs and pump tasks always start.
+  {
+    uint32_t wifiDeadline = millis() + 15000UL;
+    while (WiFi.status() != WL_CONNECTED && millis() < wifiDeadline) {
+      delay(500);
+      Serial.print(".");
+    }
+    if (WiFi.status() != WL_CONNECTED)
+      Debug.print(DBG_WARNING, "[SETUP] WiFi not available — continuing without WiFi/MQTT");
   }
 
-  // ── Matter Phase 2: start CHIP stack + BLE commissioning (AFTER WiFi) ──────
-  // The Matter stack operates on the WiFi network; BLE is used for initial
-  // commissioning only and is automatically stopped after pairing.
-#ifdef MATTER_ENABLED
-  Debug.print(DBG_INFO, "[SETUP] Matter Phase 2: starting CHIP stack...");
-  matterBridgeStart();
-#endif
-
+  // Time init: NTP if WiFi is up, RTC fallback otherwise.
+  // Both StartTime() and readLocalTime() handle the no-WiFi case gracefully.
   StartTime();
   readLocalTime();
   setTime(timeinfo.tm_hour,timeinfo.tm_min,timeinfo.tm_sec,timeinfo.tm_mday,timeinfo.tm_mon+1,timeinfo.tm_year-100);
@@ -466,13 +497,12 @@ void setup()
   Debug.print(DBG_INFO, "[SETUP] Reset reason: %s, Timestamp: %s",
               resetReasonToString(storage.ResetReason), storage.ResetTimestamp.c_str());
 
-  // Initialize the mDNS library and OTA
-  if (storage.WIFI_OnOff) {
-    while (!MDNS.begin("PoolMaster")) {
-      Debug.print(DBG_ERROR, "Error setting up MDNS responder!");
-      delay(1000);
-    }
-    MDNS.addService("http", "tcp", SERVER_PORT);
+  // Initialize the mDNS library and OTA — only when WiFi is actually up
+  if (storage.WIFI_OnOff && WiFi.status() == WL_CONNECTED) {
+    if (!MDNS.begin("PoolMaster"))
+      Debug.print(DBG_WARNING, "[SETUP] mDNS start failed — skipping");
+    else
+      MDNS.addService("http", "tcp", SERVER_PORT);
 
     ArduinoOTA.setPort(OTA_PORT);
     ArduinoOTA.setHostname(OTA_HOST);
@@ -631,6 +661,7 @@ bool loadConfig() {
       return false;
   }
   storage.ConfigVersion         = nvs.getUChar("ConfigVersion",0);
+  storage.MatterVersion         = nvs.getUChar("MatterVersion",0);
   uint8_t tempIP[4] = {192, 168, 178, 55}; // Default IP if not found in NVS
   size_t len = 4;
   if (nvs.getBytes("MQTT_IP", tempIP, len) == 4) {
@@ -817,6 +848,7 @@ bool saveConfig() {
       return false;
   }
   size_t i = nvs.putUChar("ConfigVersion",storage.ConfigVersion);
+  i += nvs.putUChar("MatterVersion",storage.MatterVersion);
   uint8_t ipBytes[4] = {storage.MQTT_IP[0], storage.MQTT_IP[1], storage.MQTT_IP[2], storage.MQTT_IP[3]};
   i += nvs.putBytes("MQTT_IP", ipBytes, 4);
   i += nvs.putUInt("MQTT_PORT", storage.MQTT_PORT);

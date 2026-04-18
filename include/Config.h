@@ -6,7 +6,10 @@
 
 //Version of config stored in EEPROM
 //Random value. Change this value (to any other value) to revert the config to default values
-#define CONFIG_VERSION  12
+#define CONFIG_VERSION  10
+
+// Matter NVS version — bump to force re-commissioning (erases chip-kvs/chip-counters/chip-config)
+#define MATTER_NVS_VERSION  3
 
 #define DEBUG_LEVEL     DBG_NONE    // Possible levels : NONE/ERROR/WARNING/INFO/DEBUG/VERBOSE
 
