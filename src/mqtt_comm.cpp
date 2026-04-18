@@ -5,6 +5,10 @@
 #include <Arduino.h>
 #include "Config.h"
 #include "PoolMaster.h"
+#ifdef MATTER_ENABLED
+#include "esp_wifi.h"
+#include "esp_event.h"
+#endif
 
 AsyncMqttClient mqttClient;
 extern Preferences nvs;
@@ -12,6 +16,38 @@ extern Preferences nvs;
 bool MQTTConnection = false;                                    // Status of connection to broker
 static TimerHandle_t mqttReconnectTimer;                        // Reconnect timer for MQTT
 static TimerHandle_t wifiReconnectTimer;                        // Reconnect timer for WiFi
+
+#ifdef MATTER_ENABLED
+// In MATTER_ENABLED mode, Arduino's WiFi stack is never initialized (WiFi.begin() is
+// never called — doing so after esp_matter::start() would recreate netifs → crash).
+// We therefore bypass Arduino's WiFi event bridge entirely and register our own
+// esp-idf event handlers for IP_EVENT and WIFI_EVENT_STA_DISCONNECTED.
+
+static bool s_matter_wifi_handlers_registered = false;
+
+static void _matter_ip_event_cb(void*, esp_event_base_t, int32_t event_id, void*) {
+  if (event_id == IP_EVENT_STA_GOT_IP) {
+    Debug.print(DBG_INFO, "[WiFi] Got IP (Matter mode) — connecting MQTT");
+    if (storage.WIFI_OnOff) connectToMqtt();
+  }
+}
+
+static void _matter_wifi_event_cb(void*, esp_event_base_t, int32_t event_id, void*) {
+  if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
+    Debug.print(DBG_WARNING, "[WiFi] STA disconnected (Matter mode) — scheduling reconnect");
+    xTimerStop(mqttReconnectTimer, 0);
+    xTimerStart(wifiReconnectTimer, 0);
+  }
+}
+
+static void registerMatterWiFiHandlers() {
+  if (s_matter_wifi_handlers_registered) return;
+  esp_event_handler_register(IP_EVENT,   ESP_EVENT_ANY_ID,          _matter_ip_event_cb,   NULL);
+  esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, _matter_wifi_event_cb, NULL);
+  s_matter_wifi_handlers_registered = true;
+  Debug.print(DBG_INFO, "[WiFi] Matter WiFi event handlers registered");
+}
+#endif // MATTER_ENABLED
 
 #ifdef MQTT_LOGIN
  static const char* MqttServerClientID  = MQTT_SERVER_ID;
@@ -148,7 +184,13 @@ void publishSolarMode(int event) {
 }
 
 void connectToMqtt() {
-  if (!storage.WIFI_OnOff || WiFi.status() != WL_CONNECTED) {
+#ifdef MATTER_ENABLED
+  wifi_ap_record_t _ap_info;
+  bool _wifiUp = (esp_wifi_sta_get_ap_info(&_ap_info) == ESP_OK);
+#else
+  bool _wifiUp = (WiFi.status() == WL_CONNECTED);
+#endif
+  if (!storage.WIFI_OnOff || !_wifiUp) {
     Debug.print(DBG_INFO, "[MQTT] WiFi off or not connected, skipping MQTT");
     return;
   }
@@ -173,6 +215,39 @@ void connectToMqtt() {
 
 void connectToWiFi() {
   Debug.print(DBG_INFO, "[WiFi] Connecting to WiFi...");
+
+#ifdef MATTER_ENABLED
+  // Arduino's WiFi.mode()/WiFi.begin() would recreate netifs already created by
+  // esp_matter::start() → "duplicate key" assert crash.
+  // Use esp-idf API directly to set credentials and connect.
+  if (!storage.WIFI_OnOff) {
+    Debug.print(DBG_INFO, "[WiFi] WiFi turned off in NVS");
+    return;
+  }
+
+  registerMatterWiFiHandlers();
+
+  String ssid_str = nvs.getString("SSID", "");
+  String pass_str = nvs.getString("WIFI_PASS", "");
+  const char* ssid = (ssid_str.length() > 0) ? ssid_str.c_str() : WIFI_SSID;
+  const char* pass = (pass_str.length() > 0) ? pass_str.c_str() : WIFI_PASSWORD;
+
+  wifi_config_t wifi_cfg = {};
+  strncpy((char*)wifi_cfg.sta.ssid,     ssid, sizeof(wifi_cfg.sta.ssid)     - 1);
+  strncpy((char*)wifi_cfg.sta.password, pass, sizeof(wifi_cfg.sta.password) - 1);
+  wifi_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+
+  esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg);
+  if (err != ESP_OK)
+    Debug.print(DBG_WARNING, "[WiFi] set_config: %s", esp_err_to_name(err));
+
+  err = esp_wifi_connect();
+  if (err != ESP_OK && err != ESP_ERR_WIFI_CONN)
+    Debug.print(DBG_WARNING, "[WiFi] connect: %s", esp_err_to_name(err));
+
+  Debug.print(DBG_INFO, "[WiFi] Matter mode: connecting to SSID '%s'", ssid);
+#else
+  // Non-Matter mode — use Arduino WiFi stack normally.
   WiFi.mode(WIFI_STA);
   WiFi.setHostname("PoolMaster");
 
@@ -183,15 +258,18 @@ void connectToWiFi() {
     return;
   }
 
-  String ssid_str = nvs.getString("SSID", "");
-  String pass_str = nvs.getString("WIFI_PASS", "");
-  if (ssid_str != "" && pass_str != "") {
-    Debug.print(DBG_INFO, "[WiFi] Using stored credentials...");
-    WiFi.begin(ssid_str.c_str(), pass_str.c_str());
-  } else {
-    Debug.print(DBG_INFO, "[WiFi] Using default credentials...");
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  {
+    String ssid_str = nvs.getString("SSID", "");
+    String pass_str = nvs.getString("WIFI_PASS", "");
+    if (ssid_str.length() > 0 && pass_str.length() > 0) {
+      Debug.print(DBG_INFO, "[WiFi] Using stored credentials...");
+      WiFi.begin(ssid_str.c_str(), pass_str.c_str());
+    } else {
+      Debug.print(DBG_INFO, "[WiFi] Using default credentials...");
+      WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    }
   }
+#endif
 }
 
   void WiFiEvent(WiFiEvent_t event) {

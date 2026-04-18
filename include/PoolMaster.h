@@ -69,6 +69,7 @@ struct StoreStruct
 struct StoreStruct
 {
     uint8_t ConfigVersion;
+    uint8_t MatterVersion;
     String SSID, WIFI_PASS, MQTT_USER, MQTT_PASS, MQTT_NAME, SaltStatus, ResetTimestamp;
     IPAddress MQTT_IP;
     uint32_t MQTT_PORT, Uptime, LastUptimeUpdate;
