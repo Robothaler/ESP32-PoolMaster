@@ -15,6 +15,13 @@
 #include "PCF8574Manager.h"
 #ifdef MATTER_ENABLED
 #include "MatterBridge.h"
+#include "esp_wifi.h"
+static inline bool wifiIsConnected() {
+  wifi_ap_record_t _ap;
+  return esp_wifi_sta_get_ap_info(&_ap) == ESP_OK;
+}
+#else
+static inline bool wifiIsConnected() { return WiFi.status() == WL_CONNECTED; }
 #endif
 
 #include <soc/gpio_struct.h>
@@ -465,17 +472,17 @@ void setup()
   connectToWiFi();
 
   // Wait for WiFi — but never block the core startup.
-  // In Matter mode the CHIP stack manages WiFi asynchronously; WiFi.status() may
-  // never return WL_CONNECTED from Arduino's perspective even though the station
-  // is associated.  In non-Matter mode we give WiFi up to 15 s, then continue.
-  // Either way: time (RTC fallback), sensors, PIDs and pump tasks always start.
+  // In MATTER_ENABLED mode the CHIP stack manages WiFi via esp-idf; WiFi.status()
+  // always returns WL_DISCONNECTED from Arduino's view.  Use esp_wifi_sta_get_ap_info()
+  // instead.  In non-Matter mode we give WiFi up to 15 s, then continue.
   {
     uint32_t wifiDeadline = millis() + 15000UL;
-    while (WiFi.status() != WL_CONNECTED && millis() < wifiDeadline) {
-      delay(500);
-      Serial.print(".");
+    bool wifiConnected = false;
+    while (!wifiConnected && millis() < wifiDeadline) {
+      wifiConnected = wifiIsConnected();
+      if (!wifiConnected) { delay(500); Serial.print("."); }
     }
-    if (WiFi.status() != WL_CONNECTED)
+    if (!wifiConnected)
       Debug.print(DBG_WARNING, "[SETUP] WiFi not available — continuing without WiFi/MQTT");
   }
 
@@ -498,7 +505,7 @@ void setup()
               resetReasonToString(storage.ResetReason), storage.ResetTimestamp.c_str());
 
   // Initialize the mDNS library and OTA — only when WiFi is actually up
-  if (storage.WIFI_OnOff && WiFi.status() == WL_CONNECTED) {
+  if (storage.WIFI_OnOff && wifiIsConnected()) {
     if (!MDNS.begin("PoolMaster"))
       Debug.print(DBG_WARNING, "[SETUP] mDNS start failed — skipping");
     else
@@ -1130,7 +1137,7 @@ void bme280Init() {
 void StartTime()
 {
   static bool ntpConfigured = false;
-  if (storage.WIFI_OnOff && WiFi.status() == WL_CONNECTED) {
+  if (storage.WIFI_OnOff && wifiIsConnected()) {
     if (!ntpConfigured) {
       Debug.print(DBG_INFO, "[NTP] Configuring time with NTP servers: 0.pool.ntp.org, 1.pool.ntp.org, 2.pool.ntp.org (CET/CEST)");
       configTime(0, 0,"0.pool.ntp.org","1.pool.ntp.org","2.pool.ntp.org"); // 3 possible NTP servers
@@ -1168,7 +1175,7 @@ void readLocalTime()
   bool timeSynced = false;
   struct tm localTimeInfo;
 
-  if (storage.WIFI_OnOff && WiFi.status() == WL_CONNECTED) {
+  if (storage.WIFI_OnOff && wifiIsConnected()) {
     if (getLocalTime(&localTimeInfo, 5000U)) {
       Debug.print(DBG_INFO, "[NTP] Time from NTP: %04d-%02d-%02d %02d:%02d:%02d, DST: %d",
         localTimeInfo.tm_year + 1900, localTimeInfo.tm_mon + 1, localTimeInfo.tm_mday,

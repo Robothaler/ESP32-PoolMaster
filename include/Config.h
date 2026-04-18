@@ -144,7 +144,8 @@
 #define TIMETOMAX_45      45   // Time to reach to maximum in Seconds
 #define TIMETOMAX_90      90   // Time to reach to maximum in Seconds
 
-#define WDT_TIMEOUT       10000  // ms — Task WDT timeout (10 s); was incorrectly 10 ms
+#define WDT_TIMEOUT       30000  // ms — 30 s; gives CONFIG_ASYNC_TCP_MAX_ACK_TIME=5000 time to
+                                  // disconnect throttled WebSocket clients before TWDT fires
 #define MWDT_TIMEOUT_MS   15000  // ms — Motor WDT timeout (15 s)
 
 // Server port

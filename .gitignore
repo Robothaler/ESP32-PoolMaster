@@ -18,3 +18,4 @@ ADS1115
 dependencies.lock
 sdkconfig.matter_ota
 managed_components
+logs/
