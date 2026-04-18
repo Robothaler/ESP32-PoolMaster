@@ -43,6 +43,16 @@ const char* resetReasonToString(uint8_t reason);
 // bool SMTP_Connect(void);
 // void Send_Email(void);
 
+// Calculate pH Kp proportional to pool volume.
+// Gixy31 reference: Kp = 2,700,000 for a 50 m³ pool.
+// Returns 0.0 when volumeM3 <= 0 (caller should keep current Kp unchanged).
+double calcPhKpForVolume(float volumeM3) {
+  static constexpr double REFERENCE_KP     = 2700000.0;
+  static constexpr float  REFERENCE_VOLUME = 50.0f;  // m³
+  if (volumeM3 <= 0.0f) return 0.0;
+  return REFERENCE_KP * ((double)volumeM3 / REFERENCE_VOLUME);
+}
+
 void calibrateMotorValves() {
   ELD_Treppe.calibrate();
   ELD_Hinten.calibrate();
@@ -572,13 +582,9 @@ Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID())
             if (LastWaterFillStartTime > 0) {  // Only calculate if we have a valid start time
                 unsigned long fillDuration = getDurationSafe(LastWaterFillStartTime, LastWaterFillStopTime);
                 storage.WaterFillDuration = fillDuration;
-                Debug.print(DBG_VERBOSE, "[WaterFill] Fill duration: %lu ms", fillDuration);
-
-                // Calculate water consumption in liters
-                float fillDurationMinutes = fillDuration / 60000.0; // Convert milliseconds to minutes
-                waterConsumption = flowRate * fillDurationMinutes; // flowRate in liters per minute
-                storage.WaterFillAnCon += waterConsumption; // Accumulate annual consumption in liters
-                Debug.print(DBG_VERBOSE, "[WaterFill] Added consumption: %.2f L (duration: %lu ms)", waterConsumption, fillDuration);
+                Debug.print(DBG_VERBOSE, "[WaterFill] Fill duration recorded: %lu ms", fillDuration);
+                // NOTE: water consumption is accumulated incrementally below (block 2, UpTime-based).
+                // Do NOT add consumption here to avoid double-counting.
             }
             LastWaterFillStartTime = 0;
         }
@@ -590,8 +596,17 @@ Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID())
             LastWaterFillStartTime = 0; // Reset the start time
         }        
     }
-    else { // Manual mode
-        if (waterMaxLvl && WaterFill.IsRunning() || WaterFillError && WaterFill.IsRunning()) { // Water level reached maximum, stop water filling
+    else { // Manual mode or FiltrationPump not running
+        // Safety: always stop WaterFill valve when filtration is not running
+        if (!FiltrationPump.IsRunning() && WaterFill.IsRunning()) {
+            Debug.print(DBG_WARNING, "[WaterFill] Stopping WaterFill: FiltrationPump not running");
+            WaterFill.Stop();
+            timeSinceMinLvl = 0;
+            LastWaterFillStartTime = 0;
+            LastWaterFillStopTime = millis();
+        }
+        // Hard stop on max level or error (also covers manual mode)
+        if ((waterMaxLvl || WaterFillError) && WaterFill.IsRunning()) {
             Debug.print(DBG_VERBOSE, "[WaterFill] Stopping WaterFill in Manual mode...");
             WaterFill.Stop();
             LastWaterFillStopTime = millis();

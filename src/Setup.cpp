@@ -578,6 +578,7 @@ void setup()
 
   //WaterFill.SetFlowRate(storage.WaterFillFR);
   WaterFill.SetMaxUpTime(storage.WaterFillUpTimeLimit * 1000);
+  WaterFill.Stop(); // Safety: ensure valve is physically closed on every startup
 
   // Start filtration pump at power-on if within scheduled time slots -- You can choose not to do this and start pump manually
   if (storage.AutoMode && (hour() >= storage.FiltrationStart) && (hour() < storage.FiltrationStop))

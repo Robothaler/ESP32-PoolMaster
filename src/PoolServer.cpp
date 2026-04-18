@@ -1131,6 +1131,24 @@ void ProcessCommand(void *pvParameters)
           PhPID.SetTunings(storage.Ph_Kp, storage.Ph_Ki, storage.Ph_Kd);
           PublishSettings();
         }
+        else if (command.containsKey(F("PoolVolume"))) //"PoolVolume" command — sets pool volume (m³) and auto-scales Ph_Kp
+        {
+          float newVolume = (float)command[F("PoolVolume")];
+          if (newVolume > 0.0f) {
+            storage.PoolVolume = newVolume;
+            saveParam("PoolVolume", (double)storage.PoolVolume);
+            // Auto-scale Ph_Kp proportional to pool volume (ref: 2,700,000 @ 50 m³)
+            double newKp = calcPhKpForVolume(storage.PoolVolume);
+            storage.Ph_Kp = newKp;
+            saveParam("Ph_Kp", storage.Ph_Kp);
+            PhPID.SetTunings(storage.Ph_Kp, storage.Ph_Ki, storage.Ph_Kd);
+            Debug.print(DBG_INFO, "[PoolVolume] Volume set to %.1f m³, Ph_Kp auto-scaled to %.0f",
+                        storage.PoolVolume, storage.Ph_Kp);
+          } else {
+            Debug.print(DBG_WARNING, "[PoolVolume] Ignored invalid volume: %.1f", newVolume);
+          }
+          PublishSettings();
+        }
         else if (command.containsKey(F("OrpPIDWSize"))) //"OrpPIDWSize" command which sets the window size of the Orp PID loop
         {
           storage.OrpPIDWindowSize = (unsigned long)command[F("OrpPIDWSize")] * 60 * 1000; // minutes in milliseconds
@@ -1356,8 +1374,13 @@ void ProcessCommand(void *pvParameters)
           if ((int)command[F("WaterFill")] == 0){
             WaterFill.Stop();    //stop WaterFill tap
           } else {
-            WaterFill.Start();   //start WaterFill tap
-          }  
+            // Safety: only allow manual WaterFill start when filtration is running
+            if (FiltrationPump.IsRunning()) {
+              WaterFill.Start();   //start WaterFill tap
+            } else {
+              Debug.print(DBG_WARNING, "[WaterFill] Manual start denied: FiltrationPump not running");
+            }
+          }
         }
         else if (command.containsKey(F("SaltPump"))) //"SaltPump" command which starts or stops the Salt pump
         {

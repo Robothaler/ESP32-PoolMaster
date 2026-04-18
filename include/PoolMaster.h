@@ -109,6 +109,12 @@ void unlockI2C(); // Declaration of the unlockI2C function
 unsigned long getDurationSafe(unsigned long start, unsigned long current);
 // Forward declaration — full inline definition is below near line 155
 
+// pH Kp auto-scaling based on pool volume.
+// Reference: Gixy31 original calibrated Kp=2,700,000 for a 50m³ pool.
+// Only Kp changes with volume; Ki and Kd remain manually configurable.
+// Returns 0 if volumeM3 <= 0 (caller should keep existing Kp).
+double calcPhKpForVolume(float volumeM3);
+
 //Queue object to store incoming JSON commands (up to 10)
 #define QUEUE_ITEMS_NBR 20
 #define QUEUE_ITEM_SIZE 150

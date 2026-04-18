@@ -5,6 +5,7 @@
 #include "Arduino_DebugUtils.h"
 #include "Config.h"
 #include "PoolMaster.h"
+#include "WebUI.h"
 
 extern Arduino_DebugUtils Debug;
 
@@ -100,11 +101,18 @@ void otaTask(void *pvParameters) {
       request->send(200, "text/html", "<form method='POST' action='/upload' enctype='multipart/form-data'><input type='file' name='file' accept='.tft'><input type='submit' value='Upload'></form>");
     });
     server.on(OTA_NEXTION_PATH, HTTP_POST, [](AsyncWebServerRequest *request) {}, handleFileUpload);
+    // Register WebUI routes (before server.begin())
+    initWebUI();
     server.begin();
     Debug.print(DBG_INFO, "[OTA] Web server started on port %d", OTA_NEXTION_PORT);
   } else {
     Debug.print(DBG_WARNING, "[OTA] No web server - SPIFFS unavailable");
   }
+
+  // Periodic WebSocket broadcast timer: every 5 s
+  TimerHandle_t wsTimer = xTimerCreate("wsBC", pdMS_TO_TICKS(5000), pdTRUE, nullptr,
+    [](TimerHandle_t){ webUIBroadcast(); });
+  if (wsTimer) xTimerStart(wsTimer, 0);
 
   for (;;) {
     esp_task_wdt_reset();

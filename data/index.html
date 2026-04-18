@@ -1,0 +1,1325 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PoolMaster</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+:root{
+  --bg:#070b12;--bg2:#0e1420;--bg3:#151d2e;--bg4:#1a2540;
+  --border:rgba(255,255,255,0.08);--border2:rgba(255,255,255,0.14);
+  --text:#e8edf5;--text2:#8fa0bd;--text3:#5a6e8a;
+  --blue:#3b82f6;--green:#22c55e;--yellow:#eab308;--red:#ef4444;--cyan:#06b6d4;--purple:#a855f7;
+  --card:rgba(255,255,255,0.03);
+  --radius:12px;--radius-sm:8px;
+  --shadow:0 4px 24px rgba(0,0,0,0.4);
+  --glow-blue:0 0 20px rgba(59,130,246,0.3);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden}
+/* ─── NAV ─── */
+.navbar{position:sticky;top:0;z-index:100;background:rgba(7,11,18,0.92);backdrop-filter:blur(16px);border-bottom:1px solid var(--border);padding:0 20px;display:flex;align-items:center;gap:12px;height:56px}
+.nav-brand{font-weight:700;font-size:18px;color:var(--blue);white-space:nowrap;margin-right:8px}
+.nav-brand span{color:var(--text2);font-size:12px;margin-left:6px;font-weight:400}
+.nav-tabs{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none;flex:1}
+.nav-tabs::-webkit-scrollbar{display:none}
+.nav-tab{padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px;color:var(--text2);white-space:nowrap;transition:all .2s;border:none;background:transparent}
+.nav-tab:hover{color:var(--text);background:rgba(255,255,255,0.05)}
+.nav-tab.active{color:var(--blue);background:rgba(59,130,246,0.12)}
+.ws-dot{width:8px;height:8px;border-radius:50%;background:var(--red);transition:background .5s;flex-shrink:0}
+.ws-dot.ok{background:var(--green)}
+/* ─── LAYOUT ─── */
+.container{max-width:1400px;margin:0 auto;padding:20px}
+.tab-content{display:none}
+.tab-content.active{display:block}
+/* ─── GRID ─── */
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}
+.grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+.grid4{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+/* ─── CARD ─── */
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px;backdrop-filter:blur(8px);transition:border-color .2s}
+.card:hover{border-color:var(--border2)}
+.card-title{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--text3);margin-bottom:14px;display:flex;align-items:center;gap:6px}
+.card-title svg{width:14px;height:14px;opacity:.6}
+/* ─── GAUGE ─── */
+.gauge-wrap{display:flex;flex-direction:column;align-items:center;gap:8px}
+.gauge-canvas{width:180px;height:110px}
+.gauge-value{font-size:28px;font-weight:700;line-height:1}
+.gauge-unit{font-size:12px;color:var(--text2)}
+.gauge-label{font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em}
+.gauge-sp{font-size:11px;color:var(--text2);margin-top:2px}
+/* ─── STATUS CHIP ─── */
+.chip{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:20px;font-size:12px;font-weight:500}
+.chip-dot{width:7px;height:7px;border-radius:50%}
+.chip.on{background:rgba(34,197,94,0.12);color:var(--green)} .chip.on .chip-dot{background:var(--green)}
+.chip.off{background:rgba(255,255,255,0.04);color:var(--text3)} .chip.off .chip-dot{background:var(--text3)}
+.chip.warn{background:rgba(234,179,8,0.12);color:var(--yellow)} .chip.warn .chip-dot{background:var(--yellow)}
+.chip.err{background:rgba(239,68,68,0.14);color:var(--red)} .chip.err .chip-dot{background:var(--red)}
+/* ─── PUMP ROW ─── */
+.pump-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)}
+.pump-row:last-child{border-bottom:none}
+.pump-name{font-size:13px;color:var(--text2)}
+.pump-controls{display:flex;gap:6px}
+/* ─── BUTTON ─── */
+.btn{padding:6px 14px;border-radius:6px;font-size:13px;cursor:pointer;border:1px solid transparent;transition:all .2s;font-weight:500}
+.btn-primary{background:var(--blue);color:#fff;border-color:var(--blue)}
+.btn-primary:hover{background:#2563eb}
+.btn-sm{padding:4px 10px;font-size:12px}
+.btn-on{background:rgba(34,197,94,0.15);color:var(--green);border-color:rgba(34,197,94,0.3)}
+.btn-on:hover{background:rgba(34,197,94,0.25)}
+.btn-off{background:rgba(255,255,255,0.05);color:var(--text2);border-color:var(--border)}
+.btn-off:hover{background:rgba(255,255,255,0.1)}
+.btn-warn{background:rgba(239,68,68,0.12);color:var(--red);border-color:rgba(239,68,68,0.3)}
+.btn-warn:hover{background:rgba(239,68,68,0.22)}
+/* ─── TOGGLE ─── */
+.toggle-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)}
+.toggle-row:last-child{border-bottom:none}
+.toggle-label{font-size:13px;color:var(--text)}
+.toggle{position:relative;width:40px;height:22px;cursor:pointer}
+.toggle input{opacity:0;width:0;height:0}
+.slider{position:absolute;inset:0;background:rgba(255,255,255,0.1);border-radius:22px;transition:.3s}
+.slider::before{content:'';position:absolute;width:16px;height:16px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.3s}
+input:checked+.slider{background:var(--blue)}
+input:checked+.slider::before{transform:translateX(18px)}
+/* ─── VALUE ROW ─── */
+.val-row{display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border)}
+.val-row:last-child{border-bottom:none}
+.val-name{font-size:12px;color:var(--text3)}
+.val-num{font-size:14px;font-weight:600;color:var(--text);min-width:70px;text-align:right}
+/* ─── TEMP CARD ─── */
+.temp-big{font-size:36px;font-weight:700;line-height:1}
+.temp-unit{font-size:16px;color:var(--text2)}
+/* ─── PROGRESS ─── */
+.progress{height:6px;background:rgba(255,255,255,0.08);border-radius:3px;overflow:hidden;margin-top:6px}
+.progress-fill{height:100%;border-radius:3px;transition:width .5s}
+/* ─── FORM ─── */
+.form-group{margin-bottom:14px}
+.form-label{font-size:12px;color:var(--text2);margin-bottom:5px;display:block}
+.form-input{width:100%;background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:6px;padding:8px 12px;color:var(--text);font-size:14px;outline:none;transition:border-color .2s}
+.form-input:focus{border-color:var(--blue)}
+.form-hint{font-size:11px;color:var(--text3);margin-top:4px}
+.form-section{margin-bottom:24px}
+.form-section-title{font-size:13px;font-weight:600;color:var(--blue);margin-bottom:12px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+/* ─── ALERT ─── */
+.alert{padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.alert-err{background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);color:var(--red)}
+.alert-ok{background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.2);color:var(--green)}
+/* ─── MODAL ─── */
+.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:200;display:none;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+.modal-backdrop.open{display:flex}
+.modal{background:var(--bg2);border:1px solid var(--border2);border-radius:var(--radius);padding:24px;width:min(500px,95vw);max-height:90vh;overflow-y:auto;box-shadow:var(--shadow)}
+.modal-title{font-size:16px;font-weight:600;margin-bottom:20px}
+.modal-close{float:right;cursor:pointer;color:var(--text2);font-size:20px;line-height:1}
+/* ─── CHART CONTAINER ─── */
+.chart-wrap{position:relative;height:220px}
+/* ─── RESPONSIVE ─── */
+@media(max-width:600px){
+  .container{padding:12px}
+  .gauge-canvas{width:140px;height:86px}
+  .gauge-value{font-size:22px}
+}
+/* ─── GLOW effects on active pumps ─── */
+.pump-running{box-shadow:0 0 0 1px var(--green),0 0 12px rgba(34,197,94,0.15)}
+/* ─── VERLAUF range buttons ─── */
+.range-btn{padding:5px 12px;border-radius:6px;font-size:12px;cursor:pointer;border:1px solid var(--border);background:rgba(255,255,255,0.04);color:var(--text2);transition:all .18s;font-weight:500}
+.range-btn.active,.range-btn:hover{background:rgba(59,130,246,0.15);border-color:rgba(59,130,246,0.4);color:var(--blue)}
+/* ─── VERLAUF toggle labels ─── */
+.ds-toggle{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:20px;font-size:12px;cursor:pointer;border:1px solid var(--border);background:rgba(255,255,255,0.03);user-select:none;transition:all .18s}
+.ds-toggle input{display:none}
+.ds-toggle.active{background:rgba(255,255,255,0.07);border-color:var(--border2)}
+</style>
+</head>
+<body>
+
+<!-- NAVBAR -->
+<nav class="navbar">
+  <div class="nav-brand">PoolMaster <span id="fw-ver">–</span></div>
+  <div class="nav-tabs">
+    <button class="nav-tab active" onclick="showTab('dash')">Dashboard</button>
+    <button class="nav-tab" onclick="showTab('mess')">Messwerte</button>
+    <button class="nav-tab" onclick="showTab('verlauf')">Verlauf</button>
+    <button class="nav-tab" onclick="showTab('dos')">Dosierung</button>
+    <button class="nav-tab" onclick="showTab('fill')">Befüllung</button>
+    <button class="nav-tab" onclick="showTab('solar')">Solar</button>
+    <button class="nav-tab" onclick="showTab('settings')">Einstellungen</button>
+    <button class="nav-tab" onclick="showTab('system')">System</button>
+  </div>
+  <div class="ws-dot" id="ws-dot" title="WebSocket"></div>
+</nav>
+
+<!-- ════════════ DASHBOARD ════════════ -->
+<div id="tab-dash" class="tab-content active">
+<div class="container">
+
+  <!-- Error banner -->
+  <div id="err-banner" style="display:none" class="alert alert-err">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    <span id="err-text">–</span>
+    <button class="btn btn-sm btn-warn" style="margin-left:auto" onclick="sendCmd({Clear:1})">Quittieren</button>
+  </div>
+
+  <div class="grid2" style="margin-bottom:16px">
+    <!-- Quick gauges -->
+    <div class="card">
+      <div class="card-title">pH &amp; ORP</div>
+      <div style="display:flex;gap:20px;justify-content:center;flex-wrap:wrap">
+        <div class="gauge-wrap">
+          <canvas class="gauge-canvas" id="g-ph"></canvas>
+          <div class="gauge-value" id="gv-ph">–</div>
+          <div class="gauge-unit">pH</div>
+          <div class="gauge-sp" id="gsp-ph">SP: –</div>
+        </div>
+        <div class="gauge-wrap">
+          <canvas class="gauge-canvas" id="g-orp"></canvas>
+          <div class="gauge-value" id="gv-orp">–</div>
+          <div class="gauge-unit">mV</div>
+          <div class="gauge-sp" id="gsp-orp">SP: –</div>
+        </div>
+      </div>
+    </div>
+    <!-- Pressure -->
+    <div class="card">
+      <div class="card-title">Druck &amp; Durchfluss</div>
+      <div style="display:flex;justify-content:center;margin-bottom:12px">
+        <div class="gauge-wrap">
+          <canvas class="gauge-canvas" id="g-psi"></canvas>
+          <div class="gauge-value" id="gv-psi">–</div>
+          <div class="gauge-unit">bar</div>
+          <div class="gauge-sp" id="gsp-psi">Limit: –</div>
+        </div>
+      </div>
+      <div class="val-row"><span class="val-name">Hauptrohr</span><span class="val-num" id="v-flow">– <small>m³/h</small></span></div>
+      <div class="val-row"><span class="val-name">Messrohr</span><span class="val-num" id="v-flow2">– <small>m³/h</small></span></div>
+    </div>
+  </div>
+
+  <!-- Pumpen -->
+  <div class="grid2">
+    <div class="card">
+      <div class="card-title">Pumpen &amp; Ventile</div>
+      <div class="pump-row"><span class="pump-name">Filterpumpe</span>
+        <div class="pump-controls">
+          <span class="chip off" id="c-filt">–</span>
+          <button class="btn btn-sm btn-on" onclick="sendCmd({FiltPump:1})">EIN</button>
+          <button class="btn btn-sm btn-off" onclick="sendCmd({FiltPump:0})">AUS</button>
+        </div>
+      </div>
+      <div class="pump-row"><span class="pump-name">Heizung</span>
+        <div class="pump-controls">
+          <span class="chip off" id="c-heat">–</span>
+          <button class="btn btn-sm btn-on" onclick="sendCmd({HeatPump:1})">EIN</button>
+          <button class="btn btn-sm btn-off" onclick="sendCmd({HeatPump:0})">AUS</button>
+        </div>
+      </div>
+      <div class="pump-row"><span class="pump-name">Salzelektrolyse</span>
+        <div class="pump-controls">
+          <span class="chip off" id="c-salt">–</span>
+          <button class="btn btn-sm btn-on" onclick="sendCmd({SaltPump:1})">EIN</button>
+          <button class="btn btn-sm btn-off" onclick="sendCmd({SaltPump:0})">AUS</button>
+        </div>
+      </div>
+      <div class="pump-row"><span class="pump-name">Reinigungsroboter</span>
+        <div class="pump-controls">
+          <span class="chip off" id="c-robot">–</span>
+          <button class="btn btn-sm btn-on" onclick="sendCmd({RobotPump:1})">EIN</button>
+          <button class="btn btn-sm btn-off" onclick="sendCmd({RobotPump:0})">AUS</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Modi &amp; Automation</div>
+      <div class="toggle-row">
+        <span class="toggle-label">Automatik-Modus</span>
+        <label class="toggle"><input type="checkbox" id="m-auto" onchange="sendCmd({Mode:this.checked?1:0})"><span class="slider"></span></label>
+      </div>
+      <div class="toggle-row">
+        <span class="toggle-label">pH-Regelung</span>
+        <label class="toggle"><input type="checkbox" id="m-ph" onchange="sendCmd({pHAutoMode:this.checked?1:0})"><span class="slider"></span></label>
+      </div>
+      <div class="toggle-row">
+        <span class="toggle-label">ORP-Regelung</span>
+        <label class="toggle"><input type="checkbox" id="m-orp" onchange="sendCmd({OrpAutoMode:this.checked?1:0})"><span class="slider"></span></label>
+      </div>
+      <div class="toggle-row">
+        <span class="toggle-label">Autom. Befüllung</span>
+        <label class="toggle"><input type="checkbox" id="m-fill" onchange="sendCmd({FillMode:this.checked?1:0})"><span class="slider"></span></label>
+      </div>
+      <div class="toggle-row">
+        <span class="toggle-label">Wintermodus</span>
+        <label class="toggle"><input type="checkbox" id="m-winter" onchange="sendCmd({WinterMode:this.checked?1:0})"><span class="slider"></span></label>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ════════════ MESSWERTE ════════════ -->
+<div id="tab-mess" class="tab-content">
+<div class="container">
+  <div class="grid3" style="margin-bottom:16px">
+    <!-- pH detail -->
+    <div class="card" style="cursor:pointer" onclick="openModal('modal-ph')">
+      <div class="card-title">pH-Wert <span style="margin-left:auto;font-size:10px;color:var(--blue)">Detail ↗</span></div>
+      <div class="gauge-wrap">
+        <canvas class="gauge-canvas" id="g-ph2" style="width:160px;height:98px"></canvas>
+        <div class="gauge-value" id="gv-ph2" style="font-size:36px">–</div>
+        <div class="gauge-unit">pH</div>
+        <div class="gauge-sp" id="gsp-ph2">Sollwert: –</div>
+      </div>
+      <div style="margin-top:14px">
+        <div class="val-row"><span class="val-name">PID Ausgang</span><span class="val-num" id="v-ph-pid">– s</span></div>
+        <div class="val-row"><span class="val-name">Dosierpumpe</span><span class="chip off" id="c-ph" style="margin-left:auto">–</span></div>
+        <div class="val-row"><span class="val-name">Tankfüllung</span>
+          <span id="v-acid-pct" class="val-num">–%</span>
+        </div>
+        <div class="progress"><div id="pb-acid" class="progress-fill" style="width:0%;background:var(--blue)"></div></div>
+      </div>
+    </div>
+    <!-- ORP detail -->
+    <div class="card" style="cursor:pointer" onclick="openModal('modal-orp')">
+      <div class="card-title">Redox / ORP <span style="margin-left:auto;font-size:10px;color:var(--blue)">Detail ↗</span></div>
+      <div class="gauge-wrap">
+        <canvas class="gauge-canvas" id="g-orp2" style="width:160px;height:98px"></canvas>
+        <div class="gauge-value" id="gv-orp2" style="font-size:36px">–</div>
+        <div class="gauge-unit">mV</div>
+        <div class="gauge-sp" id="gsp-orp2">Sollwert: –</div>
+      </div>
+      <div style="margin-top:14px">
+        <div class="val-row"><span class="val-name">PID Ausgang</span><span class="val-num" id="v-orp-pid">– s</span></div>
+        <div class="val-row"><span class="val-name">Chlorpumpe</span><span class="chip off" id="c-chl" style="margin-left:auto">–</span></div>
+        <div class="val-row"><span class="val-name">Tankfüllung</span>
+          <span id="v-chl-pct" class="val-num">–%</span>
+        </div>
+        <div class="progress"><div id="pb-chl" class="progress-fill" style="width:0%;background:var(--cyan)"></div></div>
+      </div>
+    </div>
+    <!-- Pressure detail -->
+    <div class="card" style="cursor:pointer" onclick="openModal('modal-psi')">
+      <div class="card-title">Druck / Flow <span style="margin-left:auto;font-size:10px;color:var(--blue)">Detail ↗</span></div>
+      <div class="gauge-wrap">
+        <canvas class="gauge-canvas" id="g-psi2" style="width:160px;height:98px"></canvas>
+        <div class="gauge-value" id="gv-psi2" style="font-size:36px">–</div>
+        <div class="gauge-unit">bar</div>
+      </div>
+      <div style="margin-top:14px">
+        <div class="val-row"><span class="val-name">Hauptrohr</span><span class="val-num" id="v-flow2a">–</span></div>
+        <div class="val-row"><span class="val-name">Messrohr</span><span class="val-num" id="v-flow2b">–</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Temperaturen -->
+  <div class="grid4">
+    <div class="card"><div class="card-title">Schwimmbad</div><div class="temp-big" id="t-ws">–<span class="temp-unit">°C</span></div></div>
+    <div class="card"><div class="card-title">Eingang</div><div class="temp-big" id="t-wi">–<span class="temp-unit">°C</span></div></div>
+    <div class="card"><div class="card-title">Beckenboden</div><div class="temp-big" id="t-wb">–<span class="temp-unit">°C</span></div></div>
+    <div class="card"><div class="card-title">Wärmepumpe</div><div class="temp-big" id="t-wwp">–<span class="temp-unit">°C</span></div></div>
+    <div class="card"><div class="card-title">Außenluft</div>
+      <div class="temp-big" id="t-air">–<span class="temp-unit">°C</span></div>
+      <div class="val-row" style="margin-top:8px"><span class="val-name">Feuchte</span><span class="val-num" id="t-hum">–%</span></div>
+      <div class="val-row"><span class="val-name">Luftdruck</span><span class="val-num" id="t-press">– hPa</span></div>
+    </div>
+    <div class="card"><div class="card-title">Salz</div>
+      <div class="temp-big" id="v-salt" style="font-size:28px">–<span class="temp-unit" style="font-size:14px"> g/L</span></div>
+      <div class="val-row" style="margin-top:8px"><span class="val-name">Salzbedarf</span><span class="val-num" id="v-salt-need">– kg</span></div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ════════════ VERLAUF ════════════ -->
+<div id="tab-verlauf" class="tab-content">
+<div class="container">
+
+  <!-- Time range + controls bar -->
+  <div class="card" style="margin-bottom:16px;padding:14px 18px">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+      <div style="display:flex;gap:6px;flex-wrap:wrap" id="range-btns">
+        <button class="range-btn active" onclick="setLogRange('1h',this)">1h</button>
+        <button class="range-btn" onclick="setLogRange('6h',this)">6h</button>
+        <button class="range-btn" onclick="setLogRange('1d',this)">1d</button>
+        <button class="range-btn" onclick="setLogRange('7d',this)">7d</button>
+        <button class="range-btn" onclick="setLogRange('30d',this)">30d</button>
+        <button class="range-btn" onclick="setLogRange('all',this)">Gesamt</button>
+      </div>
+      <div id="log-range-info" style="font-size:11px;color:var(--text3)">–</div>
+      <button class="btn btn-sm btn-off" onclick="loadLogData()" title="Neu laden" style="display:flex;align-items:center;gap:5px">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+        Aktualisieren
+      </button>
+    </div>
+  </div>
+
+  <!-- Overview / combined chart -->
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-title" style="justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <span>Gesamtübersicht (normalisiert 0–100 %)</span>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <label class="ds-toggle active" id="dst-ph">
+          <input type="checkbox" checked onchange="refreshOverviewChart()">
+          <span style="color:#3b82f6">●</span> pH
+        </label>
+        <label class="ds-toggle active" id="dst-orp">
+          <input type="checkbox" checked onchange="refreshOverviewChart()">
+          <span style="color:#06b6d4">●</span> ORP
+        </label>
+        <label class="ds-toggle active" id="dst-temp">
+          <input type="checkbox" checked onchange="refreshOverviewChart()">
+          <span style="color:#f97316">●</span> Wassertemp
+        </label>
+        <label class="ds-toggle active" id="dst-psi">
+          <input type="checkbox" checked onchange="refreshOverviewChart()">
+          <span style="color:#a855f7">●</span> Druck
+        </label>
+        <label class="ds-toggle active" id="dst-evt">
+          <input type="checkbox" checked onchange="refreshOverviewChart()">
+          <span style="color:#22c55e">●</span> Ereignisse
+        </label>
+      </div>
+    </div>
+    <div class="chart-wrap" style="height:260px"><canvas id="chart-overview"></canvas></div>
+  </div>
+
+  <!-- 4 detail charts -->
+  <div class="grid2">
+    <div class="card">
+      <div class="card-title">pH-Verlauf</div>
+      <div class="chart-wrap"><canvas id="chart-ph-log"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-title">ORP-Verlauf</div>
+      <div class="chart-wrap"><canvas id="chart-orp-log"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Wassertemperatur</div>
+      <div class="chart-wrap"><canvas id="chart-temp-log"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Filterdruck</div>
+      <div class="chart-wrap"><canvas id="chart-psi-log"></canvas></div>
+    </div>
+  </div>
+
+  <!-- Log info footer -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-title">Protokoll-Speicher</div>
+    <div class="grid4">
+      <div class="val-row"><span class="val-name">Sensordatensätze</span><span class="val-num" id="li-srecs">–</span></div>
+      <div class="val-row"><span class="val-name">Ereignisse</span><span class="val-num" id="li-erecs">–</span></div>
+      <div class="val-row"><span class="val-name">Ältester Eintrag</span><span class="val-num" id="li-oldest">–</span></div>
+      <div class="val-row"><span class="val-name">Neuester Eintrag</span><span class="val-num" id="li-newest">–</span></div>
+      <div class="val-row"><span class="val-name">SPIFFS belegt</span><span class="val-num" id="li-spiffs">–</span></div>
+      <div class="val-row"><span class="val-name">SPIFFS frei</span><span class="val-num" id="li-free">–</span></div>
+    </div>
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+      <a class="btn btn-sm btn-off" id="li-export" href="/api/export.csv" download="poolmaster.csv">↓ CSV exportieren</a>
+      <button class="btn btn-sm btn-warn" onclick="if(confirm('Alle Protokolldateien löschen?'))clearLog()">Log löschen</button>
+    </div>
+  </div>
+
+</div>
+</div>
+
+<!-- ════════════ DOSIERUNG ════════════ -->
+<div id="tab-dos" class="tab-content">
+<div class="container">
+  <div class="grid2">
+    <div class="card">
+      <div class="card-title">pH-Regelung</div>
+      <div class="val-row"><span class="val-name">Aktueller pH-Wert</span><span class="val-num" id="d-ph">–</span></div>
+      <div class="val-row"><span class="val-name">Sollwert</span><span class="val-num" id="d-ph-sp">–</span></div>
+      <div class="val-row"><span class="val-name">PID Ausgang</span><span class="val-num" id="d-ph-pid">–</span></div>
+      <div class="val-row"><span class="val-name">Kp</span><span class="val-num" id="d-ph-kp">–</span></div>
+      <div class="val-row"><span class="val-name">Regelmodus</span><span class="chip off" id="d-ph-mode">–</span></div>
+      <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-primary" onclick="sendCmd({PhPump:1})">Pumpe EIN</button>
+        <button class="btn btn-off" onclick="sendCmd({PhPump:0})">Pumpe AUS</button>
+        <button class="btn btn-primary" onclick="sendCmd({pHAutoMode:1})">PID AUTO</button>
+        <button class="btn btn-off" onclick="sendCmd({pHAutoMode:0})">PID MANUELL</button>
+      </div>
+      <div style="margin-top:12px">
+        <div class="form-label">Sollwert setzen</div>
+        <div style="display:flex;gap:8px">
+          <input class="form-input" type="number" id="inp-ph-sp" step="0.1" min="6.5" max="8" placeholder="7.20" style="flex:1">
+          <button class="btn btn-primary" onclick="setPhSP()">Setzen</button>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">ORP-Regelung (Chlor)</div>
+      <div class="val-row"><span class="val-name">Aktueller ORP</span><span class="val-num" id="d-orp">–</span></div>
+      <div class="val-row"><span class="val-name">Sollwert</span><span class="val-num" id="d-orp-sp">–</span></div>
+      <div class="val-row"><span class="val-name">PID Ausgang</span><span class="val-num" id="d-orp-pid">–</span></div>
+      <div class="val-row"><span class="val-name">Kp</span><span class="val-num" id="d-orp-kp">–</span></div>
+      <div class="val-row"><span class="val-name">Regelmodus</span><span class="chip off" id="d-orp-mode">–</span></div>
+      <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-primary" onclick="sendCmd({ChlPump:1})">Pumpe EIN</button>
+        <button class="btn btn-off" onclick="sendCmd({ChlPump:0})">Pumpe AUS</button>
+        <button class="btn btn-primary" onclick="sendCmd({OrpAutoMode:1})">PID AUTO</button>
+        <button class="btn btn-off" onclick="sendCmd({OrpAutoMode:0})">PID MANUELL</button>
+      </div>
+      <div style="margin-top:12px">
+        <div class="form-label">Sollwert setzen</div>
+        <div style="display:flex;gap:8px">
+          <input class="form-input" type="number" id="inp-orp-sp" step="10" min="200" max="900" placeholder="650" style="flex:1">
+          <button class="btn btn-primary" onclick="setOrpSP()">Setzen</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ════════════ BEFÜLLUNG ════════════ -->
+<div id="tab-fill" class="tab-content">
+<div class="container">
+  <div class="grid2">
+    <div class="card">
+      <div class="card-title">Wasserbefüllung</div>
+      <div class="val-row"><span class="val-name">Ventil-Status</span><span class="chip off" id="c-fill-s">–</span></div>
+      <div class="val-row"><span class="val-name">Automatik-Modus</span><span class="chip off" id="c-fill-m">–</span></div>
+      <div class="val-row"><span class="val-name">Fehlerzustand</span><span class="chip ok" id="c-fill-e">OK</span></div>
+      <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-primary" onclick="sendCmd({WaterFill:1})">Ventil EIN</button>
+        <button class="btn btn-off" onclick="sendCmd({WaterFill:0})">Ventil AUS</button>
+        <button class="btn btn-warn" onclick="sendCmd({Clear:1})">Fehler quittieren</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Verbrauch</div>
+      <div class="val-row"><span class="val-name">Jahresverbrauch</span><span class="val-num" id="v-wfan">– L</span></div>
+      <div class="val-row"><span class="val-name">Letzte Fülldauer</span><span class="val-num" id="v-wfdur">– s</span></div>
+      <div class="val-row"><span class="val-name">Max. Öffnungszeit</span><span class="val-num" id="v-wfutl">– min</span></div>
+      <div style="margin-top:14px">
+        <button class="btn btn-warn btn-sm" onclick="sendCmd({RstWatCons:1})">Jahresverbrauch zurücksetzen</button>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ════════════ SOLAR ════════════ -->
+<div id="tab-solar" class="tab-content">
+<div class="container">
+  <div class="grid4">
+    <div class="card"><div class="card-title">Kollektor (Dach)</div><div class="temp-big" id="t-sroof">–<span class="temp-unit">°C</span></div></div>
+    <div class="card"><div class="card-title">Boiler</div><div class="temp-big" id="t-sboiler">–<span class="temp-unit">°C</span></div></div>
+    <div class="card"><div class="card-title">Pufferspeicher</div><div class="temp-big" id="t-sstorage">–<span class="temp-unit">°C</span></div></div>
+    <div class="card"><div class="card-title">Rücklauf</div><div class="temp-big" id="t-sbackflow">–<span class="temp-unit">°C</span></div></div>
+    <div class="card"><div class="card-title">Vorlauf</div><div class="temp-big" id="t-svl">–<span class="temp-unit">°C</span></div></div>
+    <div class="card"><div class="card-title">Rücklauf (Pool)</div><div class="temp-big" id="t-srl">–<span class="temp-unit">°C</span></div></div>
+  </div>
+  <div style="margin-top:16px" class="grid2">
+    <div class="card">
+      <div class="card-title">Solar-Status</div>
+      <div class="val-row"><span class="val-name">Solarpumpe</span><span class="chip off" id="c-solpump">–</span></div>
+      <div class="val-row"><span class="val-name">Solar-Modus</span><span class="chip off" id="c-solmode">–</span></div>
+      <div class="val-row"><span class="val-name">Ventil Pool</span><span class="chip off" id="c-solvalve">–</span></div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ════════════ EINSTELLUNGEN ════════════ -->
+<div id="tab-settings" class="tab-content">
+<div class="container">
+  <div class="grid2">
+    <!-- Pool Volumen -->
+    <div class="card">
+      <div class="form-section-title">Pool-Volumen &amp; pH Kp</div>
+      <div class="form-group">
+        <label class="form-label">Pool-Volumen (m³)</label>
+        <div style="display:flex;gap:8px">
+          <input class="form-input" type="number" id="s-poolvol" step="0.1" min="1" max="500" placeholder="23.6" style="flex:1">
+          <button class="btn btn-primary" onclick="setPoolVolume()">Setzen</button>
+        </div>
+        <div class="form-hint" id="s-kp-preview">→ Berechneter Kp bei diesem Volumen: –</div>
+        <div class="form-hint">Referenz: Kp = 2.700.000 bei 50 m³ (Gixy31). Nur Kp wird automatisch angepasst.</div>
+      </div>
+      <div class="val-row"><span class="val-name">Aktueller Kp-Wert</span><span class="val-num" id="s-cur-kp">–</span></div>
+    </div>
+    <!-- pH PID -->
+    <div class="card">
+      <div class="form-section-title">pH PID Parameter</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px">
+        <div class="form-group">
+          <label class="form-label">Kp (×10⁴)</label>
+          <input class="form-input" type="number" id="s-ph-kp" step="1" placeholder="270">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Ki</label>
+          <input class="form-input" type="number" id="s-ph-ki" step="0.001" placeholder="0">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Kd</label>
+          <input class="form-input" type="number" id="s-ph-kd" step="0.001" placeholder="0">
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="setPhPID()">pH PID setzen</button>
+    </div>
+    <!-- ORP PID -->
+    <div class="card">
+      <div class="form-section-title">ORP PID Parameter</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px">
+        <div class="form-group">
+          <label class="form-label">Kp (×10³)</label>
+          <input class="form-input" type="number" id="s-orp-kp" step="1" placeholder="18">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Ki</label>
+          <input class="form-input" type="number" id="s-orp-ki" step="0.001" placeholder="0">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Kd</label>
+          <input class="form-input" type="number" id="s-orp-kd" step="0.001" placeholder="0">
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="setOrpPID()">ORP PID setzen</button>
+    </div>
+    <!-- Schwellwerte -->
+    <div class="card">
+      <div class="form-section-title">Schwellwerte</div>
+      <div class="form-group">
+        <label class="form-label">pH Sollwert</label>
+        <input class="form-input" type="number" id="s-ph-sp" step="0.1" min="6.5" max="8">
+      </div>
+      <div class="form-group">
+        <label class="form-label">ORP Sollwert (mV)</label>
+        <input class="form-input" type="number" id="s-orp-sp" step="10" min="200" max="900">
+      </div>
+      <div class="form-group">
+        <label class="form-label">PSI Grenzwert (bar)</label>
+        <input class="form-input" type="number" id="s-psi-h" step="0.1" min="0" max="5">
+      </div>
+      <button class="btn btn-primary" onclick="setThresholds()">Schwellwerte setzen</button>
+    </div>
+    <!-- Befüllung -->
+    <div class="card">
+      <div class="form-section-title">Wasser-Befüllung</div>
+      <div class="form-group">
+        <label class="form-label">Max. Öffnungszeit (min)</label>
+        <input class="form-input" type="number" id="s-wf-maxup" step="1" min="5" max="600">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Durchflussmenge (L/min)</label>
+        <input class="form-input" type="number" id="s-wf-fr" step="0.1" min="0">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Füll-Timeout (min)</label>
+        <input class="form-input" type="number" id="s-wf-dur" step="1" min="0">
+      </div>
+      <button class="btn btn-primary" onclick="setWaterFillSettings()">Befüllung setzen</button>
+    </div>
+    <!-- Filtration -->
+    <div class="card">
+      <div class="form-section-title">Filtration Zeitplan</div>
+      <div class="form-group">
+        <label class="form-label">Start (Stunde)</label>
+        <input class="form-input" type="number" id="s-filt-start" step="1" min="0" max="23">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Stop (Stunde)</label>
+        <input class="form-input" type="number" id="s-filt-stop" step="1" min="0" max="23">
+      </div>
+      <div class="form-group">
+        <label class="form-label">PID Verzögerung (min)</label>
+        <input class="form-input" type="number" id="s-delay-pid" step="1" min="0">
+      </div>
+      <button class="btn btn-primary" onclick="setFiltSettings()">Zeitplan setzen</button>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ════════════ SYSTEM ════════════ -->
+<div id="tab-system" class="tab-content">
+<div class="container">
+  <div class="grid2">
+    <div class="card">
+      <div class="card-title">System-Info</div>
+      <div class="val-row"><span class="val-name">Firmware</span><span class="val-num" id="sys-fw">–</span></div>
+      <div class="val-row"><span class="val-name">Uptime</span><span class="val-num" id="sys-uptime">–</span></div>
+      <div class="val-row"><span class="val-name">WebSocket</span><span class="chip off" id="sys-ws">–</span></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Aktionen</div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <button class="btn btn-primary" onclick="sendCmd({Clear:1})">Alle Fehler quittieren</button>
+        <a href="/upload" style="text-decoration:none"><button class="btn btn-off" style="width:100%">Nextion OTA Update →</button></a>
+        <button class="btn btn-warn" onclick="if(confirm('ESP32 neu starten?'))sendCmd({Restart:1})">ESP32 Neustart</button>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ════════════ MODALS ════════════ -->
+<div class="modal-backdrop" id="modal-ph">
+  <div class="modal">
+    <span class="modal-close" onclick="closeModal('modal-ph')">✕</span>
+    <div class="modal-title">pH-Wert Detail</div>
+    <div class="chart-wrap"><canvas id="chart-ph-modal"></canvas></div>
+    <div style="margin-top:16px">
+      <div class="val-row"><span class="val-name">Aktuell</span><span class="val-num" id="m-ph">–</span></div>
+      <div class="val-row"><span class="val-name">Sollwert</span><span class="val-num" id="m-ph-sp">–</span></div>
+      <div class="val-row"><span class="val-name">PID Ausgang</span><span class="val-num" id="m-ph-pid">–</span></div>
+    </div>
+  </div>
+</div>
+<div class="modal-backdrop" id="modal-orp">
+  <div class="modal">
+    <span class="modal-close" onclick="closeModal('modal-orp')">✕</span>
+    <div class="modal-title">Redox / ORP Detail</div>
+    <div class="chart-wrap"><canvas id="chart-orp-modal"></canvas></div>
+    <div style="margin-top:16px">
+      <div class="val-row"><span class="val-name">Aktuell</span><span class="val-num" id="m-orp">–</span></div>
+      <div class="val-row"><span class="val-name">Sollwert</span><span class="val-num" id="m-orp-sp">–</span></div>
+    </div>
+  </div>
+</div>
+<div class="modal-backdrop" id="modal-psi">
+  <div class="modal">
+    <span class="modal-close" onclick="closeModal('modal-psi')">✕</span>
+    <div class="modal-title">Druck / Durchfluss Detail</div>
+    <div class="chart-wrap"><canvas id="chart-psi-modal"></canvas></div>
+    <div style="margin-top:16px">
+      <div class="val-row"><span class="val-name">Druck</span><span class="val-num" id="m-psi">–</span></div>
+      <div class="val-row"><span class="val-name">Hauptrohr</span><span class="val-num" id="m-flow">–</span></div>
+      <div class="val-row"><span class="val-name">Messrohr</span><span class="val-num" id="m-flow2">–</span></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ════ STATE ════
+let state = {};
+let histData = {ts:[],ph:[],orp:[],psi:[],temp:[],air:[]};
+let charts = {};
+let ws = null;
+let wsReady = false;
+
+// ════ TABS ════
+function showTab(id) {
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-'+id).classList.add('active');
+  event.currentTarget.classList.add('active');
+  if (id === 'verlauf') loadLogData();
+}
+
+// ════ WEBSOCKET ════
+function connect() {
+  ws = new WebSocket('ws://' + location.host + '/ws');
+  ws.onopen = () => { wsReady=true; setWsDot(true); };
+  ws.onclose = () => { wsReady=false; setWsDot(false); setTimeout(connect, 3000); };
+  ws.onerror = () => { wsReady=false; setWsDot(false); };
+  ws.onmessage = e => {
+    try {
+      const d = JSON.parse(e.data);
+      if (d.type === 'status') { state = d; updateUI(); }
+      else if (d.type === 'history') { applyHistory(d); }
+    } catch {}
+  };
+}
+
+function setWsDot(ok) {
+  const dot = document.getElementById('ws-dot');
+  dot.className = 'ws-dot' + (ok ? ' ok' : '');
+  const sys = document.getElementById('sys-ws');
+  if (sys) { sys.className='chip '+(ok?'on':'err'); sys.innerHTML='<span class="chip-dot"></span>'+(ok?'Verbunden':'Getrennt'); }
+}
+
+function sendCmd(obj) {
+  if (!wsReady) { alert('Keine WebSocket-Verbindung'); return; }
+  ws.send(JSON.stringify({cmd: obj}));
+}
+
+// ════ GAUGE (SVG-arc) ════
+function drawGauge(canvasId, value, min, max, zones, unit) {
+  const cv = document.getElementById(canvasId);
+  if (!cv) return;
+  const ctx = cv.getContext('2d');
+  const W = cv.offsetWidth || 180, H = cv.offsetHeight || 110;
+  cv.width = W * devicePixelRatio; cv.height = H * devicePixelRatio;
+  ctx.scale(devicePixelRatio, devicePixelRatio);
+  ctx.clearRect(0,0,W,H);
+
+  const cx = W/2, cy = H * 0.88, r = Math.min(W,H*1.8) * 0.42;
+  const startA = Math.PI*1.05, endA = Math.PI*1.95, totalA = endA-startA;
+
+  // background arc
+  ctx.strokeStyle='rgba(255,255,255,0.07)'; ctx.lineWidth=10; ctx.lineCap='round';
+  ctx.beginPath(); ctx.arc(cx,cy,r,startA,endA); ctx.stroke();
+
+  // zones
+  zones.forEach(z => {
+    const a0 = startA + ((z.from-min)/(max-min))*totalA;
+    const a1 = startA + ((z.to  -min)/(max-min))*totalA;
+    ctx.strokeStyle=z.color+'cc'; ctx.lineWidth=10; ctx.lineCap='round';
+    ctx.beginPath(); ctx.arc(cx,cy,r,a0,a1); ctx.stroke();
+  });
+
+  // needle
+  const clamp = Math.max(min, Math.min(max, value));
+  const needleA = startA + ((clamp-min)/(max-min))*totalA;
+  ctx.strokeStyle='#fff'; ctx.lineWidth=3; ctx.lineCap='round';
+  ctx.beginPath();
+  ctx.moveTo(cx - Math.cos(needleA)*r*0.15, cy - Math.sin(needleA)*r*0.15);
+  ctx.lineTo(cx + Math.cos(needleA)*r*0.72, cy + Math.sin(needleA)*r*0.72);
+  ctx.stroke();
+  ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(cx,cy,5,0,Math.PI*2); ctx.fill();
+}
+
+// pH zones: 6.5–8.5, target 7.2–7.6
+const phZones=[{from:6.5,to:6.9,color:'#ef4444'},{from:6.9,to:7.1,color:'#eab308'},{from:7.1,to:7.6,color:'#22c55e'},{from:7.6,to:7.9,color:'#eab308'},{from:7.9,to:8.5,color:'#ef4444'}];
+// ORP zones: 200–900, target 600–750
+const orpZones=[{from:200,to:400,color:'#ef4444'},{from:400,to:550,color:'#eab308'},{from:550,to:750,color:'#22c55e'},{from:750,to:850,color:'#eab308'},{from:850,to:900,color:'#ef4444'}];
+// PSI zones: 0–4, normal 0.5–2.5
+const psiZones=[{from:0,to:0.5,color:'#eab308'},{from:0.5,to:2.5,color:'#22c55e'},{from:2.5,to:3.5,color:'#eab308'},{from:3.5,to:4,color:'#ef4444'}];
+
+// ════ UI UPDATE ════
+function updateUI() {
+  const s = state;
+  if (!s.val) return;
+  const v = s.val, p = s.pumps, m = s.modes, err = s.err, pid = s.pid, sp = s.sp, tanks = s.tanks;
+
+  // Gauges
+  const phV = parseFloat(v.ph);
+  const orpV = parseFloat(v.orp);
+  const psiV = parseFloat(v.psi);
+  drawGauge('g-ph',  phV,  6.5, 8.5, phZones);
+  drawGauge('g-orp', orpV, 200, 900, orpZones);
+  drawGauge('g-psi', psiV, 0,   4,   psiZones);
+  drawGauge('g-ph2', phV,  6.5, 8.5, phZones);
+  drawGauge('g-orp2',orpV, 200, 900, orpZones);
+  drawGauge('g-psi2',psiV, 0,   4,   psiZones);
+
+  // Gauge values
+  setText('gv-ph', v.ph); setText('gv-orp', v.orp); setText('gv-psi', v.psi);
+  setText('gv-ph2', v.ph); setText('gv-orp2', v.orp); setText('gv-psi2', v.psi);
+  setText('gsp-ph',  'SP: '+ sp.ph); setText('gsp-ph2',  'Sollwert: '+ sp.ph);
+  setText('gsp-orp', 'SP: '+ sp.orp); setText('gsp-orp2', 'Sollwert: '+ sp.orp);
+  setText('gsp-psi', 'Limit: '+ sp.psi);
+
+  // Flows
+  setText('v-flow',  v.flow+' m³/h');
+  setText('v-flow2', v.flow2+' m³/h');
+  setText('v-flow2a', v.flow+' m³/h');
+  setText('v-flow2b', v.flow2+' m³/h');
+
+  // Temperatures
+  setText('t-ws', v.wS+'°C'); setText('t-wi', v.wI+'°C'); setText('t-wb', v.wB+'°C');
+  setText('t-wwp', v.wWP+'°C'); setText('t-air', v.air+'°C');
+  setText('t-hum', v.airHum+'%'); setText('t-press', v.airPress+' hPa');
+  setText('v-salt', v.saltConc+' g/L'); setText('v-salt-need', tanks.saltNeeded+' kg');
+
+  // Pump chips
+  setChip('c-filt',  p.filt,  ['Läuft','Gestoppt']);
+  setChip('c-heat',  p.heat,  ['Läuft','Gestoppt']);
+  setChip('c-salt',  p.salt,  ['Aktiv','Inaktiv']);
+  setChip('c-robot', p.robot, ['Läuft','Gestoppt']);
+  setChip('c-ph',    p.ph,    ['Dosiert','Gestoppt']);
+  setChip('c-chl',   p.chl,   ['Dosiert','Gestoppt']);
+
+  // Mode toggles
+  setToggle('m-auto',   m.auto);
+  setToggle('m-ph',     m.phReg);
+  setToggle('m-orp',    m.orpReg);
+  setToggle('m-fill',   m.fill);
+  setToggle('m-winter', m.winter);
+
+  // Dosierung tab
+  setText('d-ph',      v.ph+' pH');
+  setText('d-ph-sp',   sp.ph);
+  setText('d-ph-pid',  pid.phOut+' s');
+  setText('d-ph-kp',   pid.phKp);
+  setText('d-orp',     v.orp+' mV');
+  setText('d-orp-sp',  sp.orp+' mV');
+  setText('d-orp-pid', pid.orpOut+' s');
+  setText('d-orp-kp',  pid.orpKp);
+  setChip('d-ph-mode',  pid.phMode,  ['AUTO','MANUELL']);
+  setChip('d-orp-mode', pid.orpMode, ['AUTO','MANUELL']);
+  setText('v-ph-pid', pid.phOut+' s');
+  setText('v-orp-pid', pid.orpOut+' s');
+
+  // Tank fill %
+  const acidPct = Math.round(parseFloat(tanks.acid));
+  const chlPct  = Math.round(parseFloat(tanks.chl));
+  setText('v-acid-pct', acidPct+'%'); setWidth('pb-acid', acidPct, acidPct>30?'var(--blue)':'var(--red)');
+  setText('v-chl-pct',  chlPct+'%');  setWidth('pb-chl',  chlPct,  chlPct>30?'var(--cyan)':'var(--red)');
+
+  // Befüllung tab
+  setChip('c-fill-s', p.fill, ['Offen','Geschlossen']);
+  setChip('c-fill-m', m.fill, ['AUTO','MANUELL']);
+  setChip('c-fill-e', err.waterFill, ['FEHLER','OK'], true); // inverted
+  setText('v-wfan',  parseInt(tanks.wFillAnCon)+' L');
+  setText('v-wfdur', '–');
+  setText('v-wfutl', '–');
+
+  // Solar
+  setText('t-sroof',    s.solar?.roofTemp+'°C');
+  setText('t-sboiler',  s.solar?.boilerTemp+'°C');
+  setText('t-sstorage', s.solar?.storageTemp+'°C');
+  setText('t-sbackflow',s.solar?.backflow+'°C');
+  setText('t-svl',  v.solarVL+'°C');
+  setText('t-srl',  v.solarRL+'°C');
+  setChip('c-solpump',  s.solar?.pump,    ['Läuft','Gestoppt']);
+  setChip('c-solmode',  m.solar,          ['POOL','AUS']);
+  setChip('c-solvalve', s.solar?.valvePool,['Pool','Boiler']);
+
+  // Settings live values
+  setText('s-cur-kp', pid.phKp+'×10⁴');
+  const pvInput = document.getElementById('s-poolvol');
+  if (pvInput && !pvInput.value) pvInput.value = tanks.poolVol;
+  updateKpPreview();
+
+  // Modal values
+  setText('m-ph',     v.ph+' pH');
+  setText('m-ph-sp',  sp.ph);
+  setText('m-ph-pid', pid.phOut+' s');
+  setText('m-orp',    v.orp+' mV');
+  setText('m-orp-sp', sp.orp+' mV');
+  setText('m-psi',    v.psi+' bar');
+  setText('m-flow',   v.flow+' m³/h');
+  setText('m-flow2',  v.flow2+' m³/h');
+
+  // System
+  setText('sys-fw', s.firmware || Firmw || '–');
+  if (s.uptime) setText('sys-uptime', fmtUptime(s.uptime));
+
+  // Error banner
+  const errList = [];
+  if (err.psi)       errList.push('Druckfehler');
+  if (err.flow)      errList.push('Durchflussfehler Hauptrohr');
+  if (err.flow2)     errList.push('Durchflussfehler Messrohr');
+  if (err.waterFill) errList.push('Befüllungsfehler');
+  if (err.i2c)       errList.push('I2C-Fehler');
+  if (err.emergency) errList.push('Notaus Filterpumpe');
+  if (err.phTank)    errList.push('pH-Tank leer');
+  if (err.chlTank)   errList.push('Chlor-Tank leer');
+  const banner = document.getElementById('err-banner');
+  if (errList.length > 0) {
+    banner.style.display='flex';
+    setText('err-text', 'Aktive Fehler: '+errList.join(', '));
+  } else {
+    banner.style.display='none';
+  }
+}
+
+// ════ HELPERS ════
+function setText(id, v) { const el=document.getElementById(id); if(el&&v!==undefined) el.textContent=v; }
+function setWidth(id, pct, color) { const el=document.getElementById(id); if(el){el.style.width=Math.max(0,Math.min(100,pct))+'%'; if(color) el.style.background=color;} }
+function setChip(id, on, labels, invertColor=false) {
+  const el=document.getElementById(id); if(!el) return;
+  const active = on==1||on===true;
+  const cls = invertColor ? (active?'err':'ok') : (active?'on':'off');
+  const lbl = labels ? (active?labels[0]:labels[1]) : (active?'EIN':'AUS');
+  el.className='chip '+cls; el.innerHTML='<span class="chip-dot"></span>'+lbl;
+}
+function setToggle(id, val) { const el=document.getElementById(id); if(el) el.checked=(val==1||val===true); }
+function fmtUptime(sec) { const d=Math.floor(sec/86400),h=Math.floor((sec%86400)/3600),m=Math.floor((sec%3600)/60); return `${d}T ${h}h ${m}m`; }
+let Firmw = '–';
+
+// ════ POOL VOLUME + Kp PREVIEW ════
+function updateKpPreview() {
+  const v = parseFloat(document.getElementById('s-poolvol')?.value);
+  const hint = document.getElementById('s-kp-preview');
+  if (!hint) return;
+  if (v > 0) {
+    const kp = Math.round(2700000 * v / 50);
+    hint.textContent = `→ Berechneter Kp bei ${v} m³: ${kp.toLocaleString('de-DE')} (= ${(kp/10000).toFixed(0)} ×10⁴)`;
+  } else {
+    hint.textContent = '→ Berechneter Kp bei diesem Volumen: –';
+  }
+}
+document.addEventListener('DOMContentLoaded', () => {
+  const vi = document.getElementById('s-poolvol');
+  if (vi) vi.addEventListener('input', updateKpPreview);
+});
+
+// ════ SETTINGS COMMANDS ════
+function setPoolVolume() {
+  const v = parseFloat(document.getElementById('s-poolvol').value);
+  if (isNaN(v)||v<=0) { alert('Ungültiges Volumen'); return; }
+  sendCmd({PoolVolume: v});
+}
+function setPhSP() {
+  const v=parseFloat(document.getElementById('inp-ph-sp').value);
+  if(!isNaN(v)) sendCmd({PhSetPoint: v});
+}
+function setOrpSP() {
+  const v=parseFloat(document.getElementById('inp-orp-sp').value);
+  if(!isNaN(v)) sendCmd({OrpSetPoint: v});
+}
+function setPhPID() {
+  const kp=parseFloat(document.getElementById('s-ph-kp').value);
+  const ki=parseFloat(document.getElementById('s-ph-ki').value)||0;
+  const kd=parseFloat(document.getElementById('s-ph-kd').value)||0;
+  if(isNaN(kp)) { alert('Ungültiger Kp'); return; }
+  sendCmd({PhPIDParams:[kp,ki,kd]});
+}
+function setOrpPID() {
+  const kp=parseFloat(document.getElementById('s-orp-kp').value);
+  const ki=parseFloat(document.getElementById('s-orp-ki').value)||0;
+  const kd=parseFloat(document.getElementById('s-orp-kd').value)||0;
+  if(isNaN(kp)) { alert('Ungültiger Kp'); return; }
+  sendCmd({OrpPIDParams:[kp,ki,kd]});
+}
+function setThresholds() {
+  const ph=parseFloat(document.getElementById('s-ph-sp').value);
+  const orp=parseFloat(document.getElementById('s-orp-sp').value);
+  const psi=parseFloat(document.getElementById('s-psi-h').value);
+  if(!isNaN(ph)) sendCmd({PhSetPoint:ph});
+  if(!isNaN(orp)) sendCmd({OrpSetPoint:orp});
+  if(!isNaN(psi)) sendCmd({PSIHigh:psi});
+}
+function setWaterFillSettings() {
+  const mu=parseInt(document.getElementById('s-wf-maxup').value);
+  const fr=parseFloat(document.getElementById('s-wf-fr').value);
+  const dur=parseInt(document.getElementById('s-wf-dur').value);
+  if(!isNaN(mu))  sendCmd({WFMaxUp:mu});
+  if(!isNaN(fr))  sendCmd({WaterFillFR:fr});
+  if(!isNaN(dur)) sendCmd({FillDur:dur});
+}
+function setFiltSettings() {
+  const start=parseInt(document.getElementById('s-filt-start').value);
+  const stop=parseInt(document.getElementById('s-filt-stop').value);
+  const delay=parseInt(document.getElementById('s-delay-pid').value);
+  if(!isNaN(start)) sendCmd({FiltStart:start});
+  if(!isNaN(stop))  sendCmd({FiltStop:stop});
+  if(!isNaN(delay)) sendCmd({DelayPID:delay});
+}
+
+// ════ HISTORY ════
+function applyHistory(d) {
+  histData = {ts:[],ph:[],orp:[],psi:[],temp:[],air:[]};
+  if (!d.data) return;
+  d.data.forEach(r => {
+    const t = new Date(r[0]*1000);
+    const lbl = t.getHours().toString().padStart(2,'0')+':'+t.getMinutes().toString().padStart(2,'0');
+    histData.ts.push(lbl);
+    histData.ph.push(parseFloat(r[1]));
+    histData.orp.push(parseFloat(r[2]));
+    histData.psi.push(parseFloat(r[3]));
+    histData.temp.push(parseFloat(r[4]));
+    histData.air.push(parseFloat(r[5]));
+  });
+  // Also push to modal charts if open
+  refreshModalCharts();
+}
+
+const chartDefaults = {
+  type:'line',
+  options:{
+    responsive:true, maintainAspectRatio:false, animation:false,
+    plugins:{legend:{display:false}},
+    scales:{
+      x:{ticks:{color:'#5a6e8a',maxRotation:0,maxTicksLimit:8},grid:{color:'rgba(255,255,255,0.04)'}},
+      y:{ticks:{color:'#5a6e8a'},grid:{color:'rgba(255,255,255,0.06)'}}
+    },
+    elements:{point:{radius:0},line:{borderWidth:2,tension:0.3}}
+  }
+};
+
+function mkChart(id, label, data, color, yMin, yMax) {
+  const cv = document.getElementById(id); if(!cv) return null;
+  if (charts[id]) { charts[id].destroy(); }
+  const cfg = JSON.parse(JSON.stringify(chartDefaults));
+  if (yMin!==undefined) cfg.options.scales.y.min = yMin;
+  if (yMax!==undefined) cfg.options.scales.y.max = yMax;
+  cfg.data = {
+    labels: histData.ts,
+    datasets:[{label, data, borderColor:color, backgroundColor:color+'18',fill:true}]
+  };
+  charts[id] = new Chart(cv, cfg);
+  return charts[id];
+}
+
+function initCharts() {
+  mkChart('chart-ph',   'pH',   histData.ph,   '#3b82f6', 6.5, 8.5);
+  mkChart('chart-orp',  'ORP',  histData.orp,  '#06b6d4', 200, 900);
+  mkChart('chart-temp', 'Temp', histData.temp, '#f97316');
+  mkChart('chart-psi',  'PSI',  histData.psi,  '#a855f7', 0, 4);
+}
+
+function refreshModalCharts() {
+  if (document.getElementById('modal-ph').classList.contains('open'))
+    mkChart('chart-ph-modal', 'pH', histData.ph, '#3b82f6', 6.5, 8.5);
+  if (document.getElementById('modal-orp').classList.contains('open'))
+    mkChart('chart-orp-modal', 'ORP', histData.orp, '#06b6d4', 200, 900);
+  if (document.getElementById('modal-psi').classList.contains('open'))
+    mkChart('chart-psi-modal', 'PSI', histData.psi, '#a855f7', 0, 4);
+}
+
+// ════ MODAL ════
+function openModal(id) {
+  document.getElementById(id).classList.add('open');
+  setTimeout(() => refreshModalCharts(), 50);
+}
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.modal-backdrop').forEach(m => {
+  m.addEventListener('click', e => { if(e.target===m) m.classList.remove('open'); });
+});
+
+// ════ LOAD SETTINGS INTO FORMS ════
+async function loadSettings() {
+  try {
+    const r = await fetch('/api/settings');
+    const d = await r.json();
+    const set = (id, v) => { const el=document.getElementById(id); if(el&&v!=null) el.value=v; };
+    set('s-poolvol', d.poolVol);
+    set('s-ph-kp',   (d.phKp||0).toFixed(0));
+    set('s-ph-ki',   d.phKi||0);
+    set('s-ph-kd',   d.phKd||0);
+    set('s-orp-kp',  (d.orpKp||0).toFixed(0));
+    set('s-orp-ki',  d.orpKi||0);
+    set('s-orp-kd',  d.orpKd||0);
+    set('s-ph-sp',   d.phSP);
+    set('s-orp-sp',  d.orpSP);
+    set('s-psi-h',   d.psiHigh);
+    set('s-wf-maxup',d.wFillMaxUp);
+    set('s-wf-fr',   d.wFillFR);
+    set('s-wf-dur',  d.wFillDur);
+    set('s-filt-start', d.filtStart);
+    set('s-filt-stop',  d.filtStop);
+    set('s-delay-pid',  d.delayPID);
+    set('inp-ph-sp',    d.phSP);
+    set('inp-orp-sp',   d.orpSP);
+    Firmw = d.firmware || '–';
+    setText('fw-ver', Firmw);
+    setText('sys-fw', Firmw);
+    if (d.uptime) setText('sys-uptime', fmtUptime(d.uptime));
+    updateKpPreview();
+  } catch (e) { console.warn('Settings load failed:', e); }
+}
+
+// ════ VERLAUF — long-term log ════
+let logStore = { ts:[], tsRaw:[], ph:[], orp:[], psi:[], temp:[], pumps:[] };
+let logEvents = [];
+let logRange = '1h';
+
+const RANGE_S = { '1h':3600, '6h':21600, '1d':86400, '7d':604800, '30d':2592000 };
+const PUMP_NAMES = ['Filterpumpe','pH-Pumpe','Chlorpumpe','Heizung','Salzelektrolyse','Roboter','Solar','Befüllung'];
+const PUMP_COLORS = ['#22c55e','#3b82f6','#06b6d4','#f97316','#eab308','#a855f7','#ef4444','#8b5cf6'];
+
+function setLogRange(r, btn) {
+  logRange = r;
+  document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  loadLogData();
+}
+
+async function loadLogData() {
+  const now = Math.floor(Date.now() / 1000);
+  const from = (logRange === 'all') ? 0 : now - (RANGE_S[logRange] || 3600);
+  const to = now;
+
+  setText('log-range-info', 'Lade…');
+  try {
+    const [logR, evtR, infoR] = await Promise.all([
+      fetch('/api/log?from=' + from + '&to=' + to + '&pts=500'),
+      fetch('/api/events?from=' + from + '&to=' + to),
+      fetch('/api/loginfo')
+    ]);
+    const logJ  = logR.ok  ? await logR.json()  : {};
+    const evtJ  = evtR.ok  ? await evtR.json()  : {};
+    const infoJ = infoR.ok ? await infoR.json() : {};
+
+    // Parse sensor records
+    logStore = { ts:[], tsRaw:[], ph:[], orp:[], psi:[], temp:[], pumps:[] };
+    (logJ.records || []).forEach(r => {
+      logStore.tsRaw.push(r.ts);
+      logStore.ts.push(fmtLogTs(r.ts));
+      logStore.ph.push(r.ph != null ? r.ph : null);
+      logStore.orp.push(r.orp != null ? r.orp : null);
+      logStore.psi.push(r.psi != null ? r.psi : null);
+      logStore.temp.push(r.temp != null ? r.temp : null);
+      logStore.pumps.push(r.pumps || 0);
+    });
+
+    // Parse events
+    logEvents = (evtJ.events || []).map(e => ({
+      ts: e.ts, dev: e.dev, state: e.state, name: PUMP_NAMES[e.dev] || ('Gerät ' + e.dev)
+    }));
+
+    // Update info cards
+    applyLogInfo(infoJ);
+    const exp = document.getElementById('li-export');
+    if (exp) exp.href = '/api/export.csv?from=' + from + '&to=' + to;
+
+    const n = logStore.ts.length;
+    setText('log-range-info', n > 0
+      ? n + ' Messpunkte  ·  ' + fmtAbsTs(logStore.tsRaw[0]) + ' – ' + fmtAbsTs(logStore.tsRaw[n - 1])
+      : 'Keine Daten im gewählten Zeitraum');
+
+    renderDetailCharts();
+    refreshOverviewChart();
+  } catch (ex) {
+    console.warn('Log load error:', ex);
+    setText('log-range-info', 'Fehler: ' + ex.message);
+  }
+}
+
+function fmtLogTs(ts) {
+  const d = new Date(ts * 1000);
+  const hm = d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
+  if (logRange === '1h' || logRange === '6h' || logRange === '1d') return hm;
+  return d.getDate() + '.' + (d.getMonth() + 1) + ' ' + hm;
+}
+
+function fmtAbsTs(ts) {
+  if (!ts) return '–';
+  const d = new Date(ts * 1000);
+  return d.getDate() + '.' + (d.getMonth() + 1) + '.' + (d.getFullYear() % 100)
+    + ' ' + d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
+}
+
+function applyLogInfo(info) {
+  if (!info) return;
+  setText('li-srecs',  (info.sensorRecs  || 0).toLocaleString('de-DE'));
+  setText('li-erecs',  (info.eventRecs   || 0).toLocaleString('de-DE'));
+  setText('li-oldest', info.oldest ? fmtAbsTs(info.oldest) : '–');
+  setText('li-newest', info.newest ? fmtAbsTs(info.newest) : '–');
+  setText('li-spiffs', Math.round((info.used || 0) / 1024) + ' KB');
+  setText('li-free',   Math.round((info.free || 0) / 1024) + ' KB');
+}
+
+async function clearLog() {
+  try {
+    const r = await fetch('/api/logclear', { method:'POST' });
+    if (r.ok) { alert('Log gelöscht.'); loadLogData(); }
+    else alert('Fehler beim Löschen.');
+  } catch(e) { alert('Fehler: ' + e.message); }
+}
+
+// ── Normalize array to 0–100% ──
+function normalize(arr, lo, hi) {
+  return arr.map(v => (v == null) ? null : Math.max(0, Math.min(100, (v - lo) / (hi - lo) * 100)));
+}
+
+// ── Map event timestamps to nearest sensor x-label index ──
+function evtToPoints(devIndex, yOn, yOff) {
+  const pts = [];
+  logEvents.filter(e => e.dev === devIndex).forEach(e => {
+    let idx = logStore.tsRaw.findIndex(t => t >= e.ts);
+    if (idx < 0 && logStore.tsRaw.length) idx = logStore.tsRaw.length - 1;
+    if (idx >= 0) pts.push({ x: logStore.ts[idx], y: e.state ? yOn : yOff });
+  });
+  return pts;
+}
+
+function mkDetailChart(id, label, data, color, yMin, yMax) {
+  const cv = document.getElementById(id); if (!cv) return;
+  if (charts[id]) { charts[id].destroy(); delete charts[id]; }
+  charts[id] = new Chart(cv, {
+    type: 'line',
+    data: {
+      labels: logStore.ts,
+      datasets: [{ label, data, borderColor: color, backgroundColor: color + '18',
+        fill: true, pointRadius: 0, borderWidth: 2, tension: 0.3, spanGaps: true }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: { legend: { display: false }, tooltip: { mode:'index', intersect:false } },
+      scales: {
+        x: { ticks: { color:'#5a6e8a', maxRotation:0, maxTicksLimit:8 }, grid: { color:'rgba(255,255,255,0.04)' } },
+        y: { min: yMin, max: yMax, ticks: { color:'#5a6e8a' }, grid: { color:'rgba(255,255,255,0.06)' } }
+      }
+    }
+  });
+}
+
+function renderDetailCharts() {
+  const lb = logStore.ts;
+  mkDetailChart('chart-ph-log',   'pH',          logStore.ph,   '#3b82f6', 6.5, 8.5);
+  mkDetailChart('chart-orp-log',  'ORP (mV)',     logStore.orp,  '#06b6d4', 200, 900);
+  mkDetailChart('chart-temp-log', 'Wassertemp °C',logStore.temp, '#f97316', undefined, undefined);
+  mkDetailChart('chart-psi-log',  'Druck (bar)',  logStore.psi,  '#a855f7', 0, 4);
+}
+
+function dstChecked(id) {
+  const el = document.getElementById(id);
+  if (!el) return true;
+  const cb = el.querySelector('input[type=checkbox]');
+  return cb ? cb.checked : true;
+}
+
+function refreshOverviewChart() {
+  // Sync toggle visual state
+  ['dst-ph','dst-orp','dst-temp','dst-psi','dst-evt'].forEach(id => {
+    const el = document.getElementById(id); if (!el) return;
+    const cb = el.querySelector('input'); if (!cb) return;
+    el.classList.toggle('active', cb.checked);
+  });
+
+  const cv = document.getElementById('chart-overview'); if (!cv) return;
+  if (charts['chart-overview']) { charts['chart-overview'].destroy(); delete charts['chart-overview']; }
+
+  const lb = logStore.ts;
+  const ds = [];
+
+  if (dstChecked('dst-ph'))
+    ds.push({ label:'pH', data: normalize(logStore.ph, 6.5, 8.5),
+      borderColor:'#3b82f6', backgroundColor:'transparent', fill:false,
+      pointRadius:0, borderWidth:2, tension:0.3, spanGaps:true });
+
+  if (dstChecked('dst-orp'))
+    ds.push({ label:'ORP', data: normalize(logStore.orp, 200, 900),
+      borderColor:'#06b6d4', backgroundColor:'transparent', fill:false,
+      pointRadius:0, borderWidth:2, tension:0.3, spanGaps:true });
+
+  if (dstChecked('dst-temp'))
+    ds.push({ label:'Wassertemp', data: normalize(logStore.temp, 10, 40),
+      borderColor:'#f97316', backgroundColor:'transparent', fill:false,
+      pointRadius:0, borderWidth:2, tension:0.3, spanGaps:true });
+
+  if (dstChecked('dst-psi'))
+    ds.push({ label:'Druck', data: normalize(logStore.psi, 0, 4),
+      borderColor:'#a855f7', backgroundColor:'transparent', fill:false,
+      pointRadius:0, borderWidth:2, tension:0.3, spanGaps:true });
+
+  if (dstChecked('dst-evt') && logEvents.length) {
+    const devsPresent = [...new Set(logEvents.map(e => e.dev))];
+    devsPresent.forEach(dev => {
+      const pts = evtToPoints(dev, 95, 5);
+      if (!pts.length) return;
+      ds.push({
+        label: PUMP_NAMES[dev] || ('Gerät ' + dev),
+        data: pts,
+        type: 'scatter',
+        pointRadius: 5,
+        pointStyle: 'circle',
+        backgroundColor: PUMP_COLORS[dev % PUMP_COLORS.length] + 'cc',
+        borderColor: PUMP_COLORS[dev % PUMP_COLORS.length],
+        showLine: false
+      });
+    });
+  }
+
+  charts['chart-overview'] = new Chart(cv, {
+    type: 'line',
+    data: { labels: lb, datasets: ds },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: {
+        legend: { display: true, position: 'bottom',
+          labels: { color:'#8fa0bd', font:{ size:11 }, boxWidth:12, padding:12 }
+        },
+        tooltip: { mode:'index', intersect:false }
+      },
+      scales: {
+        x: { ticks:{ color:'#5a6e8a', maxRotation:0, maxTicksLimit:10 }, grid:{ color:'rgba(255,255,255,0.04)' } },
+        y: { min:0, max:100, ticks:{ color:'#5a6e8a', callback: v => v + '%' }, grid:{ color:'rgba(255,255,255,0.06)' } }
+      }
+    }
+  });
+}
+
+// ════ INIT ════
+connect();
+loadSettings();
+</script>
+</body>
+</html>
