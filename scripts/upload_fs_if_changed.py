@@ -1,44 +1,67 @@
 """
-PlatformIO extra_script: upload SPIFFS filesystem only when data/ files changed.
+PlatformIO extra_script: upload SPIFFS filesystem only when needed.
 
-Runs as a pre-upload action. Compares the newest mtime in data/ against a
-stamp file (.pio/spiffs_upload.stamp). If data is newer, uploadfs is triggered
-before the normal firmware upload and the stamp is updated.
+Runs as a pre-action of the firmware "upload" target.  Triggers `uploadfs`
+if any of the following is true:
+
+  * the stamp file (.pio/<env>/spiffs_upload.stamp) is missing
+    → first build / fresh checkout: we can't know what's on the device,
+      so always upload to be safe;
+  * any file in data/ is newer than the stamp;
+  * partitions.csv is newer than the stamp (partition layout changed →
+    SPIFFS must be re-flashed regardless of data/ content).
+
+The stamp is updated only on a successful uploadfs run, so a failed
+upload will be retried on the next attempt.
 """
 import os
 import glob
+
 Import("env")  # noqa: F821 — PlatformIO injects this
 
-DATA_DIR   = os.path.join(env.subst("$PROJECT_DIR"), "data")
-STAMP_FILE = os.path.join(env.subst("$PROJECT_DIR"), ".pio",
-                          env.subst("$PIOENV"), "spiffs_upload.stamp")
+PROJECT_DIR = env.subst("$PROJECT_DIR")
+DATA_DIR    = os.path.join(PROJECT_DIR, "data")
+PARTITIONS  = os.path.join(PROJECT_DIR, "partitions.csv")
+STAMP_FILE  = os.path.join(PROJECT_DIR, ".pio",
+                           env.subst("$PIOENV"), "spiffs_upload.stamp")
+
 
 def _newest_mtime(folder):
     files = glob.glob(os.path.join(folder, "**", "*"), recursive=True)
     files = [f for f in files if os.path.isfile(f)]
     return max((os.path.getmtime(f) for f in files), default=0)
 
-def _stamp_mtime():
+
+def _mtime(path):
     try:
-        return os.path.getmtime(STAMP_FILE)
+        return os.path.getmtime(path)
     except OSError:
         return 0
+
 
 def upload_fs_if_changed(source, target, env):  # noqa: ARG001
     if not os.path.isdir(DATA_DIR):
         print("[uploadfs] No data/ directory — skipping.")
         return
 
-    newest = _newest_mtime(DATA_DIR)
-    stamp  = _stamp_mtime()
+    stamp        = _mtime(STAMP_FILE)
+    data_newest  = _newest_mtime(DATA_DIR)
+    parts_mtime  = _mtime(PARTITIONS)
 
-    if newest <= stamp:
-        print("[uploadfs] data/ unchanged — skipping SPIFFS upload.")
+    if stamp == 0:
+        reason = "first run / no stamp file"
+    elif data_newest > stamp:
+        reason = "data/ changed"
+    elif parts_mtime > stamp:
+        reason = "partitions.csv changed"
+    else:
+        print("[uploadfs] data/ and partitions.csv unchanged — "
+              "skipping SPIFFS upload.")
         return
 
-    print("[uploadfs] data/ changed — uploading SPIFFS filesystem...")
+    print(f"[uploadfs] Triggering SPIFFS upload ({reason}) ...")
     rc = env.Execute("$PYTHONEXE -m platformio run "
-                     f"--project-dir {env.subst('$PROJECT_DIR')} "
+                     f"--project-dir {PROJECT_DIR} "
                      f"-e {env.subst('$PIOENV')} "
                      "--target uploadfs")
     if rc == 0:
@@ -47,6 +70,9 @@ def upload_fs_if_changed(source, target, env):  # noqa: ARG001
             f.write("ok\n")
         print("[uploadfs] SPIFFS upload done — stamp updated.")
     else:
-        print("[uploadfs] SPIFFS upload FAILED (rc={rc}) — firmware upload continues.")
+        print(f"[uploadfs] SPIFFS upload FAILED (rc={rc}) — "
+              "ABORTING firmware upload so the stale state is obvious.")
+        env.Exit(1)
+
 
 env.AddPreAction("upload", upload_fs_if_changed)

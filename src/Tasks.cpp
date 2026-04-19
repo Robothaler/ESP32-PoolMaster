@@ -10,6 +10,14 @@
 // Allocate task stacks in PSRAM to preserve ~70 KB of scarce internal DRAM.
 // CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y and
 // CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y are both set in sdkconfig.
+//
+// IMPORTANT: A task whose stack lives in PSRAM MUST NOT call any SPI-flash
+// routine (SPIFFS, NVS, esp_partition_*, OTA, …). Such routines disable the
+// flash cache, which makes PSRAM (and therefore the task's own stack)
+// inaccessible. ESP-IDF guards against this with
+// `assert(esp_task_stack_is_sane_cache_disabled())` in cache_utils.c — a
+// failure of that assert reboots the device immediately. For flash-touching
+// tasks use CREATE_TASK_INTERNAL below to keep the stack in DRAM.
 #define CREATE_TASK_SPIRAM(func, name, stack, prio, handle, core) \
   do { \
     BaseType_t _r = xTaskCreatePinnedToCoreWithCaps( \
@@ -21,6 +29,22 @@
       xTaskCreatePinnedToCore(func, name, stack, NULL, prio, handle, core); \
     } else { \
       Debug.print(DBG_INFO, "[TASKS] Created %s (SPIRAM stack), Heap: %d", \
+                  name, ESP.getFreeHeap()); \
+    } \
+  } while (0)
+
+// For tasks that touch SPI flash directly (SPIFFS, NVS, OTA, …): stack must
+// live in internal DRAM, otherwise spi_flash_disable_interrupts_caches_…
+// will assert and panic-reboot the device.
+#define CREATE_TASK_INTERNAL(func, name, stack, prio, handle, core) \
+  do { \
+    BaseType_t _r = xTaskCreatePinnedToCore( \
+        func, name, stack, NULL, prio, handle, core); \
+    if (_r != pdPASS) { \
+      Debug.print(DBG_ERROR, "[TASKS] Failed to create %s (internal stack). Heap: %d", \
+                  name, ESP.getFreeHeap()); \
+    } else { \
+      Debug.print(DBG_INFO, "[TASKS] Created %s (internal stack), Heap: %d", \
                   name, ESP.getFreeHeap()); \
     } \
   } while (0)
@@ -42,7 +66,9 @@ void createTasks(int app_cpu, TaskHandle_t* pubSetTaskHandle, TaskHandle_t* pubM
   CREATE_TASK_SPIRAM(SettingsPublish,     "SettingsPublish",    STACK_T12, PRIORITY_T12, pubSetTaskHandle,  app_cpu);
 
   Debug.print(DBG_INFO, "[TASKS] Creating OTA task...");
-  CREATE_TASK_SPIRAM(otaTask,             "OTATask",            STACK_T13, PRIORITY_T13, nullptr,         app_cpu);
+  // OTATask calls SPIFFS.begin() → SPI-flash access → cache disabled.
+  // Stack MUST be in internal DRAM (see comment above CREATE_TASK_SPIRAM).
+  CREATE_TASK_INTERNAL(otaTask,           "OTATask",            STACK_T13, PRIORITY_T13, nullptr,         app_cpu);
   Debug.print(DBG_INFO, "[TASKS] OTA task created");
 
 #ifdef MATTER_ENABLED
