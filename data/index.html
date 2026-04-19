@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>PoolMaster</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 <style>
 :root{
   --bg:#070b12;--bg2:#0e1420;--bg3:#151d2e;--bg4:#1a2540;
@@ -72,6 +73,13 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 .btn-off:hover{background:rgba(255,255,255,0.1)}
 .btn-warn{background:rgba(239,68,68,0.12);color:var(--red);border-color:rgba(239,68,68,0.3)}
 .btn-warn:hover{background:rgba(239,68,68,0.22)}
+/* State-driven pump/mode buttons (live state reflects in colour) */
+.btn-on-active{background:var(--green);color:#fff;border-color:var(--green);box-shadow:0 0 10px rgba(34,197,94,0.5);font-weight:600}
+.btn-on-active:hover{background:#16a34a}
+.btn-off-active{background:var(--red);color:#fff;border-color:var(--red);box-shadow:0 0 10px rgba(239,68,68,0.5);font-weight:600}
+.btn-off-active:hover{background:#dc2626}
+.btn-neutral{background:rgba(255,255,255,0.04);color:var(--text3);border-color:var(--border)}
+.btn-neutral:hover{background:rgba(255,255,255,0.08);color:var(--text2)}
 /* ─── TOGGLE ─── */
 .toggle-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)}
 .toggle-row:last-child{border-bottom:none}
@@ -211,54 +219,69 @@ input:checked+.slider::before{transform:translateX(18px)}
       <div class="pump-row"><span class="pump-name">Filterpumpe</span>
         <div class="pump-controls">
           <span class="chip off" id="c-filt">–</span>
-          <button class="btn btn-sm btn-on" onclick="sendCmd({FiltPump:1})">EIN</button>
-          <button class="btn btn-sm btn-off" onclick="sendCmd({FiltPump:0})">AUS</button>
+          <button class="btn btn-sm btn-neutral" id="bt-filt-on"  onclick="sendCmd({FiltPump:1})">EIN</button>
+          <button class="btn btn-sm btn-neutral" id="bt-filt-off" onclick="sendCmd({FiltPump:0})">AUS</button>
         </div>
       </div>
       <div class="pump-row"><span class="pump-name">Heizung</span>
         <div class="pump-controls">
           <span class="chip off" id="c-heat">–</span>
-          <button class="btn btn-sm btn-on" onclick="sendCmd({HeatPump:1})">EIN</button>
-          <button class="btn btn-sm btn-off" onclick="sendCmd({HeatPump:0})">AUS</button>
+          <button class="btn btn-sm btn-neutral" id="bt-heat-on"  onclick="sendCmd({HeatPump:1})">EIN</button>
+          <button class="btn btn-sm btn-neutral" id="bt-heat-off" onclick="sendCmd({HeatPump:0})">AUS</button>
         </div>
       </div>
       <div class="pump-row"><span class="pump-name">Salzelektrolyse</span>
         <div class="pump-controls">
           <span class="chip off" id="c-salt">–</span>
-          <button class="btn btn-sm btn-on" onclick="sendCmd({SaltPump:1})">EIN</button>
-          <button class="btn btn-sm btn-off" onclick="sendCmd({SaltPump:0})">AUS</button>
+          <button class="btn btn-sm btn-neutral" id="bt-salt-on"  onclick="sendCmd({SaltPump:1})">EIN</button>
+          <button class="btn btn-sm btn-neutral" id="bt-salt-off" onclick="sendCmd({SaltPump:0})">AUS</button>
         </div>
       </div>
       <div class="pump-row"><span class="pump-name">Reinigungsroboter</span>
         <div class="pump-controls">
           <span class="chip off" id="c-robot">–</span>
-          <button class="btn btn-sm btn-on" onclick="sendCmd({RobotPump:1})">EIN</button>
-          <button class="btn btn-sm btn-off" onclick="sendCmd({RobotPump:0})">AUS</button>
+          <button class="btn btn-sm btn-neutral" id="bt-robot-on"  onclick="sendCmd({RobotPump:1})">EIN</button>
+          <button class="btn btn-sm btn-neutral" id="bt-robot-off" onclick="sendCmd({RobotPump:0})">AUS</button>
         </div>
       </div>
     </div>
 
     <div class="card">
       <div class="card-title">Modi &amp; Automation</div>
-      <div class="toggle-row">
-        <span class="toggle-label">Automatik-Modus</span>
-        <label class="toggle"><input type="checkbox" id="m-auto" onchange="sendCmd({Mode:this.checked?1:0})"><span class="slider"></span></label>
+      <div class="pump-row"><span class="pump-name">Automatik-Modus</span>
+        <div class="pump-controls">
+          <input type="checkbox" id="m-auto" style="display:none">
+          <button class="btn btn-sm btn-neutral" id="bt-auto-a" onclick="sendCmd({Mode:1})">AUTO</button>
+          <button class="btn btn-sm btn-neutral" id="bt-auto-m" onclick="sendCmd({Mode:0})">MAN</button>
+        </div>
       </div>
-      <div class="toggle-row">
-        <span class="toggle-label">pH-Regelung</span>
-        <label class="toggle"><input type="checkbox" id="m-ph" onchange="sendCmd({pHAutoMode:this.checked?1:0})"><span class="slider"></span></label>
+      <div class="pump-row"><span class="pump-name">pH-Regelung</span>
+        <div class="pump-controls">
+          <input type="checkbox" id="m-ph" style="display:none">
+          <button class="btn btn-sm btn-neutral" id="bt-ph-a" onclick="sendCmd({pHAutoMode:1})">AUTO</button>
+          <button class="btn btn-sm btn-neutral" id="bt-ph-m" onclick="sendCmd({pHAutoMode:0})">MAN</button>
+        </div>
       </div>
-      <div class="toggle-row">
-        <span class="toggle-label">ORP-Regelung</span>
-        <label class="toggle"><input type="checkbox" id="m-orp" onchange="sendCmd({OrpAutoMode:this.checked?1:0})"><span class="slider"></span></label>
+      <div class="pump-row"><span class="pump-name">ORP-Regelung</span>
+        <div class="pump-controls">
+          <input type="checkbox" id="m-orp" style="display:none">
+          <button class="btn btn-sm btn-neutral" id="bt-orp-a" onclick="sendCmd({OrpAutoMode:1})">AUTO</button>
+          <button class="btn btn-sm btn-neutral" id="bt-orp-m" onclick="sendCmd({OrpAutoMode:0})">MAN</button>
+        </div>
       </div>
-      <div class="toggle-row">
-        <span class="toggle-label">Autom. Befüllung</span>
-        <label class="toggle"><input type="checkbox" id="m-fill" onchange="sendCmd({FillMode:this.checked?1:0})"><span class="slider"></span></label>
+      <div class="pump-row"><span class="pump-name">Autom. Befüllung</span>
+        <div class="pump-controls">
+          <input type="checkbox" id="m-fill" style="display:none">
+          <button class="btn btn-sm btn-neutral" id="bt-fill-a" onclick="sendCmd({FillMode:1})">AUTO</button>
+          <button class="btn btn-sm btn-neutral" id="bt-fill-m" onclick="sendCmd({FillMode:0})">MAN</button>
+        </div>
       </div>
-      <div class="toggle-row">
-        <span class="toggle-label">Wintermodus</span>
-        <label class="toggle"><input type="checkbox" id="m-winter" onchange="sendCmd({WinterMode:this.checked?1:0})"><span class="slider"></span></label>
+      <div class="pump-row"><span class="pump-name">Wintermodus</span>
+        <div class="pump-controls">
+          <input type="checkbox" id="m-winter" style="display:none">
+          <button class="btn btn-sm btn-neutral" id="bt-winter-a" onclick="sendCmd({WinterMode:1})">AUTO</button>
+          <button class="btn btn-sm btn-neutral" id="bt-winter-m" onclick="sendCmd({WinterMode:0})">MAN</button>
+        </div>
       </div>
     </div>
   </div>
@@ -392,23 +415,27 @@ input:checked+.slider::before{transform:translateX(18px)}
     <div class="chart-wrap" style="height:260px"><canvas id="chart-overview"></canvas></div>
   </div>
 
-  <!-- 4 detail charts -->
-  <div class="grid2">
+  <!-- 5 detail charts stacked vertically with shared time axis -->
+  <div style="display:flex;flex-direction:column;gap:12px">
     <div class="card">
       <div class="card-title">pH-Verlauf</div>
-      <div class="chart-wrap"><canvas id="chart-ph-log"></canvas></div>
+      <div class="chart-wrap" style="height:170px"><canvas id="chart-ph-log"></canvas></div>
     </div>
     <div class="card">
       <div class="card-title">ORP-Verlauf</div>
-      <div class="chart-wrap"><canvas id="chart-orp-log"></canvas></div>
+      <div class="chart-wrap" style="height:170px"><canvas id="chart-orp-log"></canvas></div>
     </div>
     <div class="card">
       <div class="card-title">Wassertemperatur</div>
-      <div class="chart-wrap"><canvas id="chart-temp-log"></canvas></div>
+      <div class="chart-wrap" style="height:170px"><canvas id="chart-temp-log"></canvas></div>
     </div>
     <div class="card">
       <div class="card-title">Filterdruck</div>
-      <div class="chart-wrap"><canvas id="chart-psi-log"></canvas></div>
+      <div class="chart-wrap" style="height:170px"><canvas id="chart-psi-log"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Schaltereignisse (Pumpen, Dosierung, Salzelektrolyse)</div>
+      <div class="chart-wrap" style="height:230px"><canvas id="chart-events-log"></canvas></div>
     </div>
   </div>
 
@@ -444,10 +471,10 @@ input:checked+.slider::before{transform:translateX(18px)}
       <div class="val-row"><span class="val-name">Kp</span><span class="val-num" id="d-ph-kp">–</span></div>
       <div class="val-row"><span class="val-name">Regelmodus</span><span class="chip off" id="d-ph-mode">–</span></div>
       <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-primary" onclick="sendCmd({PhPump:1})">Pumpe EIN</button>
-        <button class="btn btn-off" onclick="sendCmd({PhPump:0})">Pumpe AUS</button>
-        <button class="btn btn-primary" onclick="sendCmd({pHAutoMode:1})">PID AUTO</button>
-        <button class="btn btn-off" onclick="sendCmd({pHAutoMode:0})">PID MANUELL</button>
+        <button class="btn btn-neutral" id="bt-php-on"  onclick="sendCmd({PhPump:1})">EIN</button>
+        <button class="btn btn-neutral" id="bt-php-off" onclick="sendCmd({PhPump:0})">AUS</button>
+        <button class="btn btn-neutral" id="bt-php-a"   onclick="sendCmd({pHAutoMode:1})">AUTO</button>
+        <button class="btn btn-neutral" id="bt-php-m"   onclick="sendCmd({pHAutoMode:0})">MAN</button>
       </div>
       <div style="margin-top:12px">
         <div class="form-label">Sollwert setzen</div>
@@ -465,10 +492,10 @@ input:checked+.slider::before{transform:translateX(18px)}
       <div class="val-row"><span class="val-name">Kp</span><span class="val-num" id="d-orp-kp">–</span></div>
       <div class="val-row"><span class="val-name">Regelmodus</span><span class="chip off" id="d-orp-mode">–</span></div>
       <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-primary" onclick="sendCmd({ChlPump:1})">Pumpe EIN</button>
-        <button class="btn btn-off" onclick="sendCmd({ChlPump:0})">Pumpe AUS</button>
-        <button class="btn btn-primary" onclick="sendCmd({OrpAutoMode:1})">PID AUTO</button>
-        <button class="btn btn-off" onclick="sendCmd({OrpAutoMode:0})">PID MANUELL</button>
+        <button class="btn btn-neutral" id="bt-chl-on"  onclick="sendCmd({ChlPump:1})">EIN</button>
+        <button class="btn btn-neutral" id="bt-chl-off" onclick="sendCmd({ChlPump:0})">AUS</button>
+        <button class="btn btn-neutral" id="bt-chl-a"   onclick="sendCmd({OrpAutoMode:1})">AUTO</button>
+        <button class="btn btn-neutral" id="bt-chl-m"   onclick="sendCmd({OrpAutoMode:0})">MAN</button>
       </div>
       <div style="margin-top:12px">
         <div class="form-label">Sollwert setzen</div>
@@ -492,8 +519,8 @@ input:checked+.slider::before{transform:translateX(18px)}
       <div class="val-row"><span class="val-name">Automatik-Modus</span><span class="chip off" id="c-fill-m">–</span></div>
       <div class="val-row"><span class="val-name">Fehlerzustand</span><span class="chip ok" id="c-fill-e">OK</span></div>
       <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-primary" onclick="sendCmd({WaterFill:1})">Ventil EIN</button>
-        <button class="btn btn-off" onclick="sendCmd({WaterFill:0})">Ventil AUS</button>
+        <button class="btn btn-neutral" id="bt-fillv-on"  onclick="sendCmd({WaterFill:1})">EIN</button>
+        <button class="btn btn-neutral" id="bt-fillv-off" onclick="sendCmd({WaterFill:0})">AUS</button>
         <button class="btn btn-warn" onclick="sendCmd({Clear:1})">Fehler quittieren</button>
       </div>
     </div>
@@ -650,7 +677,9 @@ input:checked+.slider::before{transform:translateX(18px)}
     <div class="card">
       <div class="card-title">System-Info</div>
       <div class="val-row"><span class="val-name">Firmware</span><span class="val-num" id="sys-fw">–</span></div>
-      <div class="val-row"><span class="val-name">Uptime</span><span class="val-num" id="sys-uptime">–</span></div>
+      <div class="val-row"><span class="val-name">Uptime (Session)</span><span class="val-num" id="sys-uptime">–</span></div>
+      <div class="val-row"><span class="val-name">Reset-Grund</span><span class="val-num" id="sys-reset">–</span></div>
+      <div class="val-row"><span class="val-name">Freier Heap</span><span class="val-num" id="sys-heap">–</span></div>
       <div class="val-row"><span class="val-name">WebSocket</span><span class="chip off" id="sys-ws">–</span></div>
     </div>
     <div class="card">
@@ -659,6 +688,69 @@ input:checked+.slider::before{transform:translateX(18px)}
         <button class="btn btn-primary" onclick="sendCmd({Clear:1})">Alle Fehler quittieren</button>
         <a href="/upload" style="text-decoration:none"><button class="btn btn-off" style="width:100%">Nextion OTA Update →</button></a>
         <button class="btn btn-warn" onclick="if(confirm('ESP32 neu starten?'))sendCmd({Restart:1})">ESP32 Neustart</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Network status & credentials -->
+  <div class="grid2" style="margin-top:16px">
+    <div class="card">
+      <div class="card-title">WiFi</div>
+      <div class="val-row"><span class="val-name">Aktiviert</span><span class="chip off" id="sys-wifi-en">–</span></div>
+      <div class="val-row"><span class="val-name">Status</span><span class="chip off" id="sys-wifi-chip">–</span></div>
+      <div class="val-row"><span class="val-name">SSID</span><span class="val-num" id="sys-ssid">–</span></div>
+      <div class="val-row"><span class="val-name">IP-Adresse</span><span class="val-num" id="sys-ip">–</span></div>
+      <div class="val-row"><span class="val-name">Signal</span><span class="val-num" id="sys-rssi">–</span></div>
+      <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-sm btn-on" onclick="sendCmd({WIFI_OnOff:1})">WiFi EIN</button>
+        <button class="btn btn-sm btn-warn" onclick="sendCmd({WIFI_OnOff:0})">WiFi AUS</button>
+      </div>
+      <div class="form-section" style="margin-top:18px">
+        <div class="form-section-title">WLAN-Zugangsdaten</div>
+        <div class="form-group">
+          <label class="form-label">SSID</label>
+          <input class="form-input" type="text" id="net-ssid" placeholder="WLAN-Name">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Passwort (im Klartext sichtbar)</label>
+          <input class="form-input" type="text" id="net-wifipass" placeholder="WLAN-Passwort">
+        </div>
+        <button class="btn btn-primary" onclick="saveWifiCreds()">WiFi-Zugangsdaten speichern</button>
+        <div class="form-hint">Nach dem Speichern wird das Gerät neu mit dem WLAN verbunden.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">MQTT</div>
+      <div class="val-row"><span class="val-name">Aktiviert</span><span class="chip off" id="sys-mqtt-en">–</span></div>
+      <div class="val-row"><span class="val-name">Status</span><span class="chip off" id="sys-mqtt-chip">–</span></div>
+      <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-sm btn-on" onclick="sendCmd({MQTTLOGIN_OnOff:1})">MQTT EIN</button>
+        <button class="btn btn-sm btn-warn" onclick="sendCmd({MQTTLOGIN_OnOff:0})">MQTT AUS</button>
+      </div>
+      <div class="form-section" style="margin-top:18px">
+        <div class="form-section-title">Broker</div>
+        <div class="form-group">
+          <label class="form-label">IP-Adresse</label>
+          <input class="form-input" type="text" id="net-mqttip" placeholder="192.168.x.x">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Port</label>
+          <input class="form-input" type="number" id="net-mqttport" placeholder="1883">
+        </div>
+        <button class="btn btn-primary" onclick="saveMqttBroker()">Broker speichern</button>
+      </div>
+      <div class="form-section" style="margin-top:14px">
+        <div class="form-section-title">Zugangsdaten (Klartext)</div>
+        <div class="form-group">
+          <label class="form-label">Benutzer</label>
+          <input class="form-input" type="text" id="net-mqttuser" placeholder="user">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Passwort</label>
+          <input class="form-input" type="text" id="net-mqttpass" placeholder="passwort">
+        </div>
+        <button class="btn btn-primary" onclick="saveMqttCreds()">MQTT-Zugangsdaten speichern</button>
       </div>
     </div>
   </div>
@@ -940,24 +1032,25 @@ function updateUI() {
   drawGauge('g-orp2',orpV, 200, 900, orpZones);
   drawGauge('g-psi2',psiV, 0,   4,   psiZones);
 
-  // Gauge values
-  setText('gv-ph', v.ph); setText('gv-orp', v.orp); setText('gv-psi', v.psi);
-  setText('gv-ph2', v.ph); setText('gv-orp2', v.orp); setText('gv-psi2', v.psi);
-  setText('gsp-ph',  'SP: '+ sp.ph); setText('gsp-ph2',  'Sollwert: '+ sp.ph);
-  setText('gsp-orp', 'SP: '+ sp.orp); setText('gsp-orp2', 'Sollwert: '+ sp.orp);
-  setText('gsp-psi', 'Limit: '+ sp.psi);
+  // Gauge values — pH/PSI 2 decimals, ORP integer
+  setText('gv-ph', fmt(v.ph,2));   setText('gv-orp', fmt(v.orp,0)); setText('gv-psi', fmt(v.psi,2));
+  setText('gv-ph2', fmt(v.ph,2));  setText('gv-orp2',fmt(v.orp,0)); setText('gv-psi2',fmt(v.psi,2));
+  setText('gsp-ph',  'SP: '+ fmt(sp.ph,2));  setText('gsp-ph2',  'Sollwert: '+ fmt(sp.ph,2));
+  setText('gsp-orp', 'SP: '+ fmt(sp.orp,0)); setText('gsp-orp2', 'Sollwert: '+ fmt(sp.orp,0));
+  setText('gsp-psi', 'Limit: '+ fmt(sp.psi,2));
 
-  // Flows
-  setText('v-flow',  v.flow+' m³/h');
-  setText('v-flow2', v.flow2+' m³/h');
-  setText('v-flow2a', v.flow+' m³/h');
-  setText('v-flow2b', v.flow2+' m³/h');
+  // Flows — 2 decimals
+  setText('v-flow',  fmt(v.flow,2)+' m³/h');
+  setText('v-flow2', fmt(v.flow2,2)+' m³/h');
+  setText('v-flow2a',fmt(v.flow,2)+' m³/h');
+  setText('v-flow2b',fmt(v.flow2,2)+' m³/h');
 
-  // Temperatures
-  setText('t-ws', v.wS+'°C'); setText('t-wi', v.wI+'°C'); setText('t-wb', v.wB+'°C');
-  setText('t-wwp', v.wWP+'°C'); setText('t-air', v.air+'°C');
-  setText('t-hum', v.airHum+'%'); setText('t-press', v.airPress+' hPa');
-  setText('v-salt', v.saltConc+' g/L'); setText('v-salt-need', tanks.saltNeeded+' kg');
+  // Water/Air temperatures — 2 decimals
+  setText('t-ws', fmt(v.wS,2)+'°C'); setText('t-wi', fmt(v.wI,2)+'°C'); setText('t-wb', fmt(v.wB,2)+'°C');
+  setText('t-wwp', fmt(v.wWP,2)+'°C'); setText('t-air', fmt(v.air,2)+'°C');
+  // Humidity & air pressure — no decimals
+  setText('t-hum', fmt(v.airHum,0)+'%'); setText('t-press', fmt(v.airPress,0)+' hPa');
+  setText('v-salt', fmt(v.saltConc,2)+' g/L'); setText('v-salt-need', fmt(tanks.saltNeeded,2)+' kg');
 
   // Pump chips
   setChip('c-filt',  p.filt,  ['Läuft','Gestoppt']);
@@ -967,26 +1060,42 @@ function updateUI() {
   setChip('c-ph',    p.ph,    ['Dosiert','Gestoppt']);
   setChip('c-chl',   p.chl,   ['Dosiert','Gestoppt']);
 
-  // Mode toggles
+  // Pump EIN/AUS button colours reflect current state
+  setPumpBtns('bt-filt-on',  'bt-filt-off',  p.filt);
+  setPumpBtns('bt-heat-on',  'bt-heat-off',  p.heat);
+  setPumpBtns('bt-salt-on',  'bt-salt-off',  p.salt);
+  setPumpBtns('bt-robot-on', 'bt-robot-off', p.robot);
+  setPumpBtns('bt-php-on',   'bt-php-off',   p.ph);
+  setPumpBtns('bt-chl-on',   'bt-chl-off',   p.chl);
+  setPumpBtns('bt-fillv-on', 'bt-fillv-off', p.fill);
+
+  // Mode toggles + AUTO/MAN buttons
   setToggle('m-auto',   m.auto);
   setToggle('m-ph',     m.phReg);
   setToggle('m-orp',    m.orpReg);
   setToggle('m-fill',   m.fill);
   setToggle('m-winter', m.winter);
+  setModeBtns('bt-auto-a',   'bt-auto-m',   m.auto);
+  setModeBtns('bt-ph-a',     'bt-ph-m',     m.phReg);
+  setModeBtns('bt-orp-a',    'bt-orp-m',    m.orpReg);
+  setModeBtns('bt-fill-a',   'bt-fill-m',   m.fill);
+  setModeBtns('bt-winter-a', 'bt-winter-m', m.winter);
+  setModeBtns('bt-php-a',    'bt-php-m',    m.phReg);
+  setModeBtns('bt-chl-a',    'bt-chl-m',    m.orpReg);
 
   // Dosierung tab
-  setText('d-ph',      v.ph+' pH');
-  setText('d-ph-sp',   sp.ph);
-  setText('d-ph-pid',  pid.phOut+' s');
-  setText('d-ph-kp',   pid.phKp);
-  setText('d-orp',     v.orp+' mV');
-  setText('d-orp-sp',  sp.orp+' mV');
-  setText('d-orp-pid', pid.orpOut+' s');
-  setText('d-orp-kp',  pid.orpKp);
+  setText('d-ph',      fmt(v.ph,2)+' pH');
+  setText('d-ph-sp',   fmt(sp.ph,2));
+  setText('d-ph-pid',  fmt(pid.phOut,2)+' s');
+  setText('d-ph-kp',   fmt(pid.phKp,0));
+  setText('d-orp',     fmt(v.orp,0)+' mV');
+  setText('d-orp-sp',  fmt(sp.orp,0)+' mV');
+  setText('d-orp-pid', fmt(pid.orpOut,2)+' s');
+  setText('d-orp-kp',  fmt(pid.orpKp,0));
   setChip('d-ph-mode',  pid.phMode,  ['AUTO','MANUELL']);
   setChip('d-orp-mode', pid.orpMode, ['AUTO','MANUELL']);
-  setText('v-ph-pid', pid.phOut+' s');
-  setText('v-orp-pid', pid.orpOut+' s');
+  setText('v-ph-pid',  fmt(pid.phOut,2)+' s');
+  setText('v-orp-pid', fmt(pid.orpOut,2)+' s');
 
   // Tank fill %
   const acidPct = Math.round(parseFloat(tanks.acid));
@@ -1002,36 +1111,53 @@ function updateUI() {
   setText('v-wfdur', '–');
   setText('v-wfutl', '–');
 
-  // Solar
-  setText('t-sroof',    s.solar?.roofTemp+'°C');
-  setText('t-sboiler',  s.solar?.boilerTemp+'°C');
-  setText('t-sstorage', s.solar?.storageTemp+'°C');
-  setText('t-sbackflow',s.solar?.backflow+'°C');
-  setText('t-svl',  v.solarVL+'°C');
-  setText('t-srl',  v.solarRL+'°C');
+  // Solar — 2 decimal temps
+  setText('t-sroof',    fmt(s.solar?.roofTemp,2)+'°C');
+  setText('t-sboiler',  fmt(s.solar?.boilerTemp,2)+'°C');
+  setText('t-sstorage', fmt(s.solar?.storageTemp,2)+'°C');
+  setText('t-sbackflow',fmt(s.solar?.backflow,2)+'°C');
+  setText('t-svl',  fmt(v.solarVL,2)+'°C');
+  setText('t-srl',  fmt(v.solarRL,2)+'°C');
   setChip('c-solpump',  s.solar?.pump,    ['Läuft','Gestoppt']);
   setChip('c-solmode',  m.solar,          ['POOL','AUS']);
   setChip('c-solvalve', s.solar?.valvePool,['Pool','Boiler']);
 
   // Settings live values
-  setText('s-cur-kp', pid.phKp+'×10⁴');
+  setText('s-cur-kp', fmt(pid.phKp,0)+'×10⁴');
   const pvInput = document.getElementById('s-poolvol');
   if (pvInput && !pvInput.value) pvInput.value = tanks.poolVol;
   updateKpPreview();
 
   // Modal values
-  setText('m-ph',     v.ph+' pH');
-  setText('m-ph-sp',  sp.ph);
-  setText('m-ph-pid', pid.phOut+' s');
-  setText('m-orp',    v.orp+' mV');
-  setText('m-orp-sp', sp.orp+' mV');
-  setText('m-psi',    v.psi+' bar');
-  setText('m-flow',   v.flow+' m³/h');
-  setText('m-flow2',  v.flow2+' m³/h');
+  setText('m-ph',     fmt(v.ph,2)+' pH');
+  setText('m-ph-sp',  fmt(sp.ph,2));
+  setText('m-ph-pid', fmt(pid.phOut,2)+' s');
+  setText('m-orp',    fmt(v.orp,0)+' mV');
+  setText('m-orp-sp', fmt(sp.orp,0)+' mV');
+  setText('m-psi',    fmt(v.psi,2)+' bar');
+  setText('m-flow',   fmt(v.flow,2)+' m³/h');
+  setText('m-flow2',  fmt(v.flow2,2)+' m³/h');
 
   // System
   setText('sys-fw', s.firmware || Firmw || '–');
-  if (s.uptime) setText('sys-uptime', fmtUptime(s.uptime));
+  if (s.uptime !== undefined) setText('sys-uptime', fmtUptime(s.uptime));
+  if (s.resetReason) setText('sys-reset', s.resetReason);
+  if (s.heap) setText('sys-heap', Math.round(s.heap/1024)+' KB');
+  // Network info card (live)
+  if (s.net) {
+    const n = s.net;
+    setText('sys-ssid', n.ssid || '–');
+    setText('sys-ip', n.ip || '–');
+    setText('sys-rssi', n.rssi ? n.rssi+' dBm' : '–');
+    const wch = document.getElementById('sys-wifi-chip');
+    if (wch) { wch.className='chip '+(n.wifiUp?'on':'err'); wch.innerHTML='<span class="chip-dot"></span>'+(n.wifiUp?'Verbunden':'Getrennt'); }
+    const mch = document.getElementById('sys-mqtt-chip');
+    if (mch) { mch.className='chip '+(n.mqttUp?'on':'err'); mch.innerHTML='<span class="chip-dot"></span>'+(n.mqttUp?'Verbunden':'Getrennt'); }
+    const wEn = document.getElementById('sys-wifi-en');
+    if (wEn) { wEn.className='chip '+(n.wifi?'on':'off'); wEn.innerHTML='<span class="chip-dot"></span>'+(n.wifi?'Aktiviert':'Deaktiviert'); }
+    const mEn = document.getElementById('sys-mqtt-en');
+    if (mEn) { mEn.className='chip '+(n.mqtt?'on':'off'); mEn.innerHTML='<span class="chip-dot"></span>'+(n.mqtt?'Aktiviert':'Deaktiviert'); }
+  }
 
   // Error banner
   const errList = [];
@@ -1053,7 +1179,7 @@ function updateUI() {
 }
 
 // ════ HELPERS ════
-function setText(id, v) { const el=document.getElementById(id); if(el&&v!==undefined) el.textContent=v; }
+function setText(id, v) { const el=document.getElementById(id); if(el&&v!==undefined&&v!==null) el.textContent=v; }
 function setWidth(id, pct, color) { const el=document.getElementById(id); if(el){el.style.width=Math.max(0,Math.min(100,pct))+'%'; if(color) el.style.background=color;} }
 function setChip(id, on, labels, invertColor=false) {
   const el=document.getElementById(id); if(!el) return;
@@ -1063,7 +1189,32 @@ function setChip(id, on, labels, invertColor=false) {
   el.className='chip '+cls; el.innerHTML='<span class="chip-dot"></span>'+lbl;
 }
 function setToggle(id, val) { const el=document.getElementById(id); if(el) el.checked=(val==1||val===true); }
-function fmtUptime(sec) { const d=Math.floor(sec/86400),h=Math.floor((sec%86400)/3600),m=Math.floor((sec%3600)/60); return `${d}T ${h}h ${m}m`; }
+function fmtUptime(sec) {
+  sec = parseInt(sec)||0;
+  const d=Math.floor(sec/86400),h=Math.floor((sec%86400)/3600),m=Math.floor((sec%3600)/60),s=Math.floor(sec%60);
+  return d>0 ? `${d}T ${h}h ${m}m` : (h>0 ? `${h}h ${m}m ${s}s` : `${m}m ${s}s`);
+}
+// Numeric formatter: returns string with `dec` decimals, "–" for null/undefined/NaN
+function fmt(v, dec=2) {
+  if (v===null || v===undefined || v==='') return '–';
+  const n = typeof v === 'number' ? v : parseFloat(v);
+  return Number.isFinite(n) ? n.toFixed(dec) : '–';
+}
+// Update EIN/AUS pump button pair: on-button green when running, off-button red when stopped.
+// container = element holding the two buttons (data-on/data-off classes)
+function setPumpBtns(onBtnId, offBtnId, isRunning) {
+  const on = document.getElementById(onBtnId);
+  const off = document.getElementById(offBtnId);
+  if (on)  on.className  = 'btn btn-sm ' + (isRunning ? 'btn-on-active'  : 'btn-neutral');
+  if (off) off.className = 'btn btn-sm ' + (isRunning ? 'btn-neutral'    : 'btn-off-active');
+}
+// Mode buttons: AUTO green when in auto, MAN red when in manual
+function setModeBtns(autoBtnId, manBtnId, isAuto) {
+  const a = document.getElementById(autoBtnId);
+  const m = document.getElementById(manBtnId);
+  if (a) a.className = 'btn btn-sm ' + (isAuto ? 'btn-on-active' : 'btn-neutral');
+  if (m) m.className = 'btn btn-sm ' + (isAuto ? 'btn-neutral'   : 'btn-off-active');
+}
 let Firmw = '–';
 
 // ════ POOL VOLUME + Kp PREVIEW ════
@@ -1343,44 +1494,120 @@ function normalize(arr, lo, hi) {
   return arr.map(v => (v == null) ? null : Math.max(0, Math.min(100, (v - lo) / (hi - lo) * 100)));
 }
 
-// ── Map event timestamps to nearest sensor x-label index ──
-function evtToPoints(devIndex, yOn, yOff) {
-  const pts = [];
-  logEvents.filter(e => e.dev === devIndex).forEach(e => {
-    let idx = logStore.tsRaw.findIndex(t => t >= e.ts);
-    if (idx < 0 && logStore.tsRaw.length) idx = logStore.tsRaw.length - 1;
-    if (idx >= 0) pts.push({ x: logStore.ts[idx], y: e.state ? yOn : yOff });
-  });
-  return pts;
+// ── Compute shared X-axis time range across both sensors and events
+function sharedTimeRange() {
+  let lo = Infinity, hi = -Infinity;
+  logStore.tsRaw.forEach(t => { if (t<lo) lo=t; if (t>hi) hi=t; });
+  logEvents.forEach(e => { if (e.ts<lo) lo=e.ts; if (e.ts>hi) hi=e.ts; });
+  if (!isFinite(lo) || !isFinite(hi)) {
+    const now = Math.floor(Date.now()/1000);
+    lo = now - (RANGE_S[logRange]||3600); hi = now;
+  }
+  return { lo:lo*1000, hi:hi*1000 };
 }
 
-function mkDetailChart(id, label, data, color, yMin, yMax) {
+// X-axis options used by every chart (shared range, linear time scale in ms)
+function sharedXAxis(range) {
+  return {
+    type: 'time',
+    min: range.lo, max: range.hi,
+    time: { tooltipFormat: 'dd.MM. HH:mm', displayFormats: {
+      minute:'HH:mm', hour:'HH:mm', day:'dd.MM', week:'dd.MM', month:'MM.yy'
+    }},
+    ticks: { color:'#5a6e8a', maxRotation:0, autoSkip:true, maxTicksLimit:10 },
+    grid: { color:'rgba(255,255,255,0.04)' }
+  };
+}
+
+// Convert sensor arrays to {x:ms, y} pairs for the time-scale charts
+function asXY(yArr) {
+  const out = [];
+  for (let i = 0; i < logStore.tsRaw.length; i++) {
+    const v = yArr[i];
+    out.push({ x: logStore.tsRaw[i]*1000, y: (v==null?null:v) });
+  }
+  return out;
+}
+
+function mkDetailChart(id, label, data, color, yMin, yMax, range) {
   const cv = document.getElementById(id); if (!cv) return;
   if (charts[id]) { charts[id].destroy(); delete charts[id]; }
   charts[id] = new Chart(cv, {
     type: 'line',
     data: {
-      labels: logStore.ts,
       datasets: [{ label, data, borderColor: color, backgroundColor: color + '18',
-        fill: true, pointRadius: 0, borderWidth: 2, tension: 0.3, spanGaps: true }]
+        fill: true, pointRadius: 0, borderWidth: 2, tension: 0.3, spanGaps: true,
+        parsing: false }]
     },
     options: {
       responsive: true, maintainAspectRatio: false, animation: false,
       plugins: { legend: { display: false }, tooltip: { mode:'index', intersect:false } },
       scales: {
-        x: { ticks: { color:'#5a6e8a', maxRotation:0, maxTicksLimit:8 }, grid: { color:'rgba(255,255,255,0.04)' } },
+        x: sharedXAxis(range),
         y: { min: yMin, max: yMax, ticks: { color:'#5a6e8a' }, grid: { color:'rgba(255,255,255,0.06)' } }
       }
     }
   });
 }
 
+// Build the events-only timeline chart (one Y-row per device, scatter dots)
+function mkEventsChart(range) {
+  const cv = document.getElementById('chart-events-log'); if (!cv) return;
+  if (charts['chart-events-log']) { charts['chart-events-log'].destroy(); delete charts['chart-events-log']; }
+  // Devices (subset) we want to show in the event chart
+  const devs = [0,1,2,3,4]; // Filt, pH, Chl, Heat, Salt
+  const ds = devs.map(dev => {
+    const pts = logEvents.filter(e => e.dev === dev).map(e => ({
+      x: e.ts*1000, y: dev, state: e.state, name: e.name
+    }));
+    return {
+      label: PUMP_NAMES[dev],
+      data: pts,
+      type: 'scatter',
+      pointRadius: 6,
+      pointStyle: pts.map(p => p.state ? 'triangle' : 'rectRot'),
+      backgroundColor: PUMP_COLORS[dev],
+      borderColor: PUMP_COLORS[dev],
+      showLine: false,
+      parsing: false
+    };
+  }).filter(d => d.data.length > 0);
+
+  charts['chart-events-log'] = new Chart(cv, {
+    data: { datasets: ds },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: {
+        legend: { display:true, position:'bottom',
+          labels:{ color:'#8fa0bd', font:{size:11}, boxWidth:12, padding:10 } },
+        tooltip: { callbacks: {
+          label: ctx => {
+            const r = ctx.raw;
+            const ts = new Date(r.x);
+            return `${ctx.dataset.label}: ${r.state?'EIN':'AUS'}  ·  ${ts.toLocaleString('de-DE')}`;
+          }
+        } }
+      },
+      scales: {
+        x: sharedXAxis(range),
+        y: {
+          min: -0.5, max: devs.length-0.5,
+          ticks: { color:'#5a6e8a', stepSize:1,
+            callback: v => PUMP_NAMES[v] || '' },
+          grid: { color:'rgba(255,255,255,0.06)' }
+        }
+      }
+    }
+  });
+}
+
 function renderDetailCharts() {
-  const lb = logStore.ts;
-  mkDetailChart('chart-ph-log',   'pH',          logStore.ph,   '#3b82f6', 6.5, 8.5);
-  mkDetailChart('chart-orp-log',  'ORP (mV)',     logStore.orp,  '#06b6d4', 200, 900);
-  mkDetailChart('chart-temp-log', 'Wassertemp °C',logStore.temp, '#f97316', undefined, undefined);
-  mkDetailChart('chart-psi-log',  'Druck (bar)',  logStore.psi,  '#a855f7', 0, 4);
+  const range = sharedTimeRange();
+  mkDetailChart('chart-ph-log',   'pH',           asXY(logStore.ph),   '#3b82f6', 6.5, 8.5,           range);
+  mkDetailChart('chart-orp-log',  'ORP (mV)',     asXY(logStore.orp),  '#06b6d4', 200, 900,           range);
+  mkDetailChart('chart-temp-log', 'Wassertemp °C',asXY(logStore.temp), '#f97316', undefined, undefined, range);
+  mkDetailChart('chart-psi-log',  'Druck (bar)',  asXY(logStore.psi),  '#a855f7', 0, 4,               range);
+  mkEventsChart(range);
 }
 
 function dstChecked(id) {
@@ -1401,33 +1628,39 @@ function refreshOverviewChart() {
   const cv = document.getElementById('chart-overview'); if (!cv) return;
   if (charts['chart-overview']) { charts['chart-overview'].destroy(); delete charts['chart-overview']; }
 
-  const lb = logStore.ts;
+  const range = sharedTimeRange();
   const ds = [];
+  const norm = (arr, lo, hi) => arr.map((v,i) => ({
+    x: logStore.tsRaw[i]*1000,
+    y: (v == null) ? null : Math.max(0, Math.min(100, (v - lo) / (hi - lo) * 100))
+  }));
 
   if (dstChecked('dst-ph'))
-    ds.push({ label:'pH', data: normalize(logStore.ph, 6.5, 8.5),
+    ds.push({ label:'pH', data: norm(logStore.ph, 6.5, 8.5),
       borderColor:'#3b82f6', backgroundColor:'transparent', fill:false,
-      pointRadius:0, borderWidth:2, tension:0.3, spanGaps:true });
+      pointRadius:0, borderWidth:2, tension:0.3, spanGaps:true, parsing:false });
 
   if (dstChecked('dst-orp'))
-    ds.push({ label:'ORP', data: normalize(logStore.orp, 200, 900),
+    ds.push({ label:'ORP', data: norm(logStore.orp, 200, 900),
       borderColor:'#06b6d4', backgroundColor:'transparent', fill:false,
-      pointRadius:0, borderWidth:2, tension:0.3, spanGaps:true });
+      pointRadius:0, borderWidth:2, tension:0.3, spanGaps:true, parsing:false });
 
   if (dstChecked('dst-temp'))
-    ds.push({ label:'Wassertemp', data: normalize(logStore.temp, 10, 40),
+    ds.push({ label:'Wassertemp', data: norm(logStore.temp, 10, 40),
       borderColor:'#f97316', backgroundColor:'transparent', fill:false,
-      pointRadius:0, borderWidth:2, tension:0.3, spanGaps:true });
+      pointRadius:0, borderWidth:2, tension:0.3, spanGaps:true, parsing:false });
 
   if (dstChecked('dst-psi'))
-    ds.push({ label:'Druck', data: normalize(logStore.psi, 0, 4),
+    ds.push({ label:'Druck', data: norm(logStore.psi, 0, 4),
       borderColor:'#a855f7', backgroundColor:'transparent', fill:false,
-      pointRadius:0, borderWidth:2, tension:0.3, spanGaps:true });
+      pointRadius:0, borderWidth:2, tension:0.3, spanGaps:true, parsing:false });
 
   if (dstChecked('dst-evt') && logEvents.length) {
     const devsPresent = [...new Set(logEvents.map(e => e.dev))];
     devsPresent.forEach(dev => {
-      const pts = evtToPoints(dev, 95, 5);
+      const pts = logEvents.filter(e => e.dev === dev).map(e => ({
+        x: e.ts*1000, y: e.state ? 95 : 5
+      }));
       if (!pts.length) return;
       ds.push({
         label: PUMP_NAMES[dev] || ('Gerät ' + dev),
@@ -1437,14 +1670,14 @@ function refreshOverviewChart() {
         pointStyle: 'circle',
         backgroundColor: PUMP_COLORS[dev % PUMP_COLORS.length] + 'cc',
         borderColor: PUMP_COLORS[dev % PUMP_COLORS.length],
-        showLine: false
+        showLine: false, parsing: false
       });
     });
   }
 
   charts['chart-overview'] = new Chart(cv, {
     type: 'line',
-    data: { labels: lb, datasets: ds },
+    data: { datasets: ds },
     options: {
       responsive: true, maintainAspectRatio: false, animation: false,
       plugins: {
@@ -1454,16 +1687,58 @@ function refreshOverviewChart() {
         tooltip: { mode:'index', intersect:false }
       },
       scales: {
-        x: { ticks:{ color:'#5a6e8a', maxRotation:0, maxTicksLimit:10 }, grid:{ color:'rgba(255,255,255,0.04)' } },
+        x: sharedXAxis(range),
         y: { min:0, max:100, ticks:{ color:'#5a6e8a', callback: v => v + '%' }, grid:{ color:'rgba(255,255,255,0.06)' } }
       }
     }
   });
 }
 
+// ════ NETWORK CREDENTIALS ════
+async function loadNetwork() {
+  try {
+    const r = await fetch('/api/network');
+    if (!r.ok) return;
+    const d = await r.json();
+    const set = (id, v) => { const el=document.getElementById(id); if(el) el.value = (v==null?'':v); };
+    set('net-ssid',     d.ssid);
+    set('net-wifipass', d.wifiPass);
+    set('net-mqttip',   d.mqttIp);
+    set('net-mqttport', d.mqttPort);
+    set('net-mqttuser', d.mqttUser);
+    set('net-mqttpass', d.mqttPass);
+  } catch (e) { console.warn('Network load failed:', e); }
+}
+function saveWifiCreds() {
+  const ssid = document.getElementById('net-ssid').value.trim();
+  const pass = document.getElementById('net-wifipass').value;
+  if (!ssid) { alert('SSID darf nicht leer sein'); return; }
+  sendCmd({ WIFI: [ssid, pass] });
+  alert('WiFi-Daten gespeichert. Das Gerät versucht nun, sich neu zu verbinden.');
+}
+function saveMqttBroker() {
+  const ip = document.getElementById('net-mqttip').value.trim();
+  const port = parseInt(document.getElementById('net-mqttport').value);
+  if (!ip) { alert('IP-Adresse darf nicht leer sein'); return; }
+  if (!port || port<=0) { alert('Ungültiger Port'); return; }
+  const parts = ip.split('.').map(p => parseInt(p));
+  if (parts.length !== 4 || parts.some(n => isNaN(n) || n<0 || n>255)) {
+    alert('IP-Adresse ungültig (Format z.B. 192.168.1.10)'); return;
+  }
+  sendCmd({ MqttIP: parts });
+  sendCmd({ MqttPort: port });
+}
+function saveMqttCreds() {
+  const u = document.getElementById('net-mqttuser').value;
+  const p = document.getElementById('net-mqttpass').value;
+  // 3rd element = MQTT client name; keep it empty so backend keeps current value
+  sendCmd({ MQTTLOGIN: [u, p, ''] });
+}
+
 // ════ INIT ════
 connect();
 loadSettings();
+loadNetwork();
 </script>
 </body>
 </html>

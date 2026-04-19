@@ -136,6 +136,12 @@ CONFIG_NVS_ENCRYPTION=n
 # ── Stack / heap tuning ────────────────────────────────────────────────────────
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 CONFIG_CHIP_TASK_STACK_SIZE=8192
+# Bump CHIP main task priority so BLE/CHIPoBLE handshake is processed
+# promptly even when sensor/UI tasks are busy.  Apple Home was timing out
+# during PASE because the chip task (priority 1) was being preempted by
+# the high‑rate I²C/sensor loops.  Priority 7 sits above MQTT/AsyncTCP (5)
+# but below FreeRTOS timer task (1 below configMAX_PRIORITIES).
+CONFIG_CHIP_TASK_PRIORITY=7
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y

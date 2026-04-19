@@ -26,11 +26,16 @@
 #include <ESPAsyncWebServer.h>
 #include <SPIFFS.h>
 #include <time.h>
+#include <esp_system.h>
+#include <WiFi.h>
 #ifdef MATTER_ENABLED
 #include "MatterBridge.h"
 #endif
 
 extern Arduino_DebugUtils Debug;
+extern Preferences nvs;
+extern void connectToWiFi();
+extern void connectToMqtt();
 
 // ─── WebSocket ────────────────────────────────────────────────────────────────
 static AsyncWebSocket ws("/ws");
@@ -217,9 +222,10 @@ void record() {
 }
 
 // ── Public: query sensor records ─────────────────────────────────────────────
-// Returns compact JSON array; decimates to at most maxPts points.
+// Returns compact JSON: { records:[{ts,ph,orp,psi,temp,airTemp,pumps,modes}, ...], total, step }
+// Decimates to at most maxPts points.
 String querySensor(uint32_t fromTs, uint32_t toTs, uint16_t maxPts) {
-    if (xSemaphoreTake(s_mtx, pdMS_TO_TICKS(2000)) != pdTRUE) return "{}";
+    if (xSemaphoreTake(s_mtx, pdMS_TO_TICKS(2000)) != pdTRUE) return "{\"records\":[]}";
 
     // Pass 1: count matching records across both files
     static const char* sFiles[] = {"/sb.bin", "/sc.bin"};
@@ -238,14 +244,14 @@ String querySensor(uint32_t fromTs, uint32_t toTs, uint16_t maxPts) {
 
     uint32_t step = (maxPts > 0 && total > maxPts) ? (total / maxPts) : 1;
 
-    // Pass 2: build JSON (bounded by maxPts → max ~25 KB output)
+    // Pass 2: build JSON (bounded by maxPts → max ~50 KB output)
     String out;
-    out.reserve(min((uint32_t)28000U, total/step * 50U + 128U));
+    out.reserve(min((uint32_t)52000U, total/step * 90U + 128U));
     out = F("{\"type\":\"log\",\"step\":");
     out += step;
     out += F(",\"total\":");
     out += total;
-    out += F(",\"data\":[");
+    out += F(",\"records\":[");
 
     bool first = true;
     for (const char* path : sFiles) {
@@ -259,12 +265,15 @@ String querySensor(uint32_t fromTs, uint32_t toTs, uint16_t maxPts) {
             if (rec.ts < fromTs || rec.ts > toTs) { n++; continue; }
             if ((n % step) != 0) { n++; continue; }
             if (!first) out += ',';
-            // [ts, ph100, orp, psi100, wTemp10, airT10, pumps, modes]
-            char buf[64];
-            snprintf(buf, sizeof(buf), "[%lu,%d,%d,%d,%d,%d,%u,%u]",
-                     (unsigned long)rec.ts, rec.ph100, rec.orp,
-                     rec.psi100, rec.wTemp10, rec.airT10,
-                     rec.pumps, rec.modes);
+            char buf[140];
+            snprintf(buf, sizeof(buf),
+                     "{\"ts\":%lu,\"ph\":%.2f,\"orp\":%d,\"psi\":%.2f,"
+                     "\"temp\":%.1f,\"airTemp\":%.1f,\"pumps\":%u,\"modes\":%u}",
+                     (unsigned long)rec.ts,
+                     rec.ph100   / 100.0f, (int)rec.orp,
+                     rec.psi100  / 100.0f,
+                     rec.wTemp10 / 10.0f,  rec.airT10 / 10.0f,
+                     (unsigned)rec.pumps,  (unsigned)rec.modes);
             out += buf;
             first = false;
             n++;
@@ -277,10 +286,15 @@ String querySensor(uint32_t fromTs, uint32_t toTs, uint16_t maxPts) {
 }
 
 // ── Public: query events ──────────────────────────────────────────────────────
+// Returns { events:[{ts,dev,state,name}, ...] }
 String queryEvents(uint32_t fromTs, uint32_t toTs) {
-    if (xSemaphoreTake(s_mtx, pdMS_TO_TICKS(2000)) != pdTRUE) return "{}";
+    if (xSemaphoreTake(s_mtx, pdMS_TO_TICKS(2000)) != pdTRUE) return "{\"events\":[]}";
     static const char* eFiles[] = {"/eb.bin", "/ec.bin"};
-    String out = F("{\"type\":\"events\",\"data\":[");
+    static const char* devNames[8] = {
+        "Filterpumpe","pH-Pumpe","Chlorpumpe","Heizung",
+        "Salzelektrolyse","Roboter","Solar","Befuellung"
+    };
+    String out = F("{\"type\":\"events\",\"events\":[");
     bool first = true;
     for (const char* path : eFiles) {
         if (!SPIFFS.exists(path)) continue;
@@ -291,9 +305,11 @@ String queryEvents(uint32_t fromTs, uint32_t toTs) {
             f.read((uint8_t*)&rec, sizeof(rec));
             if (rec.ts < fromTs || rec.ts > toTs) continue;
             if (!first) out += ',';
-            char buf[48];
-            snprintf(buf, sizeof(buf), "{\"ts\":%lu,\"d\":%u,\"s\":%u}",
-                     (unsigned long)rec.ts, rec.dev, rec.state);
+            const char* name = (rec.dev < 8) ? devNames[rec.dev] : "Unbekannt";
+            char buf[96];
+            snprintf(buf, sizeof(buf),
+                     "{\"ts\":%lu,\"dev\":%u,\"state\":%u,\"name\":\"%s\"}",
+                     (unsigned long)rec.ts, rec.dev, rec.state, name);
             out += buf;
             first = false;
         }
@@ -375,9 +391,14 @@ void init() {
 
 // ─── WebSocket helpers ────────────────────────────────────────────────────────
 static String buildStatusJson() {
-    StaticJsonDocument<2048> doc;
+    StaticJsonDocument<3072> doc;
     doc["type"] = "status";
     doc["ts"]   = (uint32_t)(millis() / 1000);
+    doc["uptime"]      = (uint32_t)(millis() / 1000);   // seconds since boot
+    doc["uptimeTotal"] = storage.Uptime;                // hours, cumulative across reboots
+    doc["resetReason"] = resetReasonToString(storage.ResetReason);
+    doc["heap"]        = (uint32_t)ESP.getFreeHeap();
+    doc["firmware"]    = Firmw;
 
     JsonObject pumps = doc.createNestedObject("pumps");
     pumps["filt"]  = FiltrationPump.IsRunning() ? 1 : 0;
@@ -446,6 +467,16 @@ static String buildStatusJson() {
     err["phTank"]    = !PhPump.TankLevel()   ? 1 : 0;
     err["chlTank"]   = !ChlPump.TankLevel()  ? 1 : 0;
 
+    JsonObject net = doc.createNestedObject("net");
+    net["wifi"]    = storage.WIFI_OnOff ? 1 : 0;
+    net["mqtt"]    = storage.MQTTLOGIN_OnOff ? 1 : 0;
+    bool wifiUp    = (WiFi.status() == WL_CONNECTED);
+    net["wifiUp"]  = wifiUp ? 1 : 0;
+    net["ssid"]    = storage.SSID;
+    net["ip"]      = wifiUp ? WiFi.localIP().toString() : String("–");
+    net["rssi"]    = wifiUp ? WiFi.RSSI() : 0;
+    net["mqttUp"]  = MQTTConnection ? 1 : 0;
+
     JsonObject solar = doc.createNestedObject("solar");
     solar["roofTemp"]    = (double)storage.solarRoofTemp;
     solar["boilerTemp"]  = (double)storage.solarBoilerTemp;
@@ -459,7 +490,7 @@ static String buildStatusJson() {
 }
 
 static String buildHistoryJson() {
-    DynamicJsonDocument doc(18000);
+    DynamicJsonDocument doc(20000);
     doc["type"] = "history";
     JsonArray arr = doc.createNestedArray("data");
     uint16_t start = (histCount < HIST_SIZE) ? 0 : histHead;
@@ -468,11 +499,11 @@ static String buildHistoryJson() {
         const HistPoint& p = histBuf[idx];
         JsonArray row = arr.createNestedArray();
         row.add(p.ts);
-        row.add(serialized(String(p.ph,      2)));
-        row.add(serialized(String(p.orp,     0)));
-        row.add(serialized(String(p.psi,     2)));
-        row.add(serialized(String(p.waterTemp,1)));
-        row.add(serialized(String(p.airTemp,  1)));
+        row.add(p.ph);
+        row.add(p.orp);
+        row.add(p.psi);
+        row.add(p.waterTemp);
+        row.add(p.airTemp);
     }
     String out; serializeJson(doc, out);
     return out;
@@ -613,14 +644,37 @@ void initWebUI() {
     // ── Log info: GET /api/loginfo ────────────────────────────────────────────
     server.on("/api/loginfo", HTTP_GET, [](AsyncWebServerRequest* req) {
         auto i = Logger::getInfo();
-        char buf[256];
+        unsigned long used = (i.spiffsTotal > i.spiffsFree)
+                              ? (i.spiffsTotal - i.spiffsFree) : 0UL;
+        char buf[320];
         snprintf(buf, sizeof(buf),
-            "{\"sRecs\":%lu,\"eRecs\":%lu,\"oldest\":%lu,\"newest\":%lu,"
-            "\"spiffsFree\":%lu,\"spiffsTotal\":%lu}",
+            "{\"sensorRecs\":%lu,\"eventRecs\":%lu,\"oldest\":%lu,\"newest\":%lu,"
+            "\"used\":%lu,\"free\":%lu,\"total\":%lu}",
             (unsigned long)i.sensorRecs,  (unsigned long)i.eventRecs,
             (unsigned long)i.oldestTs,    (unsigned long)i.newestTs,
-            (unsigned long)i.spiffsFree,  (unsigned long)i.spiffsTotal);
+            used, (unsigned long)i.spiffsFree, (unsigned long)i.spiffsTotal);
         req->send(200, "application/json", buf);
+    });
+
+    // ── Network info (WiFi + MQTT credentials, plain text) ───────────────────
+    server.on("/api/network", HTTP_GET, [](AsyncWebServerRequest* req) {
+        StaticJsonDocument<512> doc;
+        doc["wifiOn"]   = storage.WIFI_OnOff;
+        doc["mqttOn"]   = storage.MQTTLOGIN_OnOff;
+        doc["ssid"]     = storage.SSID;
+        doc["wifiPass"] = storage.WIFI_PASS;
+        doc["mqttIp"]   = storage.MQTT_IP.toString();
+        doc["mqttPort"] = storage.MQTT_PORT;
+        doc["mqttUser"] = storage.MQTT_USER;
+        doc["mqttPass"] = storage.MQTT_PASS;
+        doc["mqttName"] = storage.MQTT_NAME;
+        bool wifiUp     = (WiFi.status() == WL_CONNECTED);
+        doc["wifiUp"]   = wifiUp;
+        doc["ip"]       = wifiUp ? WiFi.localIP().toString() : String("–");
+        doc["rssi"]     = wifiUp ? WiFi.RSSI() : 0;
+        doc["mqttUp"]   = MQTTConnection;
+        String out; serializeJson(doc, out);
+        req->send(200, "application/json", out);
     });
 
     // ── Log clear: POST /api/logclear ─────────────────────────────────────────

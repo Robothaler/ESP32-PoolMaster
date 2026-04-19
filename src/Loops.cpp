@@ -538,9 +538,17 @@ void pHRegulation(void *pvParameters) {
         // Die Pumpe behält ihren Zustand, wird durch externe Aufrufe von PhPump.Start() oder PhPump.Stop() gesteuert
       }
     } else {
-      // Filtrationspumpe läuft nicht: pH-Pumpe stoppen
-      PhPump.Stop();
-      Debug.print(DBG_INFO, "[PhPump] Stopped: FiltrationPump not running");
+      // Filtrationspumpe läuft nicht: pH-Pumpe nur stoppen wenn nötig –
+      // verhindert Log-Spam und unnötige PCF8574-I2C-Schreibzugriffe pro Tick.
+      static bool phWasRunning = false;
+      if (PhPump.IsRunning()) {
+        PhPump.Stop();
+        Debug.print(DBG_INFO, "[PhPump] Stopped: FiltrationPump not running");
+        phWasRunning = true;        // mark so we know last visible state was "running"
+      } else if (phWasRunning) {
+        // Already stopped — reset latch so the next start→stop edge logs again
+        phWasRunning = false;
+      }
     }
 
     #ifdef CHRONO
@@ -690,11 +698,25 @@ void ChlorSaltRegulation(void *pvParameters) {
         }
       }
     } else {
+      // Filtrationspumpe läuft nicht: nur stoppen wenn nötig (vermeidet Log/I2C-Spam)
+      static bool saltWasRunning = false;
+      static bool chlWasRunning  = false;
       if (storage.Salt_Chlor) {
-        SaltPump.Stop();
-        Debug.print(DBG_INFO, "[SaltPump] Stopped: FiltrationPump not running");
+        if (SaltPump.IsRunning()) {
+          SaltPump.Stop();
+          Debug.print(DBG_INFO, "[SaltPump] Stopped: FiltrationPump not running");
+          saltWasRunning = true;
+        } else if (saltWasRunning) {
+          saltWasRunning = false;
+        }
       } else {
-        ChlPump.Stop();
+        if (ChlPump.IsRunning()) {
+          ChlPump.Stop();
+          Debug.print(DBG_INFO, "[ChlPump] Stopped: FiltrationPump not running");
+          chlWasRunning = true;
+        } else if (chlWasRunning) {
+          chlWasRunning = false;
+        }
       }
     }
 
