@@ -12,9 +12,17 @@
 
 extern Arduino_DebugUtils Debug;
 
-#define RXD2 16
-#define TXD2 17
-HardwareSerial nextionSerial(2);
+// Nextion HMI hooks (declared in Nextion.cpp — no Nextion.h in this project)
+extern void nextionPause(void);
+extern void nextionResume(void);
+
+// IMPORTANT: the Nextion display is wired to Serial1 (default ESP32-S3 pins
+// RX=17, TX=18 — see Nextion.cpp).  We must NOT instantiate a second UART
+// on those pins: ESP-IDF's pin matrix would silently re-route GPIO 17 from
+// "UART1 RX" to "UART2 TX", killing all touch events from the HMI to the
+// MCU.  The Nextion's whmi-wri OTA protocol talks over the SAME wires, so
+// we simply reuse Serial1 in updateNextion(); NextionListen() is paused
+// for the duration of the flash via nextionPause()/nextionResume().
 
 AsyncWebServer server(OTA_NEXTION_PORT);
 
@@ -91,8 +99,8 @@ void otaTask(void *pvParameters) {
   }
   esp_task_wdt_add(NULL);  // register AFTER potentially slow SPIFFS format
 
-  Debug.print(DBG_INFO, "[OTA] Initializing serial...");
-  nextionSerial.begin(115200, SERIAL_8N1, RXD2, TXD2);
+  // No separate Serial2 init here — see header comment in this file.
+  // Serial1 is brought up by InitTFT()/ResetTFT() in Nextion.cpp at 115200 baud.
 
   // Wait for WiFi — with timeout so we never block forever.
   // In MATTER_ENABLED mode, WiFi.status() always returns WL_DISCONNECTED because
@@ -183,11 +191,18 @@ void otaTask(void *pvParameters) {
 }
 
 void updateNextion() {
+  // Pause the Nextion polling loop in PoolMaster (UpdateTFT → NextionListen)
+  // so we have exclusive access to Serial1 while the .tft is streamed.
+  nextionPause();
+
+  // Drain any leftover bytes from the HMI before we start talking OTA.
+  while (Serial1.available()) (void)Serial1.read();
+
   // Send "whmi-wri" command: write firmware at 115200 baud, from internal flash
-  nextionSerial.print("whmi-wri 1,115200,0");
-  nextionSerial.write(0xFF);
-  nextionSerial.write(0xFF);
-  nextionSerial.write(0xFF);
+  Serial1.print("whmi-wri 1,115200,0");
+  Serial1.write(0xFF);
+  Serial1.write(0xFF);
+  Serial1.write(0xFF);
   // Give Nextion time to enter update mode; use vTaskDelay to feed the WDT
   esp_task_wdt_reset();
   vTaskDelay(pdMS_TO_TICKS(1500));
@@ -195,6 +210,7 @@ void updateNextion() {
   File file = SPIFFS.open("/nextion.tft", FILE_READ);
   if (!file) {
     Debug.print(DBG_ERROR, "[OTA] Could not open TFT file");
+    nextionResume();
     return;
   }
 
@@ -204,7 +220,7 @@ void updateNextion() {
 
   while (file.available()) {
     size_t bytesRead = file.readBytes((char *)buffer, sizeof(buffer));
-    nextionSerial.write(buffer, bytesRead);
+    Serial1.write(buffer, bytesRead);
     sentBytes += bytesRead;
     // Yield every ~32 KB so the WDT stays happy during large uploads (~4 MB file)
     if ((sentBytes % (32 * 1024)) < sizeof(buffer)) {
@@ -216,4 +232,9 @@ void updateNextion() {
   esp_task_wdt_reset();
 
   Debug.print(DBG_INFO, "[OTA] Nextion update completed (%u bytes)", (unsigned)sentBytes);
+
+  // The Nextion automatically reboots after a successful flash; give it a
+  // moment to come back, then resume normal HMI polling.
+  vTaskDelay(pdMS_TO_TICKS(2000));
+  nextionResume();
 }

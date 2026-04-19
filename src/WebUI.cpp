@@ -532,27 +532,42 @@ static void onWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
             StaticJsonDocument<256> req;
             if (!deserializeJson(req, data, len) && req.containsKey("cmd")) {
                 auto cmd = req["cmd"];
-#ifdef MATTER_ENABLED
+                // Always answer Matter queries — even when the firmware was
+                // built WITHOUT MATTER_ENABLED — so the WebUI can distinguish
+                // "no Matter in firmware" from "device offline / WS dead".
+                // Without an explicit reply the JS hits its 4 s timeout and
+                // shows the misleading "Matter-Stack nicht aktiv" message.
                 if (cmd.containsKey("MatterStatus")) {
+#ifdef MATTER_ENABLED
                     char qr[96] = {}, manual[32] = {};
                     bool ok = matterGetQRCode(qr, sizeof(qr));
                     matterGetManualPairingCode(manual, sizeof(manual));
                     uint8_t fabrics = matterFabricCount();
                     char buf[256];
                     snprintf(buf, sizeof(buf),
-                        "{\"type\":\"matter_status\",\"commissioned\":%s,\"fabrics\":%u,"
+                        "{\"type\":\"matter_status\",\"matter_built\":true,"
+                        "\"commissioned\":%s,\"fabrics\":%u,"
                         "\"qr_code\":\"%s\",\"pairing_code\":\"%s\"}",
                         fabrics > 0 ? "true" : "false", fabrics,
                         ok ? qr : "", manual);
                     client->text(buf);
+#else
+                    client->text("{\"type\":\"matter_status\",\"matter_built\":false,"
+                                 "\"commissioned\":false,\"fabrics\":0,"
+                                 "\"qr_code\":\"\",\"pairing_code\":\"\"}");
+#endif
                     return;
                 }
                 if (cmd.containsKey("MatterOpenCommissioning")) {
+#ifdef MATTER_ENABLED
                     bool opened = matterOpenCommissioningWindow(900);
-                    client->text(opened ? "{\"ack\":1}" : "{\"ack\":0,\"err\":\"commissioning_window_failed\"}");
+                    client->text(opened ? "{\"ack\":1}" :
+                                 "{\"ack\":0,\"err\":\"commissioning_window_failed\"}");
+#else
+                    client->text("{\"ack\":0,\"err\":\"matter_not_built\"}");
+#endif
                     return;
                 }
-#endif
                 String s; serializeJson(cmd, s);
                 client->text(queueCommand(s.c_str(), s.length()) ?
                     "{\"ack\":1}" : "{\"ack\":0,\"err\":\"queue_full\"}");

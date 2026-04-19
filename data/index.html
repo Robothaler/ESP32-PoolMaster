@@ -767,11 +767,22 @@ input:checked+.slider::before{transform:translateX(18px)}
       <div style="font-size:15px;color:var(--text2)"><span class="spinner"></span>Status wird abgerufen …</div>
     </div>
 
-    <!-- State: not started / stack not running -->
+    <!-- State: device unreachable / WS timeout -->
     <div class="card matter-state" id="ms-offline" style="grid-column:1/-1;text-align:center;padding:40px 20px">
-      <div style="font-size:18px;font-weight:600;margin-bottom:8px">Matter-Stack nicht aktiv</div>
-      <div style="font-size:13px;color:var(--text2);margin-bottom:20px">Das Gerät muss mit dem Matter-Firmware-Build geflasht sein.</div>
-      <div class="chip err"><span class="chip-dot"></span>Nicht verfügbar</div>
+      <div style="font-size:18px;font-weight:600;margin-bottom:8px">Gerät nicht erreichbar</div>
+      <div style="font-size:13px;color:var(--text2);margin-bottom:20px">Keine Antwort über die WebSocket-Verbindung. Bitte Verbindung pr&uuml;fen und Status erneut abrufen.</div>
+      <div class="chip err"><span class="chip-dot"></span>Offline</div>
+      <button class="btn btn-off btn-sm" style="margin-top:14px" onclick="requestMatterStatus()">Status aktualisieren</button>
+    </div>
+
+    <!-- State: firmware was built without MATTER_ENABLED -->
+    <div class="card matter-state" id="ms-nobuild" style="grid-column:1/-1;text-align:center;padding:40px 20px">
+      <div style="font-size:18px;font-weight:600;margin-bottom:8px">Matter ist in dieser Firmware nicht enthalten</div>
+      <div style="font-size:13px;color:var(--text2);margin-bottom:20px">
+        Das Ger&auml;t antwortet, aber die geflashte Firmware wurde ohne <code>MATTER_ENABLED</code> gebaut.<br>
+        Flashe ein Matter-Build (z.&nbsp;B. Env <code>matter_serial</code> oder <code>matter_ota</code>), um Commissioning zu nutzen.
+      </div>
+      <div class="chip warn"><span class="chip-dot"></span>Kein Matter-Build</div>
     </div>
 
     <!-- State: ready but window not open yet -->
@@ -930,13 +941,16 @@ function copyMatterCode() {
 
 function showMatterState(st) {
   const show = st === 'commissioned' ? ['commissioned','commissioned2'] : [st];
-  ['loading','offline','ready','pairing','commissioned','commissioned2'].forEach(s => {
+  ['loading','offline','nobuild','ready','pairing','commissioned','commissioned2'].forEach(s => {
     const el = document.getElementById('ms-' + s);
     if (el) el.classList.toggle('active', show.includes(s));
   });
 }
 
 function applyMatterStatus(d) {
+  // Server explicitly tells us whether the firmware contains the Matter stack.
+  if (d.matter_built === false) { matterWindowOpen = false; showMatterState('nobuild'); return; }
+  // Legacy fallback (very old firmware that didn't send matter_built).
   if (!d.qr_code && d.fabrics === undefined) { showMatterState('offline'); return; }
   if (d.commissioned) {
     matterWindowOpen = false;

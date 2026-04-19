@@ -101,6 +101,15 @@ extern Preferences nvs;
 //you wish to connect to (not "Serial" which is used for debug), here Serial2 UART
 static EasyNex myNex(Serial1);
 
+// When set, UpdateTFT() skips both NextionListen() AND the periodic widget
+// writes so the Nextion OTA flash routine in Ota.cpp can have exclusive
+// access to Serial1 (whmi-wri protocol).  See nextionPause()/nextionResume()
+// below; called from updateNextion() before/after streaming the .tft file.
+static volatile bool s_nextion_paused = false;
+
+void nextionPause(void)  { s_nextion_paused = true;  }
+void nextionResume(void) { s_nextion_paused = false; }
+
 // Functions prototypes
 void InitTFT(void);
 void ResetTFT(void);
@@ -279,6 +288,11 @@ void UpdateWiFi(bool wifi){
 //call this function at least every second to ensure fluid display
 void UpdateTFT()
 {
+  // Skip everything while a Nextion OTA flash is in progress — Ota.cpp owns
+  // Serial1 exclusively for the duration (whmi-wri).  Concurrent listen/write
+  // would corrupt the .tft stream.
+  if (s_nextion_paused) return;
+
   myNex.NextionListen();
 
   sprintf(HourBuffer, "%02d:%02d:%02d", hour(), minute(), second());
