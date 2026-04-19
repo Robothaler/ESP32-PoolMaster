@@ -52,6 +52,7 @@
 // ── CHIP / Matter stack headers ───────────────────────────────────────────────
 #include <platform/CHIPDeviceLayer.h>
 #include <app/server/OnboardingCodesUtil.h>
+#include <app/server/Server.h>
 #include <credentials/DeviceAttestationCredsProvider.h>
 #include <credentials/examples/DeviceAttestationCredsExample.h>
 
@@ -123,6 +124,10 @@ static uint16_t s_ep_chl  = chip::kInvalidEndpointId;
 
 // Last-known reachability for conditional endpoints (Salt/Chl)
 static bool s_salt_chl_was_active = false;
+
+// Cached commissioning info — written once in matterBridgeStart(), read-only afterwards
+static char s_qr_code[96]      = {};
+static char s_pairing_code[32] = {};
 
 // Native (non-bridged) endpoints exposed for SolarControl to subscribe to
 static uint16_t s_ep_pool_temp  = chip::kInvalidEndpointId; // Pool water temperature
@@ -627,6 +632,16 @@ void matterBridgeStart()
 
     s_started = true;
 
+    // Cache QR code and pairing code for WebUI (safe here — called from CHIP task context)
+    {
+        chip::MutableCharSpan qrSpan(s_qr_code, sizeof(s_qr_code) - 1);
+        if (GetQRCode(qrSpan, chip::RendezvousInformationFlags(chip::RendezvousInformationFlag::kBLE)) == CHIP_NO_ERROR)
+            s_qr_code[qrSpan.size()] = '\0';
+        chip::MutableCharSpan codeSpan(s_pairing_code, sizeof(s_pairing_code) - 1);
+        if (GetManualPairingCode(codeSpan, chip::RendezvousInformationFlags(chip::RendezvousInformationFlag::kBLE)) == CHIP_NO_ERROR)
+            s_pairing_code[codeSpan.size()] = '\0';
+    }
+
     // Print QR code + manual pairing code to Serial for commissioning
     PrintOnboardingCodes(
         chip::RendezvousInformationFlags(chip::RendezvousInformationFlag::kBLE));
@@ -975,6 +990,57 @@ void MatterSyncTask(void *pvParameters)
 #endif
         }
     }
+}
+
+// =============================================================================
+//  Public: Commissioning info helpers (for WebUI)
+// =============================================================================
+
+uint8_t matterFabricCount()
+{
+    // FabricCount is an atomic uint8 — safe to read without lock
+    if (!s_started) return 0;
+    return chip::Server::GetInstance().GetFabricTable().FabricCount();
+}
+
+bool matterGetQRCode(char* buf, size_t size)
+{
+    // Read from cache — written once during matterBridgeStart(), no lock needed
+    if (!s_started || !buf || size < 2 || s_qr_code[0] == '\0') return false;
+    snprintf(buf, size, "%s", s_qr_code);
+    return true;
+}
+
+bool matterGetManualPairingCode(char* buf, size_t size)
+{
+    // Read from cache — written once during matterBridgeStart(), no lock needed
+    if (!s_started || !buf || size < 2 || s_pairing_code[0] == '\0') return false;
+    snprintf(buf, size, "%s", s_pairing_code);
+    return true;
+}
+
+// ScheduleWork callback: opens commissioning window from within the CHIP task
+static void openCommissioningWindowWork(intptr_t arg)
+{
+    uint16_t timeoutSec = static_cast<uint16_t>(arg);
+    auto err = chip::Server::GetInstance().GetCommissioningWindowManager()
+        .OpenBasicCommissioningWindow(chip::System::Clock::Seconds32(timeoutSec));
+    if (err != CHIP_NO_ERROR)
+        ESP_LOGE(TAG, "OpenBasicCommissioningWindow failed: %" CHIP_ERROR_FORMAT, err.Format());
+    else
+        ESP_LOGI(TAG, "Commissioning window opened (%u s)", timeoutSec);
+}
+
+bool matterOpenCommissioningWindow(uint16_t timeoutSec)
+{
+    if (!s_started) return false;
+    // ScheduleWork posts to the CHIP event loop — safe from any task, no lock needed
+    auto err = chip::DeviceLayer::PlatformMgr().ScheduleWork(openCommissioningWindowWork, static_cast<intptr_t>(timeoutSec));
+    if (err != CHIP_NO_ERROR) {
+        ESP_LOGE(TAG, "ScheduleWork for commissioning window failed: %" CHIP_ERROR_FORMAT, err.Format());
+        return false;
+    }
+    return true;
 }
 
 #endif // MATTER_ENABLED

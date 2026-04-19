@@ -25,6 +25,7 @@
 #ifdef MATTER_ENABLED
 
 #include <stdint.h>
+#include <stddef.h>
 #include <stdbool.h>
 
 // ---------------------------------------------------------------------------
@@ -63,6 +64,38 @@ void matterUpdateConditionalEndpoints(bool active);
  *        Runs on Core 1 at MATTER_SYNC_PERIOD_MS interval.
  */
 void MatterSyncTask(void *pvParameters);
+
+// ---------------------------------------------------------------------------
+// Public API — commissioning info (for WebUI)
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Number of commissioned fabrics (0 = not yet commissioned).
+ */
+uint8_t matterFabricCount();
+
+/**
+ * @brief Get the base38 QR payload string (e.g. "MT:YXXXXXXXXX").
+ * @param buf   Output buffer.
+ * @param size  Buffer size (≥ 96 bytes recommended).
+ * @returns true on success.
+ */
+bool matterGetQRCode(char* buf, size_t size);
+
+/**
+ * @brief Get the manual pairing code (11-digit or 21-digit decimal string).
+ * @param buf   Output buffer.
+ * @param size  Buffer size (≥ 32 bytes recommended).
+ * @returns true on success.
+ */
+bool matterGetManualPairingCode(char* buf, size_t size);
+
+/**
+ * @brief Open a basic commissioning window (DNS-SD only).
+ * @param timeoutSec  Window duration in seconds (default 900 = 15 min).
+ * @returns true if the window was opened successfully.
+ */
+bool matterOpenCommissioningWindow(uint16_t timeoutSec = 900);
 
 // ---------------------------------------------------------------------------
 // Public API — SolarControl Matter Controller (CONFIG_ESP_MATTER_CONTROLLER_ENABLE)

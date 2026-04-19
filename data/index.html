@@ -128,6 +128,15 @@ input:checked+.slider::before{transform:translateX(18px)}
 .ds-toggle{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:20px;font-size:12px;cursor:pointer;border:1px solid var(--border);background:rgba(255,255,255,0.03);user-select:none;transition:all .18s}
 .ds-toggle input{display:none}
 .ds-toggle.active{background:rgba(255,255,255,0.07);border-color:var(--border2)}
+/* ─── MATTER ─── */
+.matter-state{display:none}
+.matter-state.active{display:block}
+.matter-qr-img{width:180px;height:180px;border-radius:8px;background:#fff;padding:6px;display:block;margin:0 auto}
+.matter-code{font-family:'Courier New',monospace;font-size:20px;font-weight:700;letter-spacing:3px;color:var(--green);text-align:center;margin:10px 0}
+.matter-copy-row{display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap}
+.matter-badge{display:inline-flex;align-items:center;gap:6px;background:rgba(59,130,246,0.12);border:1px solid rgba(59,130,246,0.3);border-radius:20px;padding:4px 12px;font-size:12px;color:var(--blue)}
+.spinner{display:inline-block;width:18px;height:18px;border:2px solid rgba(255,255,255,0.15);border-top-color:var(--blue);border-radius:50%;animation:spin .8s linear infinite;vertical-align:middle;margin-right:8px}
+@keyframes spin{to{transform:rotate(360deg)}}
 </style>
 </head>
 <body>
@@ -144,6 +153,7 @@ input:checked+.slider::before{transform:translateX(18px)}
     <button class="nav-tab" onclick="showTab('solar')">Solar</button>
     <button class="nav-tab" onclick="showTab('settings')">Einstellungen</button>
     <button class="nav-tab" onclick="showTab('system')">System</button>
+    <button class="nav-tab" onclick="showTab('matter');requestMatterStatus()">Matter</button>
   </div>
   <div class="ws-dot" id="ws-dot" title="WebSocket"></div>
 </nav>
@@ -655,6 +665,71 @@ input:checked+.slider::before{transform:translateX(18px)}
 </div>
 </div>
 
+<!-- ════════════ MATTER ════════════ -->
+<div id="tab-matter" class="tab-content">
+<div class="container">
+  <div class="grid2">
+
+    <!-- State: loading -->
+    <div class="card matter-state" id="ms-loading" style="grid-column:1/-1;text-align:center;padding:40px 20px">
+      <div style="font-size:15px;color:var(--text2)"><span class="spinner"></span>Status wird abgerufen …</div>
+    </div>
+
+    <!-- State: not started / stack not running -->
+    <div class="card matter-state" id="ms-offline" style="grid-column:1/-1;text-align:center;padding:40px 20px">
+      <div style="font-size:18px;font-weight:600;margin-bottom:8px">Matter-Stack nicht aktiv</div>
+      <div style="font-size:13px;color:var(--text2);margin-bottom:20px">Das Gerät muss mit dem Matter-Firmware-Build geflasht sein.</div>
+      <div class="chip err"><span class="chip-dot"></span>Nicht verfügbar</div>
+    </div>
+
+    <!-- State: ready but window not open yet -->
+    <div class="card matter-state" id="ms-ready" style="grid-column:1/-1;text-align:center;padding:36px 20px">
+      <div class="card-title" style="justify-content:center">Matter Commissioning</div>
+      <div class="chip warn" style="margin:12px auto"><span class="chip-dot"></span>Noch nicht eingebunden</div>
+      <div style="font-size:13px;color:var(--text2);margin:12px auto;max-width:420px">
+        Öffne das Commissioning-Fenster und scanne dann den QR-Code mit der Home-App.
+      </div>
+      <button class="btn btn-primary" style="margin-top:8px" onclick="openMatterCommissioning()">
+        Commissioning-Fenster öffnen (15 min)
+      </button>
+    </div>
+
+    <!-- State: window open — show QR code -->
+    <div class="card matter-state" id="ms-pairing" style="grid-column:1/-1">
+      <div class="card-title">Gerät einbinden</div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:16px;padding:10px 0">
+        <div class="chip on"><span class="chip-dot"></span>Fenster offen — 15 Minuten</div>
+        <div style="font-size:13px;color:var(--text2);text-align:center;max-width:400px">
+          Scanne den QR-Code mit der Home-App oder gib den manuellen Code ein.
+        </div>
+        <img id="matter-qr-img" class="matter-qr-img" src="" alt="QR Code" loading="lazy">
+        <div class="matter-code" id="matter-manual-code">–</div>
+        <div class="matter-copy-row">
+          <button class="btn btn-primary btn-sm" onclick="copyMatterCode()">Code kopieren</button>
+          <button class="btn btn-off btn-sm" onclick="openMatterCommissioning()">Fenster erneut öffnen</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- State: already commissioned -->
+    <div class="card matter-state" id="ms-commissioned">
+      <div class="card-title">Matter Status</div>
+      <div class="val-row"><span class="val-name">Status</span><span><div class="chip on" id="matter-status-chip"><span class="chip-dot"></span>Eingebunden</div></span></div>
+      <div class="val-row"><span class="val-name">Fabrics (Controller)</span><span class="val-num" id="matter-fabrics">–</span></div>
+    </div>
+
+    <div class="card matter-state" id="ms-commissioned2">
+      <div class="card-title">Aktionen</div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <button class="btn btn-off" onclick="openMatterCommissioning()">Weiteres Gerät einbinden (15 min)</button>
+        <button class="btn btn-off btn-sm" onclick="requestMatterStatus()">Status aktualisieren</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+</div>
+
 <!-- ════════════ MODALS ════════════ -->
 <div class="modal-backdrop" id="modal-ph">
   <div class="modal">
@@ -720,8 +795,77 @@ function connect() {
       const d = JSON.parse(e.data);
       if (d.type === 'status') { state = d; updateUI(); }
       else if (d.type === 'history') { applyHistory(d); }
+      else if (d.type === 'matter_status') { applyMatterStatusRaw(d); }
     } catch {}
   };
+}
+
+// ════ MATTER ════
+let matterStatusTimer = null;
+let matterWindowOpen = false;
+
+function requestMatterStatus() {
+  if (!wsReady) { showMatterState('offline'); return; }
+  showMatterState('loading');
+  ws.send(JSON.stringify({cmd:{MatterStatus:1}}));
+  clearTimeout(matterStatusTimer);
+  matterStatusTimer = setTimeout(() => showMatterState('offline'), 4000);
+}
+
+function applyMatterStatusRaw(d) {
+  clearTimeout(matterStatusTimer);
+  applyMatterStatus(d);
+}
+
+function openMatterCommissioning() {
+  if (!wsReady) return;
+  matterWindowOpen = true;
+  showMatterState('loading');
+  ws.send(JSON.stringify({cmd:{MatterOpenCommissioning:1}}));
+  // Short delay to let the CHIP task process the ScheduleWork, then fetch status
+  setTimeout(() => ws.send(JSON.stringify({cmd:{MatterStatus:1}})), 800);
+}
+
+function copyMatterCode() {
+  const el = document.getElementById('matter-manual-code');
+  if (!el || el.textContent === '–') return;
+  navigator.clipboard.writeText(el.textContent).then(() => {
+    alert('Code kopiert: ' + el.textContent);
+  }).catch(() => {
+    prompt('Code manuell kopieren:', el.textContent);
+  });
+}
+
+function showMatterState(st) {
+  const show = st === 'commissioned' ? ['commissioned','commissioned2'] : [st];
+  ['loading','offline','ready','pairing','commissioned','commissioned2'].forEach(s => {
+    const el = document.getElementById('ms-' + s);
+    if (el) el.classList.toggle('active', show.includes(s));
+  });
+}
+
+function applyMatterStatus(d) {
+  if (!d.qr_code && d.fabrics === undefined) { showMatterState('offline'); return; }
+  if (d.commissioned) {
+    matterWindowOpen = false;
+    document.getElementById('matter-fabrics').textContent = d.fabrics;
+    showMatterState('commissioned');
+  } else if (matterWindowOpen) {
+    showMatterQR(d);
+  } else {
+    showMatterState('ready');
+  }
+}
+
+function showMatterQR(d) {
+  const qr = d.qr_code || '';
+  const code = d.pairing_code || '–';
+  if (qr) {
+    document.getElementById('matter-qr-img').src =
+      'https://quickchart.io/qr?text=' + encodeURIComponent(qr) + '&size=200&margin=1';
+  }
+  document.getElementById('matter-manual-code').textContent = code;
+  showMatterState('pairing');
 }
 
 function setWsDot(ok) {

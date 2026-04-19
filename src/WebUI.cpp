@@ -26,6 +26,9 @@
 #include <ESPAsyncWebServer.h>
 #include <SPIFFS.h>
 #include <time.h>
+#ifdef MATTER_ENABLED
+#include "MatterBridge.h"
+#endif
 
 extern Arduino_DebugUtils Debug;
 
@@ -497,7 +500,29 @@ static void onWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
         if (info->opcode == WS_TEXT && info->final && info->index == 0 && len > 0) {
             StaticJsonDocument<256> req;
             if (!deserializeJson(req, data, len) && req.containsKey("cmd")) {
-                String s; serializeJson(req["cmd"], s);
+                auto cmd = req["cmd"];
+#ifdef MATTER_ENABLED
+                if (cmd.containsKey("MatterStatus")) {
+                    char qr[96] = {}, manual[32] = {};
+                    bool ok = matterGetQRCode(qr, sizeof(qr));
+                    matterGetManualPairingCode(manual, sizeof(manual));
+                    uint8_t fabrics = matterFabricCount();
+                    char buf[256];
+                    snprintf(buf, sizeof(buf),
+                        "{\"type\":\"matter_status\",\"commissioned\":%s,\"fabrics\":%u,"
+                        "\"qr_code\":\"%s\",\"pairing_code\":\"%s\"}",
+                        fabrics > 0 ? "true" : "false", fabrics,
+                        ok ? qr : "", manual);
+                    client->text(buf);
+                    return;
+                }
+                if (cmd.containsKey("MatterOpenCommissioning")) {
+                    bool opened = matterOpenCommissioningWindow(900);
+                    client->text(opened ? "{\"ack\":1}" : "{\"ack\":0,\"err\":\"commissioning_window_failed\"}");
+                    return;
+                }
+#endif
+                String s; serializeJson(cmd, s);
                 client->text(queueCommand(s.c_str(), s.length()) ?
                     "{\"ack\":1}" : "{\"ack\":0,\"err\":\"queue_full\"}");
             }
