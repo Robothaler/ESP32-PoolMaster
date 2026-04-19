@@ -25,7 +25,12 @@ uint32_t LastTFTUpdate = 0U;
 uint32_t LastTFTTouch = 0U;
 bool Sleep = false;
 
-static uint8_t debounceCount = 2;
+// One UpdateTFT cycle ≈ 1 s. After a Nextion touch trigger we set debounceX=1
+// to give ProcessCommand (period 500 ms) time to actually mutate the firmware
+// state. With debounceCount=1 the display realigns to the firmware truth on
+// the second UpdateTFT pass at the latest (~1.5 s worst case) — including
+// reverting the button visual when PoolServer rejects the command.
+static uint8_t debounceCount = 1;
 static uint8_t debounceM     = 0;
 static uint8_t debounceB     = 0;
 static uint8_t debounceSM    = 0;
@@ -173,15 +178,50 @@ static void onPageLoaded(int page) {
     LastAction = millis();
 }
 
-// Build a "{"<key>":<v>}" JSON command, dispatch it, and resync the Nextion
-// mirror variable. Pass nexVar=nullptr if no Nextion variable mirrors the
-// state (rare).
-static void sendBoolCmd(const char* key, int target, const char* nexVar) {
+// Build a "{"<key>":<v>}" JSON command and enqueue it for ProcessCommand.
+//
+// Importantly we do NOT write the new state back to the HMI's vab*.val from
+// inside the trigger handler. The single source of truth for what the
+// display shows is UpdateTFT(): it polls the actual firmware state every
+// cycle and writes the matching vab + picc values. That keeps the display
+// guaranteed consistent with the real hardware/storage state — including the
+// case where the firmware *rejects* the command (e.g. PhPump start denied
+// because FiltrationPump is off): the vab/picc revert automatically once the
+// per-button debounceX expires.
+//
+// Doing the writeNum here would also create a UART race with NextionListen()
+// (the trigger handler runs while EasyNex is still parsing serial bytes) and
+// can fight UpdateTFT() the next cycle when the firmware truth disagrees
+// with the user's tap.
+static void sendBoolCmd(const char* key, int target) {
     char json[64];
     snprintf(json, sizeof(json), "{\"%s\":%d}", key, target);
     enqueueJsonCmd(json);
-    if (nexVar && nexVar[0]) myNex.writeNum(nexVar, target);
     LastAction = millis();
+}
+
+// Determine the new target state for a toggle-style button. Strategy:
+//   1. Read the HMI's vab*.val. After a touch press the HMI script may have
+//      flipped it itself (this is how most of the Nextion buttons in this
+//      project are configured — bMode, bRobot, …).
+//   2. If vab differs from the firmware truth → user clearly wants the new
+//      vab value → use it. This preserves the original UX for every button
+//      that previously worked.
+//   3. If vab equals firmware truth (HMI button does NOT toggle vab in its
+//      press script — this is what bFilt does, hence the original "filter
+//      pump cannot be switched from the display" bug) → fall back to
+//      flipping the firmware state. This finally makes those buttons work.
+//   4. If the Nextion read fails (sentinel 777777) → also fall back to
+//      firmware-toggle so the user still gets a reaction.
+static int computeToggleTarget(const char* nexVar, int firmwareState) {
+    uint32_t v = myNex.readNumber(String(nexVar));
+    if (v == 777777UL) {
+        Debug.print(DBG_WARNING, "[Nextion] readNumber(%s) failed, using firmware-toggle fallback", nexVar);
+        return firmwareState ? 0 : 1;
+    }
+    int iv = (int)v;
+    if (iv != firmwareState) return iv;       // HMI toggled vab → user intent
+    return firmwareState ? 0 : 1;             // HMI did not toggle vab → toggle ourselves
 }
 
 void getAddressString(DeviceAddress addr, char* temp, size_t tempSize) {
@@ -2002,41 +2042,36 @@ void trigger4()  { onPageLoaded(3); }
 //printh 23 02 54 05
 void trigger5()
 {
-  int target = storage.AutoMode ? 0 : 1;             // toggle from firmware truth
+  int target = computeToggleTarget("vabMode.val", storage.AutoMode ? 1 : 0);
   TFTStruc.Mode = (boolean)target;
   debounceM = 1;
-  Debug.print(DBG_INFO, "[Nextion] MODE button (was=%d, target=%d)",
+  Debug.print(DBG_INFO, "[Nextion] MODE (storage=%d, target=%d)",
               (int)storage.AutoMode, target);
-  sendBoolCmd("Mode", target, "vabMode.val");
+  sendBoolCmd("Mode", target);
 }
 
 //FILT button was toggled
 //printh 23 02 54 06
-//
-// Toggle FiltrationPump based on the firmware's actual current state instead
-// of trusting the Nextion-side variable (which can become stale if the page
-// hasn't refreshed). After dispatching the command, the local mirror of the
-// state and the Nextion variable are realigned so the touch UI stays in sync.
 void trigger6()
 {
-  int target = FiltrationPump.IsRunning() ? 0 : 1;
+  int target = computeToggleTarget("vabFilt.val", FiltrationPump.IsRunning() ? 1 : 0);
   TFTStruc.Filt = (boolean)target;
   debounceF = 1;
-  Debug.print(DBG_INFO, "[Nextion] FILT button (was=%d, target=%d)",
+  Debug.print(DBG_INFO, "[Nextion] FILT (pump=%d, target=%d)",
               (int)FiltrationPump.IsRunning(), target);
-  sendBoolCmd("FiltPump", target, "vabFilt.val");
+  sendBoolCmd("FiltPump", target);
 }
 
 //Robot button was toggled
 //printh 23 02 54 07
 void trigger7()
 {
-  int target = RobotPump.IsRunning() ? 0 : 1;
+  int target = computeToggleTarget("vabRobot.val", RobotPump.IsRunning() ? 1 : 0);
   TFTStruc.Robot = (boolean)target;
   debounceH = 1;
-  Debug.print(DBG_INFO, "[Nextion] Robot button (was=%d, target=%d)",
+  Debug.print(DBG_INFO, "[Nextion] Robot (pump=%d, target=%d)",
               (int)RobotPump.IsRunning(), target);
-  sendBoolCmd("RobotPump", target, "vabRobot.val");
+  sendBoolCmd("RobotPump", target);
 }
 
 //Relay 0 button was toggled
@@ -2045,14 +2080,13 @@ void trigger7()
 void trigger8()
 {
   int wasOn  = (digitalRead(RELAY_R0) == LOW) ? 1 : 0;
-  int target = wasOn ? 0 : 1;
+  int target = computeToggleTarget("vabR0.val", wasOn);
   TFTStruc.R0 = (boolean)target;
   debounceR0 = 1;
-  Debug.print(DBG_INFO, "[Nextion] Relay 0 button (was=%d, target=%d)", wasOn, target);
+  Debug.print(DBG_INFO, "[Nextion] Relay 0 (was=%d, target=%d)", wasOn, target);
   char json[32];
   snprintf(json, sizeof(json), "{\"Relay\":[0,%d]}", target);
   enqueueJsonCmd(json);
-  myNex.writeNum(F("vabR0.val"), target);
   LastAction = millis();
 }
 
@@ -2061,14 +2095,13 @@ void trigger8()
 void trigger9()
 {
   int wasOn  = (digitalRead(RELAY_R1) == LOW) ? 1 : 0;
-  int target = wasOn ? 0 : 1;
+  int target = computeToggleTarget("vabR1.val", wasOn);
   TFTStruc.R1 = (boolean)target;
   debounceR1 = 1;
-  Debug.print(DBG_INFO, "[Nextion] Relay 1 button (was=%d, target=%d)", wasOn, target);
+  Debug.print(DBG_INFO, "[Nextion] Relay 1 (was=%d, target=%d)", wasOn, target);
   char json[32];
   snprintf(json, sizeof(json), "{\"Relay\":[1,%d]}", target);
   enqueueJsonCmd(json);
-  myNex.writeNum(F("vabR1.val"), target);
   LastAction = millis();
 }
 
@@ -2076,12 +2109,12 @@ void trigger9()
 //printh 23 02 54 0A
 void trigger10()
 {
-  int target = storage.WinterMode ? 0 : 1;
+  int target = computeToggleTarget("vabWinMode.val", storage.WinterMode ? 1 : 0);
   TFTStruc.R2 = (boolean)target;
   debounceR2 = 1;
-  Debug.print(DBG_INFO, "[Nextion] Winter button (was=%d, target=%d)",
+  Debug.print(DBG_INFO, "[Nextion] Winter (storage=%d, target=%d)",
               (int)storage.WinterMode, target);
-  sendBoolCmd("Winter", target, "vabWinMode.val");
+  sendBoolCmd("Winter", target);
 }
 
 //Probe calibration completed or new pH, Orp or Water Temp setpoints or New tank
@@ -2108,36 +2141,38 @@ void trigger12()
 //printh 23 02 54 0D
 void trigger13()
 {
-  int target = storage.Ph_RegulationOnOff ? 0 : 1;
+  int target = computeToggleTarget("page15.vabpHMode.val",
+                                   storage.Ph_RegulationOnOff ? 1 : 0);
   TFTStruc.PIDpH = (boolean)target;
   debouncepHP = 1;
-  Debug.print(DBG_INFO, "[Nextion] pH PID button (was=%d, target=%d)",
+  Debug.print(DBG_INFO, "[Nextion] pH PID (storage=%d, target=%d)",
               (int)storage.Ph_RegulationOnOff, target);
-  sendBoolCmd("PhPID", target, "page15.vabpHMode.val");
+  sendBoolCmd("PhPID", target);
 }
 
 //Orp PID button pressed
 //printh 23 02 54 0E
 void trigger14()
 {
-  int target = storage.Orp_RegulationOnOff ? 0 : 1;
+  int target = computeToggleTarget("page16.vabChlMode.val",
+                                   storage.Orp_RegulationOnOff ? 1 : 0);
   TFTStruc.PIDChl = (boolean)target;
   debounceChlP = 1;
-  Debug.print(DBG_INFO, "[Nextion] Orp PID button (was=%d, target=%d)",
+  Debug.print(DBG_INFO, "[Nextion] Orp PID (storage=%d, target=%d)",
               (int)storage.Orp_RegulationOnOff, target);
-  sendBoolCmd("OrpPID", target, "page16.vabChlMode.val");
+  sendBoolCmd("OrpPID", target);
 }
 
 //HEAT MODE button was toggled
 //printh 23 02 54 0F
 void trigger15()
 {
-  int target = storage.WaterHeat ? 0 : 1;
+  int target = computeToggleTarget("vabHeatMode.val", storage.WaterHeat ? 1 : 0);
   TFTStruc.Heat = (boolean)target;
   debounceH = 1;
-  Debug.print(DBG_INFO, "[Nextion] HEAT MODE button (was=%d, target=%d)",
+  Debug.print(DBG_INFO, "[Nextion] HEAT MODE (storage=%d, target=%d)",
               (int)storage.WaterHeat, target);
-  sendBoolCmd("Heat", target, "vabHeatMode.val");
+  sendBoolCmd("Heat", target);
 }
 
 //Page 4 has finished loading
@@ -2172,12 +2207,12 @@ void trigger22() { onPageLoaded(10); }
 //printh 23 02 54 17
 void trigger23()
 {
-  int target = storage.Salt_Chlor ? 0 : 1;
+  int target = computeToggleTarget("vabSaltChl.val", storage.Salt_Chlor ? 1 : 0);
   TFTStruc.Salt_Chlor = (boolean)target;
   debounceSM = 1;
-  Debug.print(DBG_INFO, "[Nextion] SALT_CHLOR button (was=%d, target=%d)",
+  Debug.print(DBG_INFO, "[Nextion] SALT_CHLOR (storage=%d, target=%d)",
               (int)storage.Salt_Chlor, target);
-  sendBoolCmd("Salt_Chlor", target, "vabSaltChl.val");
+  sendBoolCmd("Salt_Chlor", target);
 }
 
 //Page 11 has finished loading
@@ -2204,12 +2239,12 @@ void trigger28() { onPageLoaded(15); }
 //printh 23 02 54 1D
 void trigger29()
 {
-  int target = PhPump.IsRunning() ? 0 : 1;
+  int target = computeToggleTarget("page15.vabpHPum.val", PhPump.IsRunning() ? 1 : 0);
   TFTStruc.PhPump = (boolean)target;
   debouncepH = 1;
-  Debug.print(DBG_INFO, "[Nextion] PhPump button (was=%d, target=%d)",
+  Debug.print(DBG_INFO, "[Nextion] PhPump (pump=%d, target=%d)",
               (int)PhPump.IsRunning(), target);
-  sendBoolCmd("PhPump", target, "page15.vabpHPum.val");
+  sendBoolCmd("PhPump", target);
 }
 
 //Page 16 has finished loading
@@ -2220,12 +2255,12 @@ void trigger30() { onPageLoaded(16); }
 //printh 23 02 54 1F
 void trigger31()
 {
-  int target = ChlPump.IsRunning() ? 0 : 1;
+  int target = computeToggleTarget("page16.vabChlPum.val", ChlPump.IsRunning() ? 1 : 0);
   TFTStruc.ChlPump = (boolean)target;
   debounceChl = 1;
-  Debug.print(DBG_INFO, "[Nextion] ChlPump button (was=%d, target=%d)",
+  Debug.print(DBG_INFO, "[Nextion] ChlPump (pump=%d, target=%d)",
               (int)ChlPump.IsRunning(), target);
-  sendBoolCmd("ChlPump", target, "page16.vabChlPum.val");
+  sendBoolCmd("ChlPump", target);
 }
 
 //Reset PSI Calib button pressed
@@ -2268,84 +2303,84 @@ void trigger35()
 //printh 23 02 54 24
 void trigger36()
 {
-  int target = HeatPump.IsRunning() ? 0 : 1;
+  int target = computeToggleTarget("vabHeatPum.val", HeatPump.IsRunning() ? 1 : 0);
   TFTStruc.HeatPump = (boolean)target;
   debounceHP = 1;
-  Debug.print(DBG_INFO, "[Nextion] HeatPump button (was=%d, target=%d)",
+  Debug.print(DBG_INFO, "[Nextion] HeatPump (pump=%d, target=%d)",
               (int)HeatPump.IsRunning(), target);
-  sendBoolCmd("HeatPump", target, "vabHeatPum.val");
+  sendBoolCmd("HeatPump", target);
 }
 
 //SALT MODE button was toggled
 //printh 23 02 54 25
 void trigger37()
 {
-  int target = storage.SaltMode ? 0 : 1;
+  int target = computeToggleTarget("vabSaltMode.val", storage.SaltMode ? 1 : 0);
   TFTStruc.SaltMode = (boolean)target;
   debounceSM = 1;
-  Debug.print(DBG_INFO, "[Nextion] SALT MODE button (was=%d, target=%d)",
+  Debug.print(DBG_INFO, "[Nextion] SALT MODE (storage=%d, target=%d)",
               (int)storage.SaltMode, target);
-  sendBoolCmd("SaltMode", target, "vabSaltMode.val");
+  sendBoolCmd("SaltMode", target);
 }
 
 //SaltPump button was toggled
 //printh 23 02 54 26
 void trigger38()
 {
-  int target = SaltPump.IsRunning() ? 0 : 1;
+  int target = computeToggleTarget("vabSaltPum.val", SaltPump.IsRunning() ? 1 : 0);
   TFTStruc.SaltPump = (boolean)target;
   debounceSP = 1;
-  Debug.print(DBG_INFO, "[Nextion] SaltPump button (was=%d, target=%d)",
+  Debug.print(DBG_INFO, "[Nextion] SaltPump (pump=%d, target=%d)",
               (int)SaltPump.IsRunning(), target);
-  sendBoolCmd("SaltPump", target, "vabSaltPum.val");
+  sendBoolCmd("SaltPump", target);
 }
 
 //VALVE MODE button was toggled
 //printh 23 02 54 27
 void trigger39()
 {
-  int target = storage.ValveMode ? 0 : 1;
+  int target = computeToggleTarget("vabValveMode.val", storage.ValveMode ? 1 : 0);
   TFTStruc.ValveMode = (boolean)target;
   debounceVM = 1;
-  Debug.print(DBG_INFO, "[Nextion] VALVE MODE button (was=%d, target=%d)",
+  Debug.print(DBG_INFO, "[Nextion] VALVE MODE (storage=%d, target=%d)",
               (int)storage.ValveMode, target);
-  sendBoolCmd("ValveMode", target, "vabValveMode.val");
+  sendBoolCmd("ValveMode", target);
 }
 
 //CLEAN MODE button was toggled
 //printh 23 02 54 28
 void trigger40()
 {
-  int target = storage.CleanMode ? 0 : 1;
+  int target = computeToggleTarget("vabCleanMode.val", storage.CleanMode ? 1 : 0);
   TFTStruc.CleanMode = (boolean)target;
   debounceCM = 1;
-  Debug.print(DBG_INFO, "[Nextion] CLEAN MODE button (was=%d, target=%d)",
+  Debug.print(DBG_INFO, "[Nextion] CLEAN MODE (storage=%d, target=%d)",
               (int)storage.CleanMode, target);
-  sendBoolCmd("CleanMode", target, "vabCleanMode.val");
+  sendBoolCmd("CleanMode", target);
 }
 
 //VALVE SWITCH button was toggled
 //printh 23 02 54 29
 void trigger41()
 {
-  int target = storage.ValveSwitch ? 0 : 1;
+  int target = computeToggleTarget("vabCleanDir.val", storage.ValveSwitch ? 1 : 0);
   TFTStruc.ValveSwitch = (boolean)target;
   debounceVS = 1;
-  Debug.print(DBG_INFO, "[Nextion] VALVE SWITCH button (was=%d, target=%d)",
+  Debug.print(DBG_INFO, "[Nextion] VALVE SWITCH (storage=%d, target=%d)",
               (int)storage.ValveSwitch, target);
-  sendBoolCmd("ValveSwitch", target, "vabCleanDir.val");
+  sendBoolCmd("ValveSwitch", target);
 }
 
 //WATERFILL MODE button was toggled
 //printh 23 02 54 2A
 void trigger42()
 {
-  int target = storage.WaterFillMode ? 0 : 1;
+  int target = computeToggleTarget("vabFillMode.val", storage.WaterFillMode ? 1 : 0);
   TFTStruc.WaterFillMode = (boolean)target;
   debounceWFM = 1;
-  Debug.print(DBG_INFO, "[Nextion] WATERFILL MODE button (was=%d, target=%d)",
+  Debug.print(DBG_INFO, "[Nextion] WATERFILL MODE (storage=%d, target=%d)",
               (int)storage.WaterFillMode, target);
-  sendBoolCmd("FillMode", target, "vabFillMode.val");
+  sendBoolCmd("FillMode", target);
 }
 
 //Page 17 has finished loading
@@ -2365,12 +2400,12 @@ void trigger44()
 //printh 23 02 54 2D
 void trigger45()
 {
-  int target = WaterFill.IsRunning() ? 0 : 1;
+  int target = computeToggleTarget("vabTap.val", WaterFill.IsRunning() ? 1 : 0);
   TFTStruc.WaterFill = (boolean)target;
   debounceWF = 1;
-  Debug.print(DBG_INFO, "[Nextion] WaterFill tap button (was=%d, target=%d)",
+  Debug.print(DBG_INFO, "[Nextion] WaterFill (tap=%d, target=%d)",
               (int)WaterFill.IsRunning(), target);
-  sendBoolCmd("WaterFill", target, "vabTap.val");
+  sendBoolCmd("WaterFill", target);
 }
 
 //Page 18 has finished loading
@@ -2381,48 +2416,48 @@ void trigger46() { onPageLoaded(18); }
 //printh 23 02 54 2F
 void trigger47()
 {
-  int target = storage.WIFI_OnOff ? 0 : 1;
+  int target = computeToggleTarget("vabWiFi_OnOff.val", storage.WIFI_OnOff ? 1 : 0);
   TFTStruc.WIFI_OnOff = (boolean)target;
   debounceWiFi = 1;
-  Debug.print(DBG_INFO, "[Nextion] WIFI_OnOff button (was=%d, target=%d)",
+  Debug.print(DBG_INFO, "[Nextion] WIFI_OnOff (storage=%d, target=%d)",
               (int)storage.WIFI_OnOff, target);
-  sendBoolCmd("WIFI_OnOff", target, "vabWiFi_OnOff.val");
+  sendBoolCmd("WIFI_OnOff", target);
 }
 
 //SOLAR MODE button was toggled
 //printh 23 02 54 30
 void trigger48()
 {
-  int target = storage.SolarMode ? 0 : 1;
+  int target = computeToggleTarget("vabSolMode.val", storage.SolarMode ? 1 : 0);
   TFTStruc.SolarMode = (boolean)target;
   debounceSolM = 1;
-  Debug.print(DBG_INFO, "[Nextion] SOLAR MODE button (was=%d, target=%d)",
+  Debug.print(DBG_INFO, "[Nextion] SOLAR MODE (storage=%d, target=%d)",
               (int)storage.SolarMode, target);
-  sendBoolCmd("SolarMode", target, "vabSolMode.val");
+  sendBoolCmd("SolarMode", target);
 }
 
 //SolarPump button was toggled
 //printh 23 02 54 31
 void trigger49()
 {
-  int target = SolarPump.IsRunning() ? 0 : 1;
+  int target = computeToggleTarget("vabSolPum.val", SolarPump.IsRunning() ? 1 : 0);
   TFTStruc.SolarPump = (boolean)target;
   debounceSolP = 1;
-  Debug.print(DBG_INFO, "[Nextion] SolarPump button (was=%d, target=%d)",
+  Debug.print(DBG_INFO, "[Nextion] SolarPump (pump=%d, target=%d)",
               (int)SolarPump.IsRunning(), target);
-  sendBoolCmd("SolarPump", target, "vabSolPum.val");
+  sendBoolCmd("SolarPump", target);
 }
 
 //SOLAR LOKAL EXTERN button was toggled
 //printh 23 02 54 32
 void trigger50()
 {
-  int target = storage.SolarLocExt ? 0 : 1;
+  int target = computeToggleTarget("vabSolLoEx.val", storage.SolarLocExt ? 1 : 0);
   TFTStruc.SolarLoEx = (boolean)target;
   debounceSolLE = 1;
-  Debug.print(DBG_INFO, "[Nextion] SOLAR LOKAL EXTERN button (was=%d, target=%d)",
+  Debug.print(DBG_INFO, "[Nextion] SOLAR LOKAL EXTERN (storage=%d, target=%d)",
               (int)storage.SolarLocExt, target);
-  sendBoolCmd("SolarLocExt", target, "vabSolLoEx.val");
+  sendBoolCmd("SolarLocExt", target);
 }
 
 //Page 19 has finished loading
@@ -2433,24 +2468,24 @@ void trigger51() { onPageLoaded(19); }
 //printh 23 02 54 34
 void trigger52()
 {
-  int target = storage.MQTTLOGIN_OnOff ? 0 : 1;
+  int target = computeToggleTarget("vabMqttLogin.val", storage.MQTTLOGIN_OnOff ? 1 : 0);
   TFTStruc.MqttLogin = (boolean)target;
   debounceMQL = 1;
-  Debug.print(DBG_INFO, "[Nextion] MQTT Login button (was=%d, target=%d)",
+  Debug.print(DBG_INFO, "[Nextion] MQTT Login (storage=%d, target=%d)",
               (int)storage.MQTTLOGIN_OnOff, target);
-  sendBoolCmd("MqttLogin", target, "vabMqttLogin.val");
+  sendBoolCmd("MqttLogin", target);
 }
 
 //BUS_AB button was toggled
 //printh 23 02 54 35
 void trigger53()
 {
-  int target = storage.BUS_A_B ? 0 : 1;
+  int target = computeToggleTarget("vabBUSA_B.val", storage.BUS_A_B ? 1 : 0);
   TFTStruc.BUSA_B = (boolean)target;
   debounceB = 1;
-  Debug.print(DBG_INFO, "[Nextion] BUSA_B button (was=%d, target=%d)",
+  Debug.print(DBG_INFO, "[Nextion] BUSA_B (storage=%d, target=%d)",
               (int)storage.BUS_A_B, target);
-  sendBoolCmd("Bus_A_B", target, "vabBUSA_B.val");
+  sendBoolCmd("Bus_A_B", target);
 }
 
 //Page 27 has finished loading
@@ -2463,12 +2498,18 @@ void trigger55() { onPageLoaded(22); }
 
 //HEATPUMP MODE button was toggled
 //printh 23 02 54 38
+//
+// NOTE: this trigger and trigger15 (HEAT MODE) intentionally share the same
+// vab variable name "vabHeatMode.val" — they live on different Nextion pages
+// (page 3 = HeatPump, page 18 = Solar/Heat). The unqualified name resolves
+// to whichever page is currently active, which is the page that fired the
+// trigger. UpdateTFT() syncs each page's variable separately.
 void trigger56()
 {
-  int target = storage.HeatPumpMode ? 0 : 1;
+  int target = computeToggleTarget("vabHeatMode.val", storage.HeatPumpMode ? 1 : 0);
   TFTStruc.HeatMode = (boolean)target;
   debounceHPM = 1;
-  Debug.print(DBG_INFO, "[Nextion] HEATPUMP MODE button (was=%d, target=%d)",
+  Debug.print(DBG_INFO, "[Nextion] HEATPUMP MODE (storage=%d, target=%d)",
               (int)storage.HeatPumpMode, target);
-  sendBoolCmd("HeatPumpMode", target, "vabHeatMode.val");
+  sendBoolCmd("HeatPumpMode", target);
 }
