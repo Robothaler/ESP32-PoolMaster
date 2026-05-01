@@ -795,6 +795,13 @@ input:checked+.slider::before{transform:translateX(18px)}
       <button class="btn btn-primary" style="margin-top:8px" onclick="openMatterCommissioning()">
         Commissioning-Fenster öffnen (15 min)
       </button>
+      <div style="margin-top:22px;padding-top:14px;border-top:1px solid var(--border);font-size:12px;color:var(--text2);max-width:460px;margin-left:auto;margin-right:auto">
+        Scheitert das Hinzufügen in Apple Home mit „bereits eingebunden"? Dann liegen Fabric-Reste aus einem früheren Versuch im NVS.
+        Setze Matter auf Werkseinstellung zurück und versuche es erneut.
+      </div>
+      <button class="btn btn-off btn-sm" style="margin-top:10px" onclick="matterFactoryReset()">
+        Matter-Werksreset (Gerät startet neu)
+      </button>
     </div>
 
     <!-- State: window open — show QR code -->
@@ -826,6 +833,12 @@ input:checked+.slider::before{transform:translateX(18px)}
       <div style="display:flex;flex-direction:column;gap:10px">
         <button class="btn btn-off" onclick="openMatterCommissioning()">Weiteres Gerät einbinden (15 min)</button>
         <button class="btn btn-off btn-sm" onclick="requestMatterStatus()">Status aktualisieren</button>
+        <div style="border-top:1px solid var(--border);margin-top:4px;padding-top:10px;font-size:12px;color:var(--text2)">
+          Alle eingebundenen Homes vom Gerät entfernen (Neustart erforderlich).
+        </div>
+        <button class="btn btn-off btn-sm" onclick="matterFactoryReset()">
+          Matter-Werksreset (alle Fabrics löschen)
+        </button>
       </div>
     </div>
 
@@ -927,6 +940,24 @@ function openMatterCommissioning() {
   ws.send(JSON.stringify({cmd:{MatterOpenCommissioning:1}}));
   // Short delay to let the CHIP task process the ScheduleWork, then fetch status
   setTimeout(() => ws.send(JSON.stringify({cmd:{MatterStatus:1}})), 800);
+}
+
+function matterFactoryReset() {
+  if (!wsReady) return;
+  const ok = confirm(
+    "Matter-Werksreset:\n\n" +
+    "• Alle eingebundenen Homes werden vom Gerät entfernt.\n" +
+    "• Alle Matter-Fabrics, ACLs und NOCs werden gelöscht.\n" +
+    "• Das Gerät startet anschließend automatisch neu.\n\n" +
+    "Wirklich fortfahren?"
+  );
+  if (!ok) return;
+  showMatterState('loading');
+  ws.send(JSON.stringify({cmd:{MatterFactoryReset:1}}));
+  // Der Reboot kommt vom Gerät selbst nach ~1-2 s; WebSocket wird dabei geschlossen.
+  setTimeout(() => {
+    alert("Matter-Werksreset ausgelöst. Das Gerät startet jetzt neu — bitte ~20 s warten, dann die Seite aktualisieren.");
+  }, 400);
 }
 
 function copyMatterCode() {

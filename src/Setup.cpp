@@ -219,6 +219,22 @@ bool cleaning_done = false;                     // daily cleaning done
 // Queue object to store incoming JSON commands (up to 10)
 QueueHandle_t queueIn;
 
+SemaphoreHandle_t prefsMutex = nullptr;
+
+void prefsLock(void)
+{
+    if (prefsMutex != nullptr) {
+        xSemaphoreTakeRecursive(prefsMutex, portMAX_DELAY);
+    }
+}
+
+void prefsUnlock(void)
+{
+    if (prefsMutex != nullptr) {
+        xSemaphoreGiveRecursive(prefsMutex);
+    }
+}
+
 // NVS Non Volatile SRAM (eqv. EEPROM)
 Preferences nvs;     
 
@@ -367,6 +383,12 @@ void setup()
       while (1);
   }
 
+  prefsMutex = xSemaphoreCreateRecursiveMutex();
+  if (!prefsMutex) {
+      Debug.print(DBG_ERROR, "[SETUP] Failed to create prefs mutex");
+      while (1);
+  }
+
   // Start I2C
   static bool i2cInitialized = false;
   if (!i2cInitialized) {
@@ -432,6 +454,7 @@ void setup()
   if (storage.MatterVersion != MATTER_NVS_VERSION) {
     Debug.print(DBG_WARNING, "[SETUP] Matter NVS version mismatch (%d->%d), erasing Matter NVS...",
                 storage.MatterVersion, MATTER_NVS_VERSION);
+    prefsLock();
     Preferences matterNvs;
     for (const char* ns : {"chip-kvs", "chip-counters", "chip-config"}) {
       if (matterNvs.begin(ns, false)) {
@@ -442,6 +465,7 @@ void setup()
     }
     storage.MatterVersion = MATTER_NVS_VERSION;
     saveConfig();
+    prefsUnlock();
     Debug.print(DBG_INFO, "[SETUP] Matter NVS reset — re-commissioning required");
   }
 #endif
@@ -466,9 +490,22 @@ void setup()
   Debug.print(DBG_INFO, "[SETUP] Initializing MQTT...");
   mqttInit();
 
-  // Initialize WiFi events management (on connect/disconnect)
+#ifndef MATTER_ENABLED
+  // Initialize WiFi events management (on connect/disconnect).
+  // In MATTER_ENABLED mode der Arduino-WiFi-Stack wird nie initialisiert
+  // (siehe connectToWiFi() in mqtt_comm.cpp). Stattdessen registriert
+  // registerMatterWiFiHandlers() eigene esp-idf-Handler — der Aufruf hier
+  // hätte den Arduino-WiFi-Layer "lazy" angetriggert und Netifs ein zweites
+  // Mal registrieren können (gleiches Failure-Muster wie SolarControl
+  // matter_dev beschreibt).
   WiFi.onEvent(WiFiEvent);
+#endif
   initTimers();
+#ifdef MATTER_ENABLED
+#if MATTER_NO_MQTT_UNTIL_COMMISSIONED
+  matterApplyRadioHoldAfterTimersReady();
+#endif
+#endif
   connectToWiFi();
 
   // Wait for WiFi — but never block the core startup.
@@ -663,7 +700,15 @@ void setup()
   Solarvalve.calibrate();
   }
 
+namespace {
+struct PrefsGuard {
+  PrefsGuard() { prefsLock(); }
+  ~PrefsGuard() { prefsUnlock(); }
+};
+} // namespace
+
 bool loadConfig() {
+  PrefsGuard g;
   if (!nvs.begin("PoolMaster", true)) {
       Debug.print(DBG_ERROR, "Failed to open NVS for reading");
       return false;
@@ -851,6 +896,7 @@ bool loadConfig() {
 }
 
 bool saveConfig() {
+  PrefsGuard g;
   if (!nvs.begin("PoolMaster", false)) {
       Debug.print(DBG_ERROR, "Failed to open NVS for writing");
       return false;
@@ -996,51 +1042,93 @@ bool saveConfig() {
 
 // For uint8_t (z. B. ConfigVersion, FiltrationDuration)
 bool saveParam(const char* key, uint8_t val) {
-  nvs.begin("PoolMaster", false);
-  size_t i = nvs.putUChar(key, val);
-  return (i == sizeof(uint8_t)); // 1 Byte
+  prefsLock();
+  bool ok = false;
+  if (nvs.begin("PoolMaster", false)) {
+    size_t i = nvs.putUChar(key, val);
+    ok = (i == sizeof(uint8_t));
+    nvs.end();
+  }
+  prefsUnlock();
+  return ok;
 }
 
 // For bool (z. B. WIFI_OnOff, MQTTLOGIN_OnOff)
 bool saveParam(const char* key, bool val) {
-  nvs.begin("PoolMaster", false);
-  size_t i = nvs.putBool(key, val);
-  return (i == sizeof(bool)); // 1 Byte
+  prefsLock();
+  bool ok = false;
+  if (nvs.begin("PoolMaster", false)) {
+    size_t i = nvs.putBool(key, val);
+    ok = (i == sizeof(bool));
+    nvs.end();
+  }
+  prefsUnlock();
+  return ok;
 }
 
 // For unsigned long / uint32_t (z. B. PhPumpUpTimeLimit, MQTT_PORT)
 bool saveParam(const char* key, unsigned long val) {
-  nvs.begin("PoolMaster", false);
-  size_t i = nvs.putULong(key, val);
-  return (i == sizeof(unsigned long)); // 4 Bytes, deckt auch uint32_t ab
+  prefsLock();
+  bool ok = false;
+  if (nvs.begin("PoolMaster", false)) {
+    size_t i = nvs.putULong(key, val);
+    ok = (i == sizeof(unsigned long));
+    nvs.end();
+  }
+  prefsUnlock();
+  return ok;
 }
 
 // Für String (z. B. SSID, MQTT_NAME)
 bool saveParam(const char* key, String val) {
-  nvs.begin("PoolMaster", false);
-  size_t i = nvs.putString(key, val);
-  return (i == val.length());
+  prefsLock();
+  bool ok = false;
+  if (nvs.begin("PoolMaster", false)) {
+    size_t i = nvs.putString(key, val);
+    ok = (i == val.length());
+    nvs.end();
+  }
+  prefsUnlock();
+  return ok;
 }
 
 // Für uint8_t-Arrays (z. B. MQTT_IP, address_A_0)
 bool saveParam(const char* key, const uint8_t* val, size_t size) {
-  nvs.begin("PoolMaster", false);
-  size_t i = nvs.putBytes(key, val, size);
-  return (i == size);
+  prefsLock();
+  bool ok = false;
+  if (nvs.begin("PoolMaster", false)) {
+    size_t i = nvs.putBytes(key, val, size);
+    ok = (i == size);
+    nvs.end();
+  }
+  prefsUnlock();
+  return ok;
 }
 
 // Für double (z. B. Ph_SetPoint, Ph_Kp)
 bool saveParam(const char* key, double val) {
-  nvs.begin("PoolMaster", false);
-  size_t i = nvs.putDouble(key, val);
-  return (i == sizeof(double)); // 8 Bytes
+  prefsLock();
+  bool ok = false;
+  if (nvs.begin("PoolMaster", false)) {
+    size_t i = nvs.putDouble(key, val);
+    ok = (i == sizeof(double));
+    nvs.end();
+  }
+  prefsUnlock();
+  return ok;
 }
 
 // Für Float (z. B. SaltConcentration, CellConstant)
 bool saveParam(const char* key, float val) {
-  nvs.begin("PoolMaster", false);
-  size_t i = nvs.putFloat(key, val);
-  return (i == sizeof(float)); // 4 Bytes
+  prefsLock();
+  bool ok = false;
+  if (nvs.begin("PoolMaster", false)) {
+    size_t i = nvs.putFloat(key, val);
+    ok = (i == sizeof(float));
+    nvs.end();
+  }
+  prefsUnlock();
+  return ok;
 }
 
 

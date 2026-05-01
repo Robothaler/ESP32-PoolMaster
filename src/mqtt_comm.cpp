@@ -8,10 +8,18 @@
 #ifdef MATTER_ENABLED
 #include "esp_wifi.h"
 #include "esp_event.h"
+#include <atomic>
 #endif
 
 AsyncMqttClient mqttClient;
 extern Preferences nvs;
+
+#ifdef MATTER_ENABLED
+// When set, onMqttDisconnect must not schedule reconnect — BLE needs the radio.
+static std::atomic<bool> s_mqtt_ble_radio_hold{ false };
+// When set, STA disconnect must not schedule WiFi reconnect (intentional disconnect for BLE coex).
+static std::atomic<bool> s_matter_wifi_reconnect_hold{ false };
+#endif
 
 bool MQTTConnection = false;                                    // Status of connection to broker
 static TimerHandle_t mqttReconnectTimer;                        // Reconnect timer for MQTT
@@ -34,9 +42,16 @@ static void _matter_ip_event_cb(void*, esp_event_base_t, int32_t event_id, void*
 
 static void _matter_wifi_event_cb(void*, esp_event_base_t, int32_t event_id, void*) {
   if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
+    if (s_matter_wifi_reconnect_hold.load(std::memory_order_acquire)) {
+      Debug.print(DBG_INFO,
+                  "[WiFi] STA disconnected — WiFi reconnect suppressed (Matter BLE coexistence hold)");
+      return;
+    }
     Debug.print(DBG_WARNING, "[WiFi] STA disconnected (Matter mode) — scheduling reconnect");
     xTimerStop(mqttReconnectTimer, 0);
-    xTimerStart(wifiReconnectTimer, 0);
+    if (wifiReconnectTimer != nullptr) {
+      xTimerStart(wifiReconnectTimer, 0);
+    }
   }
 }
 
@@ -98,6 +113,42 @@ void initTimers() {
   wifiReconnectTimer = xTimerCreate("wifiTimer", pdMS_TO_TICKS(2000), pdFALSE, (void*)0, reinterpret_cast<TimerCallbackFunction_t>(connectToWiFi));
 }
 
+#ifdef MATTER_ENABLED
+void mqttSetBleRadioHold(bool hold)
+{
+    const bool prev = s_mqtt_ble_radio_hold.exchange(hold);
+    if (prev == hold) {
+        return;
+    }
+
+    if (hold) {
+        if (mqttReconnectTimer != nullptr) {
+            xTimerStop(mqttReconnectTimer, 0);
+        }
+        if (mqttClient.connected()) {
+            Debug.print(DBG_INFO,
+                        "[MQTT] BLE commissioning — disconnecting broker (frees shared WiFi/BLE radio for Matter)");
+            mqttClient.disconnect(false);
+        }
+    } else {
+        wifi_ap_record_t ap{};
+        const bool wifiUp = (esp_wifi_sta_get_ap_info(&ap) == ESP_OK);
+        if (wifiUp && storage.MQTTLOGIN_OnOff && mqttReconnectTimer != nullptr) {
+            Debug.print(DBG_INFO, "[MQTT] Matter radio idle — scheduling MQTT reconnect");
+            xTimerStop(mqttReconnectTimer, 0);
+            xTimerStart(mqttReconnectTimer, 0);
+        }
+    }
+}
+void mqttSetMatterWifiReconnectHold(bool hold)
+{
+    s_matter_wifi_reconnect_hold.store(hold, std::memory_order_release);
+    if (hold && wifiReconnectTimer != nullptr) {
+        xTimerStop(wifiReconnectTimer, 0);
+    }
+}
+#endif // MATTER_ENABLED
+
 void mqttInit() {
   // Event-Handler registrieren
   mqttClient.onConnect(onMqttConnect);
@@ -116,11 +167,13 @@ void mqttInit() {
   if (storage.MQTT_IP == IPAddress(0, 0, 0, 0) || storage.MQTT_IP == IPAddress(255, 255, 255, 255) || storage.MQTT_IP[0] == 0) {
     Debug.print(DBG_ERROR, "[MQTT] Invalid MQTT IP address detected: %s", storage.MQTT_IP.toString().c_str());
     storage.MQTTLOGIN_OnOff = false;
+    prefsLock();
     if (nvs.begin("PoolMaster", false)) {
       nvs.putBool("MQTTLOGIN_OnOff", false);
       nvs.end();
       Debug.print(DBG_INFO, "[MQTT] MQTT login disabled in NVS due to invalid IP");
     }
+    prefsUnlock();
     return;  // Keine Blockierung
   }
 
@@ -185,6 +238,10 @@ void publishSolarMode(int event) {
 
 void connectToMqtt() {
 #ifdef MATTER_ENABLED
+  if (s_mqtt_ble_radio_hold.load()) {
+    Debug.print(DBG_INFO, "[MQTT] Skipping connect — BLE radio hold (Matter commissioning)");
+    return;
+  }
   wifi_ap_record_t _ap_info;
   bool _wifiUp = (esp_wifi_sta_get_ap_info(&_ap_info) == ESP_OK);
 #else
@@ -214,6 +271,13 @@ void connectToMqtt() {
 }
 
 void connectToWiFi() {
+#ifdef MATTER_ENABLED
+  if (s_matter_wifi_reconnect_hold.load(std::memory_order_acquire)) {
+    Debug.print(DBG_INFO,
+                "[WiFi] connectToWiFi skipped — Matter BLE coexistence (STA intentionally down)");
+    return;
+  }
+#endif
   Debug.print(DBG_INFO, "[WiFi] Connecting to WiFi...");
 
 #ifdef MATTER_ENABLED
@@ -227,10 +291,8 @@ void connectToWiFi() {
 
   registerMatterWiFiHandlers();
 
-  String ssid_str = nvs.getString("SSID", "");
-  String pass_str = nvs.getString("WIFI_PASS", "");
-  const char* ssid = (ssid_str.length() > 0) ? ssid_str.c_str() : WIFI_SSID;
-  const char* pass = (pass_str.length() > 0) ? pass_str.c_str() : WIFI_PASSWORD;
+  const char* ssid = storage.SSID.length() > 0 ? storage.SSID.c_str() : WIFI_SSID;
+  const char* pass = storage.WIFI_PASS.length() > 0 ? storage.WIFI_PASS.c_str() : WIFI_PASSWORD;
 
   wifi_config_t wifi_cfg = {};
   strncpy((char*)wifi_cfg.sta.ssid,     ssid, sizeof(wifi_cfg.sta.ssid)     - 1);
@@ -259,11 +321,11 @@ void connectToWiFi() {
   }
 
   {
-    String ssid_str = nvs.getString("SSID", "");
-    String pass_str = nvs.getString("WIFI_PASS", "");
-    if (ssid_str.length() > 0 && pass_str.length() > 0) {
+    const char* ssid_c = storage.SSID.length() > 0 ? storage.SSID.c_str() : nullptr;
+    const char* pass_c = storage.WIFI_PASS.length() > 0 ? storage.WIFI_PASS.c_str() : nullptr;
+    if (ssid_c != nullptr && pass_c != nullptr) {
       Debug.print(DBG_INFO, "[WiFi] Using stored credentials...");
-      WiFi.begin(ssid_str.c_str(), pass_str.c_str());
+      WiFi.begin(ssid_c, pass_c);
     } else {
       Debug.print(DBG_INFO, "[WiFi] Using default credentials...");
       WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -330,7 +392,19 @@ void onMqttConnect(bool sessionPresent) {
 void onMqttDisconnect(AsyncMqttClientDisconnectReason reason) {
   Debug.print(DBG_WARNING, "[MQTT] Disconnected from MQTT, reason: %d", static_cast<int>(reason));
   MQTTConnection = false;
-  if (WiFi.isConnected() && storage.MQTTLOGIN_OnOff) {
+#ifdef MATTER_ENABLED
+  if (s_mqtt_ble_radio_hold.load()) {
+    Debug.print(DBG_INFO, "[MQTT] Reconnect suppressed (BLE radio hold — Matter commissioning)");
+    return;
+  }
+#endif
+#ifdef MATTER_ENABLED
+  wifi_ap_record_t ap{};
+  const bool wifiUp = (esp_wifi_sta_get_ap_info(&ap) == ESP_OK);
+#else
+  const bool wifiUp = WiFi.isConnected();
+#endif
+  if (wifiUp && storage.MQTTLOGIN_OnOff) {
     Debug.print(DBG_DEBUG, "[MQTT] Scheduling reconnect in 2 seconds");
     xTimerStop(mqttReconnectTimer, 0);  // Stoppe Timer, falls noch aktiv
     xTimerStart(mqttReconnectTimer, 0); // Neu starten

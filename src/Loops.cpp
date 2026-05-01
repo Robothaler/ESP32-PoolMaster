@@ -1,6 +1,7 @@
 #include <Arduino.h>                // Arduino framework
 #include "Config.h"
 #include "PoolMaster.h"
+#include "MatterBridge.h"             // matterYieldAppTasksIfChipobleBusy() (no-op if !MATTER_ENABLED)
 #include "PCF8574Manager.h"
 
 extern Preferences nvs;
@@ -187,6 +188,7 @@ void CombinedPollingTask(void *pvParameters) {
   
   for (;;) {
       esp_task_wdt_reset();
+      matterYieldAppTasksIfChipobleBusy();
 
       #ifdef CHRONO
       td = millis();
@@ -436,6 +438,7 @@ void StatusLights(void *pvParameters) {
     static uint8_t line = 0;
     for (;;) {
         esp_task_wdt_reset();
+        matterYieldAppTasksIfChipobleBusy();
 
         #ifdef CHRONO
         td = millis();
@@ -504,6 +507,7 @@ void pHRegulation(void *pvParameters) {
 
   for (;;) {
     esp_task_wdt_reset();
+    matterYieldAppTasksIfChipobleBusy();
 
     #ifdef CHRONO
     td = millis();
@@ -603,6 +607,7 @@ void ChlorSaltRegulation(void *pvParameters) {
 
   for (;;) {
     esp_task_wdt_reset();
+    matterYieldAppTasksIfChipobleBusy();
 
     #ifdef CHRONO
     td = millis();
@@ -756,6 +761,7 @@ void FlowMeasures(void *pvParameters) {
 
   for (;;) {
     esp_task_wdt_reset(); // Reset watchdog
+    matterYieldAppTasksIfChipobleBusy();
 
     #ifdef CHRONO
     td = millis();
@@ -1344,6 +1350,7 @@ void TempTask(void *pvParameters) {
 
     for (;;) {
         esp_task_wdt_reset(); // Reset watchdog
+        matterYieldAppTasksIfChipobleBusy();
 
         #ifdef CHRONO
         td = millis();
@@ -1404,6 +1411,7 @@ void readBME280(void* pvParameters) {
 
     for (;;) {
         esp_task_wdt_reset();
+        matterYieldAppTasksIfChipobleBusy();
 
         #ifdef CHRONO
         td = millis();

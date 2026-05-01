@@ -51,10 +51,33 @@
 
 // ── CHIP / Matter stack headers ───────────────────────────────────────────────
 #include <platform/CHIPDeviceLayer.h>
+#include <platform/ConnectivityManager.h>
+#include <platform/PlatformManager.h>
 #include <app/server/OnboardingCodesUtil.h>
 #include <app/server/Server.h>
 #include <credentials/DeviceAttestationCredsProvider.h>
 #include <credentials/examples/DeviceAttestationCredsExample.h>
+
+// ── ESP-IDF NVS / system headers (needed for direct factory-reset fallback) ──
+#include <nvs.h>
+#include <nvs_flash.h>
+#include <esp_system.h>
+#include <esp_wifi.h>
+#include <esp_log.h>
+#include <esp_heap_caps.h>
+#include <esp_timer.h>
+
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
+#if MATTER_WIFI_STA_OFF_DURING_BLE_GAP || MATTER_BLE_GAP_DIAG_LISTENER || MATTER_THROTTLE_APP_TASKS_DURING_CHIPOBLE
+extern "C" {
+#include "host/ble_gap.h"
+}
+#endif
+
+// ── C++ atomics for cross-task BLE commissioning flag ─────────────────────────
+#include <atomic>
 
 // ── CHIP cluster IDs (from Matter specification) ──────────────────────────────
 #include <app/clusters/on-off-server/on-off-server.h>
@@ -81,6 +104,7 @@ using namespace esp_matter::endpoint;
 using namespace chip::app::Clusters;
 
 static const char *TAG = "MatterBridge";
+static const char *TAG_BLE_GAP = "MatterBLE";
 
 // =============================================================================
 //  Configuration constants (override in Config.h via -D flag if needed)
@@ -124,6 +148,19 @@ static uint16_t s_ep_chl  = chip::kInvalidEndpointId;
 
 // Last-known reachability for conditional endpoints (Salt/Chl)
 static bool s_salt_chl_was_active = false;
+
+// ── BLE commissioning activity flag ───────────────────────────────────────────
+// Set to true while a CHIPoBLE connection is open (during BTP/PASE handshake).
+// Other tasks (MQTT publish, MatterSync) gate their WiFi traffic on this flag
+// so the shared ESP32-S3 radio can prioritise BLE during commissioning.
+// Atomic because it's read from PublishTopic()/MatterSyncTask (Core 1) and
+// written from on_device_event() / BLE hold recompute (CHIP task / PlatformMgr work).
+static std::atomic<bool> s_ble_commissioning_active{false};
+
+// Set from ChipDeviceLayer BLE events — NumBLEConnections() can stay 0 on ESP32-NimBLE
+// until long after the phone has started GATT (see serial: no "BLE link up", MQTT PING
+// during CHIPoBLE). Session events fire on first RX write / subscribe / disconnect.
+static std::atomic<bool> s_chipoble_session_evt{false};
 
 // Cached commissioning info — written once in matterBridgeStart(), read-only afterwards
 static char s_qr_code[96]      = {};
@@ -294,25 +331,28 @@ static void solarReportCallback(uint64_t /*remote_node_id*/,
  */
 static void loadSolarConfig()
 {
-    Preferences nvs;
-    if (!nvs.begin("PoolMaster", true)) {
+    prefsLock();
+    Preferences pnvs;
+    if (!pnvs.begin("PoolMaster", true)) {
+        prefsUnlock();
         ESP_LOGW(TAG, "NVS open failed — using default solar config");
         return;
     }
-    uint64_t nodeId = nvs.getULong64(NVS_KEY_SOLAR_NODE_ID, 0);
+    uint64_t nodeId = pnvs.getULong64(NVS_KEY_SOLAR_NODE_ID, 0);
     if (nodeId != 0) {
         s_solar_node_id  = nodeId;
-        s_solar_ep_pump  = nvs.getUShort(NVS_KEY_SOLAR_EP_PUMP,  5);
-        s_solar_ep_valve = nvs.getUShort(NVS_KEY_SOLAR_EP_VALVE, 6);
-        s_solar_ep_circ  = nvs.getUShort(NVS_KEY_SOLAR_EP_CIRC,  7);
-        s_solar_ep_illum = nvs.getUShort(NVS_KEY_SOLAR_EP_ILLUM, 8);
+        s_solar_ep_pump  = pnvs.getUShort(NVS_KEY_SOLAR_EP_PUMP,  5);
+        s_solar_ep_valve = pnvs.getUShort(NVS_KEY_SOLAR_EP_VALVE, 6);
+        s_solar_ep_circ  = pnvs.getUShort(NVS_KEY_SOLAR_EP_CIRC,  7);
+        s_solar_ep_illum = pnvs.getUShort(NVS_KEY_SOLAR_EP_ILLUM, 8);
         ESP_LOGI(TAG, "Solar config loaded: NodeId=0x%016llX pump=%u valve=%u circ=%u illum=%u",
                  s_solar_node_id, s_solar_ep_pump, s_solar_ep_valve,
                  s_solar_ep_circ, s_solar_ep_illum);
     } else {
         ESP_LOGI(TAG, "No SolarControl NodeId in NVS — use SET_SOLAR_NODE to configure");
     }
-    nvs.end();
+    pnvs.end();
+    prefsUnlock();
 }
 
 /**
@@ -321,17 +361,20 @@ static void loadSolarConfig()
  */
 static void saveSolarConfig()
 {
-    Preferences nvs;
-    if (!nvs.begin("PoolMaster", false)) {
+    prefsLock();
+    Preferences pnvs;
+    if (!pnvs.begin("PoolMaster", false)) {
+        prefsUnlock();
         ESP_LOGE(TAG, "NVS open for write failed");
         return;
     }
-    nvs.putULong64(NVS_KEY_SOLAR_NODE_ID, s_solar_node_id);
-    nvs.putUShort(NVS_KEY_SOLAR_EP_PUMP,  s_solar_ep_pump);
-    nvs.putUShort(NVS_KEY_SOLAR_EP_VALVE, s_solar_ep_valve);
-    nvs.putUShort(NVS_KEY_SOLAR_EP_CIRC,  s_solar_ep_circ);
-    nvs.putUShort(NVS_KEY_SOLAR_EP_ILLUM, s_solar_ep_illum);
-    nvs.end();
+    pnvs.putULong64(NVS_KEY_SOLAR_NODE_ID, s_solar_node_id);
+    pnvs.putUShort(NVS_KEY_SOLAR_EP_PUMP,  s_solar_ep_pump);
+    pnvs.putUShort(NVS_KEY_SOLAR_EP_VALVE, s_solar_ep_valve);
+    pnvs.putUShort(NVS_KEY_SOLAR_EP_CIRC,  s_solar_ep_circ);
+    pnvs.putUShort(NVS_KEY_SOLAR_EP_ILLUM, s_solar_ep_illum);
+    pnvs.end();
+    prefsUnlock();
     ESP_LOGI(TAG, "Solar config saved to NVS");
 }
 
@@ -410,33 +453,518 @@ static esp_err_t on_identification(
     return ESP_OK;
 }
 
+static void syncBleGapRadioHoldFromStack();
+static void processBleRadioHoldChipEvent(const chip::DeviceLayer::ChipDeviceEvent *event);
+
+/** Mirrors critical commissioning lines to Serial (same as user logs), independent of esp_log tag level. */
+static void matterSerialChipf(const char *line)
+{
+    Serial.print("[Matter] ");
+    Serial.println(line);
+}
+
 // =============================================================================
 //  Matter callback: platform/commissioning events
 // =============================================================================
 static void on_device_event(const chip::DeviceLayer::ChipDeviceEvent *event, intptr_t arg)
 {
+    using namespace chip::DeviceLayer;
+
+    // esp_matter forwards a subset here; BLE internals also go to PlatformMgr AddEventHandler.
+    processBleRadioHoldChipEvent(event);
+
     switch (event->Type) {
-        case chip::DeviceLayer::DeviceEventType::kCommissioningComplete:
+        case DeviceEventType::kCommissioningComplete:
             ESP_LOGI(TAG, "Matter commissioning complete!");
+            Serial.println("[Matter] Commissioning erfolgreich abgeschlossen — Fabric angelegt.");
 #ifdef CONFIG_ESP_MATTER_CONTROLLER_ENABLE
-            // Automatically subscribe to SolarControl if already configured
             if (s_solar_node_id != 0 && !s_solar_subscribed) {
                 subscribeToSolarControl(s_solar_node_id);
             }
 #endif
             break;
-        case chip::DeviceLayer::DeviceEventType::kInternetConnectivityChange:
+
+        case DeviceEventType::kInternetConnectivityChange:
             ESP_LOGI(TAG, "Matter internet connectivity changed");
             break;
-        case chip::DeviceLayer::DeviceEventType::kFabricRemoved:
+
+        case DeviceEventType::kFabricRemoved:
             ESP_LOGW(TAG, "Matter fabric removed");
 #ifdef CONFIG_ESP_MATTER_CONTROLLER_ENABLE
             s_solar_subscribed = false;
 #endif
             break;
+
         default:
             break;
     }
+}
+
+// Second path for the same logic — sees kCHIPoBLE* events on the CHIP thread.
+static void platformBleHoldEventHandler(const chip::DeviceLayer::ChipDeviceEvent *event, intptr_t /*arg*/)
+{
+    processBleRadioHoldChipEvent(event);
+}
+
+// =============================================================================
+//  Public: BLE commissioning activity query (for MQTT / MatterSync gating)
+// =============================================================================
+bool matterIsBleCommissioning()
+{
+    return s_ble_commissioning_active.load(std::memory_order_acquire);
+}
+
+void matterYieldAppTasksIfChipobleBusy(void)
+{
+#if MATTER_THROTTLE_APP_TASKS_DURING_CHIPOBLE
+    if (!s_started) {
+        return;
+    }
+    if (chip::Server::GetInstance().GetFabricTable().FabricCount() != 0) {
+        return;
+    }
+    if (!s_chipoble_session_evt.load(std::memory_order_acquire)) {
+        return;
+    }
+    vTaskDelay(pdMS_TO_TICKS(MATTER_CHIPOBLE_APP_YIELD_MS));
+#endif
+}
+
+void matterApplyRadioHoldAfterTimersReady()
+{
+#if MATTER_NO_MQTT_UNTIL_COMMISSIONED
+    syncBleGapRadioHoldFromStack();
+#endif
+}
+
+/**
+ * Drive shared-radio hold for BLE commissioning.
+ *
+ * If MATTER_NO_MQTT_UNTIL_COMMISSIONED: hold MQTT whenever fabric count is 0 — CHIP
+ * BLE events are not delivered to app handlers on this esp_matter build, so this is
+ * the reliable fix for shared-radio PASE timeouts.
+ *
+ * Otherwise: use NumBLEConnections + s_chipoble_session_evt (best-effort).
+ */
+static void syncBleGapRadioHoldFromStack()
+{
+    if (!s_started) {
+        return;
+    }
+
+    const uint8_t  fabrics   = chip::Server::GetInstance().GetFabricTable().FabricCount();
+    const uint16_t ble_cons  = chip::DeviceLayer::ConnectivityMgr().NumBLEConnections();
+    const bool     evt_sess  = s_chipoble_session_evt.load(std::memory_order_acquire);
+#if MATTER_NO_MQTT_UNTIL_COMMISSIONED
+    const bool want_hold = (fabrics == 0);
+#else
+    const bool want_hold = (fabrics == 0) && (ble_cons > 0 || evt_sess);
+#endif
+
+    const bool cur = s_ble_commissioning_active.load(std::memory_order_acquire);
+    if (want_hold == cur) {
+        return;
+    }
+
+    s_ble_commissioning_active.store(want_hold, std::memory_order_release);
+    mqttSetBleRadioHold(want_hold);
+
+#if MATTER_WIFI_PS_MAX_WHILE_UNCOMMISSIONED
+    if (want_hold) {
+        esp_err_t pe = esp_wifi_set_ps(WIFI_PS_MAX_MODEM);
+        ESP_LOGI(TAG, "WiFi PS MAX while uncommissioned (coexist): %s", esp_err_to_name(pe));
+    } else {
+        esp_err_t pe = esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+        ESP_LOGI(TAG, "WiFi PS MIN restored: %s", esp_err_to_name(pe));
+    }
+#endif
+
+    if (want_hold) {
+        ESP_LOGI(TAG,
+                 "Matter MQTT hold ON (fabrics=%u, NumBLE=%u, evt_sess=%d) — shared 2.4 GHz radio free for "
+                 "commissioning.",
+                 static_cast<unsigned>(fabrics), static_cast<unsigned>(ble_cons), static_cast<int>(evt_sess));
+        Serial.printf("[Matter] MQTT aus bis Pairing OK (fabrics=%u) — Funk frei für Matter/BLE.\r\n",
+                      static_cast<unsigned>(fabrics));
+    } else {
+        ESP_LOGI(TAG,
+                 "Matter MQTT hold OFF (fabrics=%u, NumBLE=%u, evt_sess=%d) — MQTT reconnect allowed.",
+                 static_cast<unsigned>(fabrics), static_cast<unsigned>(ble_cons), static_cast<int>(evt_sess));
+        Serial.printf("[Matter] Fabric aktiv — MQTT reconnect erlaubt (fabrics=%u).\r\n",
+                      static_cast<unsigned>(fabrics));
+    }
+}
+
+static void matterReleaseGapWifiCoexSession();
+
+static void processBleRadioHoldChipEvent(const chip::DeviceLayer::ChipDeviceEvent *event)
+{
+    using namespace chip::DeviceLayer;
+
+    static bool s_logged_first_chip_evt;
+    if (!s_logged_first_chip_evt) {
+        s_logged_first_chip_evt = true;
+        matterSerialChipf("Erstes CHIP-DeviceLayer-Event (Logging-Pfad OK).");
+        ESP_LOGW(TAG, "First ChipDeviceLayer event received (logging path OK).");
+    }
+
+    const uint8_t fabrics = s_started ? chip::Server::GetInstance().GetFabricTable().FabricCount() : 255;
+    const uint16_t ble_cons = s_started ? chip::DeviceLayer::ConnectivityMgr().NumBLEConnections() : 0;
+    const int64_t t_us = esp_timer_get_time();
+    const unsigned heap_i = static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+
+    switch (event->Type) {
+        case DeviceEventType::kCHIPoBLEConnectionEstablished:
+            ESP_LOGI(TAG,
+                     "CHIP evt: CHIPoBLEConnectionEstablished t=%lldus fabrics=%u NumBLE=%u heap_int=%u",
+                     static_cast<long long>(t_us), static_cast<unsigned>(fabrics),
+                     static_cast<unsigned>(ble_cons), heap_i);
+            matterSerialChipf("CHIPoBLE: Verbindung hergestellt");
+            if (s_started && fabrics == 0) {
+                s_chipoble_session_evt.store(true, std::memory_order_release);
+                syncBleGapRadioHoldFromStack();
+            }
+            break;
+
+        case DeviceEventType::kCHIPoBLEWriteReceived:
+            ESP_LOGI(TAG,
+                     "CHIP evt: CHIPoBLEWriteReceived t=%lldus fabrics=%u NumBLE=%u heap_int=%u",
+                     static_cast<long long>(t_us), static_cast<unsigned>(fabrics),
+                     static_cast<unsigned>(ble_cons), heap_i);
+            matterSerialChipf("CHIPoBLE: RX-Write (Phone schreibt)");
+            if (s_started && fabrics == 0) {
+                s_chipoble_session_evt.store(true, std::memory_order_release);
+                syncBleGapRadioHoldFromStack();
+            }
+            break;
+
+        case DeviceEventType::kCHIPoBLESubscribe:
+            ESP_LOGI(TAG,
+                     "CHIP evt: CHIPoBLESubscribe (CCCD on) t=%lldus fabrics=%u NumBLE=%u heap_int=%u",
+                     static_cast<long long>(t_us), static_cast<unsigned>(fabrics),
+                     static_cast<unsigned>(ble_cons), heap_i);
+            matterSerialChipf("CHIPoBLE: CCCD Subscribe (Indications an)");
+            break;
+
+        case DeviceEventType::kCHIPoBLEUnsubscribe:
+            ESP_LOGI(TAG,
+                     "CHIP evt: CHIPoBLEUnsubscribe t=%lldus fabrics=%u NumBLE=%u",
+                     static_cast<long long>(t_us), static_cast<unsigned>(fabrics),
+                     static_cast<unsigned>(ble_cons));
+            matterSerialChipf("CHIPoBLE: CCCD Unsubscribe");
+            break;
+
+        case DeviceEventType::kCHIPoBLEIndicateConfirm:
+            ESP_LOGI(TAG,
+                     "CHIP evt: CHIPoBLEIndicateConfirm (TX indication ACK) t=%lldus fabrics=%u",
+                     static_cast<long long>(t_us), static_cast<unsigned>(fabrics));
+            matterSerialChipf("CHIPoBLE: TX-Indication bestätigt (wichtig für BTP)");
+            break;
+
+        case DeviceEventType::kCHIPoBLENotifyConfirm:
+            ESP_LOGD(TAG, "CHIP evt: CHIPoBLENotifyConfirm fabrics=%u", static_cast<unsigned>(fabrics));
+            break;
+
+        case DeviceEventType::kCHIPoBLEConnectionClosed:
+        case DeviceEventType::kCHIPoBLEConnectionError:
+            ESP_LOGI(TAG,
+                     "CHIP evt: CHIPoBLE %s t=%lldus fabrics=%u NumBLE=%u",
+                     event->Type == DeviceEventType::kCHIPoBLEConnectionError ? "ConnectionError" : "ConnectionClosed",
+                     static_cast<long long>(t_us), static_cast<unsigned>(fabrics),
+                     static_cast<unsigned>(ble_cons));
+            matterSerialChipf(event->Type == DeviceEventType::kCHIPoBLEConnectionError
+                                  ? "CHIPoBLE: Verbindungsfehler"
+                                  : "CHIPoBLE: Verbindung geschlossen");
+            if (event->Type == DeviceEventType::kCHIPoBLEConnectionError) {
+                ESP_LOGI(TAG, "CHIPoBLEConnectionError reason=%s", chip::ErrorStr(event->CHIPoBLEConnectionError.Reason));
+            }
+            s_chipoble_session_evt.store(false, std::memory_order_release);
+            matterReleaseGapWifiCoexSession();
+            syncBleGapRadioHoldFromStack();
+            break;
+
+        case DeviceEventType::kCommissioningComplete:
+            ESP_LOGI(TAG, "CHIP evt: CommissioningComplete t=%lldus", static_cast<long long>(t_us));
+            matterSerialChipf("Commissioning abgeschlossen (Fabric)");
+            s_chipoble_session_evt.store(false, std::memory_order_release);
+            matterReleaseGapWifiCoexSession();
+            syncBleGapRadioHoldFromStack();
+            break;
+
+        case DeviceEventType::kFabricRemoved:
+            ESP_LOGI(TAG, "CHIP evt: FabricRemoved t=%lldus", static_cast<long long>(t_us));
+            matterSerialChipf("Fabric entfernt");
+            s_chipoble_session_evt.store(false, std::memory_order_release);
+            matterReleaseGapWifiCoexSession();
+            syncBleGapRadioHoldFromStack();
+            break;
+
+        case DeviceEventType::kFailSafeTimerExpired:
+            ESP_LOGW(TAG, "CHIP evt: FailSafeTimerExpired t=%lldus fabrics=%u", static_cast<long long>(t_us),
+                     static_cast<unsigned>(fabrics));
+            matterSerialChipf("Fail-Safe Timer abgelaufen");
+            break;
+
+        case DeviceEventType::kSecureSessionEstablished:
+            ESP_LOGI(TAG, "CHIP evt: SecureSessionEstablished t=%lldus fabrics=%u", static_cast<long long>(t_us),
+                     static_cast<unsigned>(fabrics));
+            matterSerialChipf("Secure Session etabliert");
+            break;
+
+        default:
+            // Internal events use ESP_LOGD in older code → invisible with default INFO console.
+            // While uncommissioned, log internal + unknown at INFO so numeric type is visible in Apple-debug builds.
+            if (s_started && fabrics == 0) {
+                if (!event->IsPublic()) {
+                    ESP_LOGI(TAG,
+                             "CHIP evt (internal, fabric0) type=%u heap_int=%u NumBLE=%u platSpec=%d",
+                             static_cast<unsigned>(event->Type), heap_i, static_cast<unsigned>(ble_cons),
+                             static_cast<int>(event->IsPlatformSpecific()));
+                    Serial.printf("[Matter] CHIP intern type=%u heap=%u NumBLE=%u\r\n",
+                                  static_cast<unsigned>(event->Type), heap_i,
+                                  static_cast<unsigned>(ble_cons));
+                } else {
+                    ESP_LOGD(TAG, "CHIP evt (public) type=%u", static_cast<unsigned>(event->Type));
+                }
+            }
+            break;
+    }
+}
+
+// Runs on the CHIP event loop — required so ConnectivityMgr / BLEMgr state matches
+// what the stack sees (polling from Core 1 was a no-op in practice: MQTT kept
+// running during GAP sessions, see serial logs).
+static void bleRadioHoldPollWork(intptr_t /*arg*/)
+{
+    syncBleGapRadioHoldFromStack();
+}
+
+/**
+ * Drive s_chipoble_session_evt from NimBLE GAP when ChipDeviceLayer omits
+ * kCHIPoBLE* events (common on this port). Enables matterYieldAppTasksIfChipobleBusy()
+ * so Core-1 loops yield during the BLE commissioning window.
+ */
+static void chipobleSessionHintFromBleGap(bool active)
+{
+#if MATTER_THROTTLE_APP_TASKS_DURING_CHIPOBLE
+    if (!s_started) {
+        return;
+    }
+    const bool prev = s_chipoble_session_evt.load(std::memory_order_acquire);
+    if (prev == active) {
+        return;
+    }
+    s_chipoble_session_evt.store(active, std::memory_order_release);
+    syncBleGapRadioHoldFromStack();
+#else
+    (void)active;
+#endif
+}
+
+#if MATTER_BLE_GAP_DIAG_LISTENER
+// ChipDeviceLayer often does not deliver kCHIPoBLESubscribe / IndicateConfirm on esp_matter;
+// NimBLE posts GAP events for the same PHY actions — log them here for Apple commissioning.
+static struct ble_gap_event_listener s_matter_ble_gap_diag_listener;
+
+static int matterBleGapDiagEvent(struct ble_gap_event *event, void * /*arg*/)
+{
+    if (!s_started) {
+        return 0;
+    }
+
+    const uint8_t fabrics = chip::Server::GetInstance().GetFabricTable().FabricCount();
+    if (fabrics != 0 && event->type != BLE_GAP_EVENT_DISCONNECT) {
+        return 0;
+    }
+
+    const unsigned hi = static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    const int64_t t_us = esp_timer_get_time();
+
+    switch (event->type) {
+    case BLE_GAP_EVENT_CONNECT:
+        ESP_LOGW(TAG_BLE_GAP, "GAP CONNECT status=%d t=%lldus heap_int=%u", static_cast<int>(event->connect.status),
+                 static_cast<long long>(t_us), hi);
+        Serial.printf("[Matter] GAP CONNECT status=%d heap=%u\r\n", static_cast<int>(event->connect.status), hi);
+        if (event->connect.status == 0 && fabrics == 0) {
+            chipobleSessionHintFromBleGap(true);
+            matterSerialChipf("GAP: Session-Hint an (CPU-Yield fuer CHIPoBLE aktiv).");
+        }
+        break;
+    case BLE_GAP_EVENT_DISCONNECT:
+        ESP_LOGW(TAG_BLE_GAP, "GAP DISCONNECT reason=0x%02x t=%lldus heap_int=%u", event->disconnect.reason,
+                 static_cast<long long>(t_us), hi);
+        Serial.printf("[Matter] GAP DISCONNECT reason=0x%02x heap=%u\r\n", event->disconnect.reason, hi);
+        chipobleSessionHintFromBleGap(false);
+        break;
+    case BLE_GAP_EVENT_SUBSCRIBE:
+        ESP_LOGW(TAG_BLE_GAP,
+                 "GAP SUBSCRIBE conn=%u attr=0x%04x reason=%u prev(n/i)=%u/%u cur(n/i)=%u/%u t=%lldus heap=%u",
+                 event->subscribe.conn_handle, event->subscribe.attr_handle,
+                 static_cast<unsigned>(event->subscribe.reason), event->subscribe.prev_notify,
+                 event->subscribe.prev_indicate, event->subscribe.cur_notify, event->subscribe.cur_indicate,
+                 static_cast<long long>(t_us), hi);
+        Serial.printf("[Matter] GAP SUBSCRIBE attr=0x%04x cur_ind=%u cur_ntf=%u reason=%u heap=%u\r\n",
+                      event->subscribe.attr_handle, event->subscribe.cur_indicate, event->subscribe.cur_notify,
+                      static_cast<unsigned>(event->subscribe.reason), hi);
+        if (fabrics == 0 && event->subscribe.cur_indicate != 0) {
+            chipobleSessionHintFromBleGap(true);
+        }
+        break;
+    case BLE_GAP_EVENT_MTU:
+        ESP_LOGW(TAG_BLE_GAP, "GAP MTU conn=%u value=%u channel=0x%04x", event->mtu.conn_handle, event->mtu.value,
+                 event->mtu.channel_id);
+        Serial.printf("[Matter] GAP MTU=%u ch=0x%04x\r\n", event->mtu.value, event->mtu.channel_id);
+        break;
+    case BLE_GAP_EVENT_NOTIFY_TX:
+        ESP_LOGW(TAG_BLE_GAP, "GAP NOTIFY_TX status=%d attr=0x%04x indication=%u t=%lldus heap=%u",
+                 event->notify_tx.status, event->notify_tx.attr_handle, event->notify_tx.indication,
+                 static_cast<long long>(t_us), hi);
+        Serial.printf("[Matter] GAP NOTIFY_TX st=%d attr=0x%04x ind=%u heap=%u\r\n", event->notify_tx.status,
+                      event->notify_tx.attr_handle, event->notify_tx.indication, hi);
+        break;
+    case BLE_GAP_EVENT_CONN_UPDATE:
+        ESP_LOGI(TAG_BLE_GAP, "GAP CONN_UPDATE status=%d", static_cast<int>(event->conn_update.status));
+        break;
+    default:
+        break;
+    }
+    return 0;
+}
+
+static void registerMatterBleGapDiagListener()
+{
+    int r = ble_gap_event_listener_register(&s_matter_ble_gap_diag_listener, matterBleGapDiagEvent, nullptr);
+    if (r != 0) {
+        ESP_LOGW(TAG, "ble_gap_event_listener_register(diag) failed: %d", r);
+    } else {
+        ESP_LOGI(TAG, "NimBLE GAP diagnostic listener registered (SUBSCRIBE / NOTIFY_TX / MTU)");
+        matterSerialChipf("NimBLE-GAP: Diagnose (SUBSCRIBE, NOTIFY_TX, MTU, …)");
+    }
+}
+#endif // MATTER_BLE_GAP_DIAG_LISTENER
+
+#if MATTER_THROTTLE_APP_TASKS_DURING_CHIPOBLE && !MATTER_BLE_GAP_DIAG_LISTENER
+static struct ble_gap_event_listener s_matter_ble_gap_session_listener;
+
+static int matterBleGapSessionOnlyEvent(struct ble_gap_event *event, void * /*arg*/)
+{
+    if (!s_started) {
+        return 0;
+    }
+    const uint8_t fabrics = chip::Server::GetInstance().GetFabricTable().FabricCount();
+    if (fabrics != 0 && event->type != BLE_GAP_EVENT_DISCONNECT) {
+        return 0;
+    }
+    switch (event->type) {
+    case BLE_GAP_EVENT_CONNECT:
+        if (event->connect.status == 0 && fabrics == 0) {
+            chipobleSessionHintFromBleGap(true);
+        }
+        break;
+    case BLE_GAP_EVENT_DISCONNECT:
+        chipobleSessionHintFromBleGap(false);
+        break;
+    case BLE_GAP_EVENT_SUBSCRIBE:
+        if (fabrics == 0 && event->subscribe.cur_indicate != 0) {
+            chipobleSessionHintFromBleGap(true);
+        }
+        break;
+    default:
+        break;
+    }
+    return 0;
+}
+
+static void registerMatterBleGapSessionListener()
+{
+    int r = ble_gap_event_listener_register(&s_matter_ble_gap_session_listener, matterBleGapSessionOnlyEvent, nullptr);
+    if (r != 0) {
+        ESP_LOGW(TAG, "ble_gap_event_listener_register(session) failed: %d", r);
+    } else {
+        ESP_LOGI(TAG, "NimBLE GAP session listener registered (CPU yield during CHIPoBLE)");
+    }
+}
+#endif
+
+#if MATTER_WIFI_STA_OFF_DURING_BLE_GAP
+static struct ble_gap_event_listener s_matter_gap_wifi_coex_listener;
+// Set when we intentionally dropped WiFi for an uncommissioned BLE session; must be
+// cleared on GAP disconnect even if FabricCount() is already > 0 (commissioning
+// just finished). Otherwise mqttSetMatterWifiReconnectHold stays true and WiFi
+// never returns — Apple Home shows "Gerät nicht gefunden" after setup.
+static std::atomic<bool> s_matter_gap_wifi_coex_engaged{ false };
+
+static int matterGapWifiCoexEvent(struct ble_gap_event *event, void * /*arg*/)
+{
+    if (!s_started) {
+        return 0;
+    }
+
+    switch (event->type) {
+        case BLE_GAP_EVENT_CONNECT:
+            if (event->connect.status == 0) {
+                const uint8_t fabrics = chip::Server::GetInstance().GetFabricTable().FabricCount();
+                if (fabrics != 0) {
+                    break;
+                }
+                ESP_LOGI(TAG, "Coexistence: BLE GAP connected — WiFi STA disconnect (fabrics=0)");
+                Serial.println("[Matter] BLE verbunden — WiFi getrennt für Funk-Koexistenz.\r\n");
+                // Before esp_wifi_disconnect(): suppress WiFi reconnect timer — otherwise
+                // STA_DISCONNECTED immediately starts connectToWiFi() during PASE (0x213).
+                mqttSetMatterWifiReconnectHold(true);
+                s_matter_gap_wifi_coex_engaged.store(true, std::memory_order_release);
+                esp_err_t w = esp_wifi_disconnect();
+                if (w != ESP_OK && w != ESP_ERR_WIFI_NOT_STARTED) {
+                    ESP_LOGW(TAG, "esp_wifi_disconnect: %s", esp_err_to_name(w));
+                }
+            }
+            break;
+        case BLE_GAP_EVENT_DISCONNECT:
+            if (s_matter_gap_wifi_coex_engaged.exchange(false, std::memory_order_acq_rel)) {
+                ESP_LOGI(TAG, "Coexistence: BLE GAP disconnected — WiFi STA reconnect");
+                Serial.println("[Matter] BLE getrennt — WiFi reconnect.\r\n");
+                mqttSetMatterWifiReconnectHold(false);
+                esp_err_t w = esp_wifi_connect();
+                if (w != ESP_OK && w != ESP_ERR_WIFI_CONN) {
+                    ESP_LOGW(TAG, "esp_wifi_connect: %s", esp_err_to_name(w));
+                }
+            }
+            break;
+        default:
+            break;
+    }
+    return 0;
+}
+
+static void registerMatterBleGapWifiCoexListener()
+{
+    int r = ble_gap_event_listener_register(&s_matter_gap_wifi_coex_listener, matterGapWifiCoexEvent, nullptr);
+    if (r != 0) {
+        ESP_LOGW(TAG, "ble_gap_event_listener_register(coex) failed: %d", r);
+    } else {
+        ESP_LOGI(TAG, "NimBLE GAP coex listener registered (WiFi off during BLE while uncommissioned)");
+    }
+}
+#endif // MATTER_WIFI_STA_OFF_DURING_BLE_GAP
+
+/**
+ * Clear Matter WiFi reconnect suppression; if aggressive STA coex was active, reconnect.
+ * NimBLE GAP DISCONNECT and CHIP BLE/session events can arrive in either order — this
+ * covers commissioning-complete and error paths when GAP alone would miss cleanup.
+ */
+static void matterReleaseGapWifiCoexSession()
+{
+    mqttSetMatterWifiReconnectHold(false);
+#if MATTER_WIFI_STA_OFF_DURING_BLE_GAP
+    if (s_matter_gap_wifi_coex_engaged.exchange(false, std::memory_order_acq_rel)) {
+        esp_err_t w = esp_wifi_connect();
+        if (w != ESP_OK && w != ESP_ERR_WIFI_CONN) {
+            ESP_LOGW(TAG, "esp_wifi_connect (coex release): %s", esp_err_to_name(w));
+        }
+        ESP_LOGI(TAG, "Matter: coexistence released (CHIP path) — WiFi STA reconnect");
+        Serial.println("[Matter] Coexistence beendet (CHIP) — WiFi verbindet wieder.\r\n");
+    }
+#endif
 }
 
 // =============================================================================
@@ -624,6 +1152,35 @@ void matterBridgeStart()
              heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
              heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 
+    // ── Verbose BLE/CHIP logging during commissioning debugging ───────────────
+    // CONFIG_LOG_MAXIMUM_LEVEL is raised to 4 (DEBUG) at compile time, but the
+    // global runtime default stays at INFO (CONFIG_LOG_DEFAULT_LEVEL=3) to keep
+    // other components quiet. Here we selectively raise a handful of Matter/BLE
+    // tags to DEBUG so that the full BTP handshake path is visible:
+    //   • "chip[DL]"  — DeviceLayer: BLE GAP/GATT events, WiFi events, heartbeats
+    //   • "chip[BLE]" — BleLayer: BTP engine, endpoint state machine
+    //   • "Ble"       — BLEEndPoint / BTPEngine (DriveSending, ACK timers)
+    //   • "NimBLE"    — host-controller activity (advertise, indicate, notify_tx)
+    //   • "CHIP[DL]"  — uppercase variant used by some CHIP call sites
+    //
+    // This is what lets us see "Sending indication for CHIPoBLE TX…",
+    // "Confirm received for CHIPoBLE TX…" and BTP state transitions during
+    // the 15 s window where Apple Home would otherwise silently fail.
+    esp_log_level_set("chip[DL]",  ESP_LOG_DEBUG);
+    esp_log_level_set("chip[BLE]", ESP_LOG_DEBUG);
+    esp_log_level_set("Ble",       ESP_LOG_DEBUG);
+    esp_log_level_set("NimBLE",    ESP_LOG_DEBUG);
+    esp_log_level_set("CHIP[DL]",  ESP_LOG_DEBUG);
+    ESP_LOGI(TAG, "Verbose BLE/CHIP logging enabled for commissioning diagnosis.");
+
+#if MATTER_LOG_EXTRA_CHIP_TAGS
+    esp_log_level_set("chip[IN]", ESP_LOG_DEBUG);
+    esp_log_level_set("chip[EM]", ESP_LOG_DEBUG);
+    esp_log_level_set("chip[SC]", ESP_LOG_DEBUG);
+    esp_log_level_set("chip[DMG]", ESP_LOG_DEBUG);
+    ESP_LOGI(TAG, "Extra chip[IN/EM/SC/DMG] DEBUG enabled (MATTER_LOG_EXTRA_CHIP_TAGS).");
+#endif
+
     esp_err_t err = esp_matter::start(on_device_event);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_matter::start() failed: %s", esp_err_to_name(err));
@@ -631,6 +1188,22 @@ void matterBridgeStart()
     }
 
     s_started = true;
+
+    // Receive low-level BLE / commissioning ChipDeviceEvents that esp_matter does not pass
+    // to on_device_event (verified on-device: CHIPoBLE RX writes in log but no hold ON).
+    chip::DeviceLayer::PlatformMgr().AddEventHandler(platformBleHoldEventHandler, 0);
+    matterSerialChipf("PlatformMgr: zweiter Event-Handler registriert (BLE-Details).");
+    esp_log_level_set(TAG, ESP_LOG_DEBUG);
+#if MATTER_BLE_GAP_DIAG_LISTENER
+    esp_log_level_set(TAG_BLE_GAP, ESP_LOG_WARN);
+    registerMatterBleGapDiagListener();
+#elif MATTER_THROTTLE_APP_TASKS_DURING_CHIPOBLE
+    registerMatterBleGapSessionListener();
+#endif
+
+#if MATTER_WIFI_STA_OFF_DURING_BLE_GAP
+    registerMatterBleGapWifiCoexListener();
+#endif
 
     // Cache QR code and pairing code for WebUI (safe here — called from CHIP task context)
     {
@@ -647,6 +1220,9 @@ void matterBridgeStart()
         chip::RendezvousInformationFlags(chip::RendezvousInformationFlag::kBLE));
 
     ESP_LOGI(TAG, "Matter Bridge started — waiting for commissioning.");
+
+    // Do not call syncBleGapRadioHoldFromStack() here — it drives mqttSetBleRadioHold(),
+    // which uses FreeRTOS timers that are not created until Setup.cpp runs initTimers().
 
     // Apply initial reachability state for conditional endpoints
     matterUpdateConditionalEndpoints(storage.Salt_Chlor);
@@ -958,6 +1534,18 @@ static void handleSerialCommands()
                 Serial.printf("[Matter] Pump EPs — filt:%u  ph:%u  heat:%u  salt:%u  chl:%u\r\n",
                               s_ep_filt, s_ep_ph, s_ep_heat, s_ep_salt, s_ep_chl);
             }
+            // ── MATTER_FACTORY_RESET ────────────────────────────────────────
+            //  Wipes all fabrics / NOCs / ACLs and reboots. Use when Apple Home
+            //  (or any controller) refuses to add the device because it is
+            //  "already paired" — i.e., leftover fabric state from an earlier
+            //  commissioning attempt that was never successfully removed.
+            else if (strcmp(s_line_buf, "MATTER_FACTORY_RESET") == 0) {
+                if (matterFactoryReset()) {
+                    Serial.println("[Matter] Factory reset scheduled — device will reboot in ~1 s.");
+                } else {
+                    Serial.println("[Matter] Factory reset FAILED (stack not started).");
+                }
+            }
             // Unknown command (ignore silently — avoid noise from other serial traffic)
         } else {
             s_line_buf[s_line_len++] = c;
@@ -970,21 +1558,50 @@ static void handleSerialCommands()
 // =============================================================================
 void MatterSyncTask(void *pvParameters)
 {
-    const TickType_t period   = pdMS_TO_TICKS(MATTER_SYNC_PERIOD_MS);
-    TickType_t       lastWake = xTaskGetTickCount();
+    const TickType_t periodFast = pdMS_TO_TICKS(100); // while uncommissioned: poll BLE link for GAP connect
+    const TickType_t periodSlow = pdMS_TO_TICKS(MATTER_SYNC_PERIOD_MS);
+    TickType_t       lastWake   = xTaskGetTickCount();
+    bool             prev_scan_ble = false;
 
     for (;;) {
+        const bool scanBle =
+            (startTasks && s_started && chip::Server::GetInstance().GetFabricTable().FabricCount() == 0);
+        const TickType_t period = scanBle ? periodFast : periodSlow;
+        if (scanBle != prev_scan_ble) {
+            prev_scan_ble = scanBle;
+            lastWake      = xTaskGetTickCount();
+        }
         vTaskDelayUntil(&lastWake, period);
 
         // Process serial commands (SET_SOLAR_NODE etc.)
         handleSerialCommands();
 
         if (startTasks && s_started) {
-            matterBridgeSync();
+            // bleRadioHoldPollWork posts to the CHIP Platform event queue. Doing that every
+            // 100 ms while uncommissioned floods the queue — BLE GATT writes then fail with
+            // "Failed to post event to CHIP Platform event queue" / 0x01000000 (see serial log).
+#if !MATTER_NO_MQTT_UNTIL_COMMISSIONED
+            if (scanBle) {
+                const CHIP_ERROR sErr = chip::DeviceLayer::PlatformMgr().ScheduleWork(bleRadioHoldPollWork, 0);
+                if (sErr != CHIP_NO_ERROR) {
+                    ESP_LOGW(TAG, "ScheduleWork(bleRadioHoldPollWork) failed: %" CHIP_ERROR_FORMAT, sErr.Format());
+                }
+            }
+#endif
+
+            // Skip periodic sync while BLE commissioning is in progress:
+            // each attribute::update() takes the CHIP stack lock and generates
+            // subscription report traffic, competing with the BTP/PASE handshake
+            // for both the CHIP task and the shared BLE/WiFi radio.
+            if (matterIsBleCommissioning()) {
+                ESP_LOGD(TAG, "MatterSync skipped — BLE commissioning in progress.");
+            } else {
+                matterBridgeSync();
+            }
 
 #ifdef CONFIG_ESP_MATTER_CONTROLLER_ENABLE
             // Start subscriptions once Matter is running and config is available
-            if (s_solar_node_id != 0 && !s_solar_subscribed) {
+            if (s_solar_node_id != 0 && !s_solar_subscribed && !matterIsBleCommissioning()) {
                 subscribeToSolarControl(s_solar_node_id);
             }
 #endif
@@ -1040,6 +1657,126 @@ bool matterOpenCommissioningWindow(uint16_t timeoutSec)
         ESP_LOGE(TAG, "ScheduleWork for commissioning window failed: %" CHIP_ERROR_FORMAT, err.Format());
         return false;
     }
+    return true;
+}
+
+// =============================================================================
+//  Public: Factory reset — wipe all Matter fabrics & reboot
+// =============================================================================
+//
+//  Implementation detail:
+//    chip::Server::GetInstance().ScheduleFactoryReset() calls
+//    ConfigurationMgr().InitiateFactoryReset() which
+//      1. Erases all persistent Matter state
+//         (fabrics, NOC chain, ACL, group keys, NVS counters).
+//      2. Schedules an esp_restart() after a short delay (~500 ms) so the
+//         response to the caller can still be flushed.
+//    We wrap it with ScheduleWork so it always runs in the CHIP task context,
+//    regardless of which task calls matterFactoryReset() (WebUI / Serial CLI).
+//
+// Direct NVS fallback: wipes exactly the same namespaces as Matter's
+// ConfigurationManagerImpl::DoFactoryReset() — without requiring the CHIP task
+// to run. We use this because when the CHIP event loop is starved (e.g. during
+// a failed BTP handshake), ScheduleWork-based resets never actually execute.
+//
+// Namespaces cleared (all in default NVS partition):
+//   • chip-config    — general device config + fabric descriptors
+//   • chip-counters  — reliable-messaging counters, session counters
+//   • chip-kvs       — key-value store (fabric keys, ACL entries, group keys)
+// We deliberately KEEP:
+//   • chip-factory   — persistent device identity (setup code, DAC, CD, VID/PID)
+//   • namespaces used by PoolMaster for its own settings
+//
+// After NVS erase we also call esp_wifi_restore() to clear stored STA creds
+// that Matter wrote at commissioning time, then esp_restart() to reboot.
+static void directNvsFactoryReset()
+{
+    Serial.println("[Matter] Direct NVS factory reset: erasing chip-config / chip-counters / chip-kvs…");
+
+    const char * namespaces_to_clear[] = { "chip-config", "chip-counters", "chip-kvs" };
+    for (const char * ns : namespaces_to_clear) {
+        nvs_handle_t h;
+        esp_err_t e = nvs_open(ns, NVS_READWRITE, &h);
+        if (e == ESP_OK) {
+            esp_err_t ee = nvs_erase_all(h);
+            esp_err_t ec = nvs_commit(h);
+            nvs_close(h);
+            Serial.printf("[Matter]   namespace '%s': erase=%s commit=%s\n",
+                          ns, esp_err_to_name(ee), esp_err_to_name(ec));
+        } else if (e == ESP_ERR_NVS_NOT_FOUND) {
+            Serial.printf("[Matter]   namespace '%s': not present (already clean)\n", ns);
+        } else {
+            Serial.printf("[Matter]   namespace '%s': nvs_open failed: %s\n",
+                          ns, esp_err_to_name(e));
+        }
+    }
+
+    // Clear Matter-provisioned WiFi credentials (safe: PoolMaster re-writes them on boot)
+    esp_err_t we = esp_wifi_restore();
+    Serial.printf("[Matter]   esp_wifi_restore: %s\n", esp_err_to_name(we));
+
+    Serial.println("[Matter] Direct NVS factory reset complete — rebooting in 500 ms…");
+    Serial.flush();
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+}
+
+static void factoryResetWork(intptr_t /*arg*/)
+{
+    Serial.println("[Matter] factoryResetWork() running on CHIP task — calling ScheduleFactoryReset()");
+    ESP_LOGW(TAG, "Matter factory reset triggered — wiping fabrics, ACL, NOC chain…");
+    chip::Server::GetInstance().ScheduleFactoryReset();
+}
+
+// Watchdog task: if the CHIP task doesn't reboot the device within the
+// graceful window, we do a direct NVS wipe + esp_restart() ourselves.
+static void factoryResetWatchdog(void * /*arg*/)
+{
+    // Give the CHIP task 3 seconds to process ScheduleFactoryReset() and call
+    // esp_restart(). If we're still alive afterwards, the CHIP task is stuck.
+    vTaskDelay(pdMS_TO_TICKS(3000));
+    Serial.println("[Matter] CHIP task did not reboot within 3 s — falling back to direct NVS wipe.");
+    directNvsFactoryReset();
+    // esp_restart() doesn't return, but guard against it:
+    vTaskDelete(nullptr);
+}
+
+bool matterFactoryReset()
+{
+    Serial.println("[Matter] matterFactoryReset() called.");
+
+    // Even if the CHIP stack isn't started (s_started == false) we still need
+    // to wipe NVS so the next boot comes up fresh. Don't bail early.
+    if (!s_started) {
+        ESP_LOGE(TAG, "matterFactoryReset(): Matter stack not started — doing direct NVS wipe.");
+        Serial.println("[Matter] Matter stack not started — skipping ScheduleWork, wiping NVS directly.");
+        directNvsFactoryReset();
+        return true; // never returns (reboots)
+    }
+
+    // Step 1: schedule the graceful reset path (CHIP task will call esp_restart)
+    auto err = chip::DeviceLayer::PlatformMgr().ScheduleWork(factoryResetWork, 0);
+    if (err != CHIP_NO_ERROR) {
+        ESP_LOGE(TAG, "ScheduleWork for factory reset failed: %" CHIP_ERROR_FORMAT, err.Format());
+        Serial.printf("[Matter] ScheduleWork failed (%s) — falling back to direct NVS wipe.\n",
+                      err.Format());
+        directNvsFactoryReset();
+        return true; // never returns (reboots)
+    }
+
+    // Step 2: start a watchdog that reboots us even if the CHIP task is stuck
+    // (this was the observed failure mode — CHIP task starved during commissioning
+    // and not processing queued events).
+    TaskHandle_t dummy;
+    BaseType_t ok = xTaskCreatePinnedToCore(factoryResetWatchdog, "FRWatchdog", 4096, nullptr,
+                                            10, &dummy, 1); // high priority, Core 1
+    if (ok != pdPASS) {
+        Serial.println("[Matter] Watchdog task creation failed — doing immediate direct NVS wipe.");
+        directNvsFactoryReset();
+        return true;
+    }
+
+    Serial.println("[Matter] Factory reset scheduled; watchdog will force-wipe + reboot in 3 s if CHIP stalls.");
     return true;
 }
 

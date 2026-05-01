@@ -5,6 +5,7 @@
 #include <Arduino.h>
 #include "Config.h"
 #include "PoolMaster.h"
+#include "MatterBridge.h"
 
 // Functions prototypes
 bool saveParam(const char* key, uint8_t val);
@@ -57,6 +58,7 @@ void ProcessCommand(void *pvParameters)
   #endif
 
   for(;;) {
+    matterYieldAppTasksIfChipobleBusy();
     #ifdef CHRONO
     td = millis();
     #endif

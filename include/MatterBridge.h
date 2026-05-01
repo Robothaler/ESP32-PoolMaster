@@ -97,6 +97,56 @@ bool matterGetManualPairingCode(char* buf, size_t size);
  */
 bool matterOpenCommissioningWindow(uint16_t timeoutSec = 900);
 
+/**
+ * @brief Reflects Matter “radio quiet / MQTT hold” state used by PublishTopic.
+ *
+ *        When `MATTER_NO_MQTT_UNTIL_COMMISSIONED` is enabled, this is true for
+ *        the entire time **no fabric** exists (`FabricCount()==0`) — not only
+ *        while a phone is connected over BLE. That matches `mqttSetBleRadioHold`
+ *        and intentionally suppresses noisy MQTT during possible commissioning.
+ *
+ *        Do **not** use this to gate unrelated UI (e.g. Nextion); it is not a
+ *        “CHIPoBLE link up” detector. For BLE link state use ConnectivityMgr
+ *        from the CHIP task or `NumBLEConnections()` where appropriate.
+ *
+ *        Safe to call from any task (atomic read).
+ */
+bool matterIsBleCommissioning();
+
+/**
+ * @brief Yield CPU when a CHIPoBLE commissioning session is in progress (no fabric yet).
+ *
+ *        Intended at the top of Core-1 control loops (PoolMaster, polling, …).
+ *        Controlled by MATTER_THROTTLE_APP_TASKS_DURING_CHIPOBLE / MATTER_CHIPOBLE_APP_YIELD_MS.
+ *        No-op when Matter is disabled.
+ */
+void matterYieldAppTasksIfChipobleBusy();
+
+/**
+ * @brief Apply MATTER_NO_MQTT_UNTIL_COMMISSIONED radio/MQTT hold after mqtt_comm
+ *        initTimers() has created the reconnect timers. Call once from Setup —
+ *        must not run before initTimers() or xTimerStop asserts on a null handle.
+ */
+void matterApplyRadioHoldAfterTimersReady();
+
+/**
+ * @brief Wipe all Matter fabrics, ACL entries, group keys, NOC chain and
+ *        counter state, then reboot.
+ *
+ *        Use this when Apple Home (or any other controller) reports
+ *        "already paired / already added to another Home" — this happens when
+ *        leftover fabric entries in NVS survive an incomplete commissioning
+ *        or a remove-from-Home that did not reach the device.
+ *
+ *        The device will perform a full ESP restart after the reset completes
+ *        (≈ 1-2 s). After reboot the commissioning window opens automatically
+ *        again because no fabric is present.
+ *
+ * @returns true if the reset was successfully scheduled on the CHIP task
+ *          (the function itself returns before the reboot happens).
+ */
+bool matterFactoryReset();
+
 // ---------------------------------------------------------------------------
 // Public API — SolarControl Matter Controller (CONFIG_ESP_MATTER_CONTROLLER_ENABLE)
 // ---------------------------------------------------------------------------
@@ -123,5 +173,13 @@ void sendCirculationCommand(bool on);
  * @param on  true = turn on illumination, false = turn off
  */
 void sendIlluminationCommand(bool on);
+
+#else  // !MATTER_ENABLED
+
+// Non-Matter builds: provide a no-op stub so callers (Publish.cpp etc.)
+// don't need to sprinkle #ifdef MATTER_ENABLED around every call site.
+#include <stdbool.h>
+static inline bool matterIsBleCommissioning() { return false; }
+static inline void matterYieldAppTasksIfChipobleBusy() {}
 
 #endif // MATTER_ENABLED

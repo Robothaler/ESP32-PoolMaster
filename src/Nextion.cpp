@@ -14,6 +14,31 @@
 #include "PoolMaster.h"
 #include "EasyNextionLibrary.h"
 
+/** DS18 NVS addresses mirrored in `storage` after loadConfig — do not read NVS here (race with prefs). */
+static const uint8_t* dsAddrSlotW(int idx)
+{
+    switch (idx) {
+        case 0: return storage.address_W_0;
+        case 1: return storage.address_W_1;
+        case 2: return storage.address_W_2;
+        case 3: return storage.address_W_3;
+        case 4: return storage.address_W_4;
+        default: return storage.address_W_0;
+    }
+}
+
+static const uint8_t* dsAddrSlotA(int idx)
+{
+    switch (idx) {
+        case 0: return storage.address_A_0;
+        case 1: return storage.address_A_1;
+        case 2: return storage.address_A_2;
+        case 3: return storage.address_A_3;
+        case 4: return storage.address_A_4;
+        default: return storage.address_A_0;
+    }
+}
+
 static volatile int CurrentPage = 0;
 static volatile bool TFT_ON = true;           // display status
 static volatile bool refresh = false;         // flag to force display refresh
@@ -91,11 +116,9 @@ static struct TFTStruct
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
   99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
   99,
-  "", "", "", "", "", "", "", "",
+  "",   "", "", "", "", "", "", "",
   "", "", "", "", "", "",
 };
-
-extern Preferences nvs;
 
 //Nextion TFT object. Choose which ever Serial port
 //you wish to connect to (not "Serial" which is used for debug), here Serial2 UART
@@ -701,9 +724,7 @@ void UpdateTFT()
         const char* name = NV_STORAGE_MAPPING_W[storage.Array_W[i]];
         char addrStr[18];
         byte storedAddr[8];
-        char nvsKey[16];
-        snprintf(nvsKey, sizeof(nvsKey), "address_W_%d", i);
-        nvs.getBytes(nvsKey, storedAddr, 8);
+        memcpy(storedAddr, dsAddrSlotW(i), 8);
         snprintf(addrStr, sizeof(addrStr), "%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X",
                 storedAddr[0], storedAddr[1], storedAddr[2], storedAddr[3],
                 storedAddr[4], storedAddr[5], storedAddr[6], storedAddr[7]);
@@ -727,9 +748,7 @@ void UpdateTFT()
         const char* name = NV_STORAGE_MAPPING_A[storage.Array_A[i]];
         char addrStr[18];
         byte storedAddr[8];
-        char nvsKey[16];
-        snprintf(nvsKey, sizeof(nvsKey), "address_A_%d", i);
-        nvs.getBytes(nvsKey, storedAddr, 8);
+        memcpy(storedAddr, dsAddrSlotA(i), 8);
         snprintf(addrStr, sizeof(addrStr), "%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X",
                 storedAddr[0], storedAddr[1], storedAddr[2], storedAddr[3],
                 storedAddr[4], storedAddr[5], storedAddr[6], storedAddr[7]);

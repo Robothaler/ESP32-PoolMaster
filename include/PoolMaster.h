@@ -105,6 +105,11 @@ extern SemaphoreHandle_t mqttMutex;       // Mutex for MQTT publish (separate fr
 extern SemaphoreHandle_t i2cStatesMutex;  // Mutex for I2C states
 extern SemaphoreHandle_t i2cOutputMutex;  // Mutex for I2C output states
 
+/** Serializes Arduino Preferences (`Preferences nvs`) — not thread-safe across tasks. */
+extern SemaphoreHandle_t prefsMutex;
+void prefsLock(void);
+void prefsUnlock(void);
+
 bool lockI2C(); // Declaration of the lockI2C function
 void unlockI2C(); // Declaration of the unlockI2C function
 unsigned long getDurationSafe(unsigned long start, unsigned long current);
@@ -200,6 +205,24 @@ extern tm timeinfo;
 extern String Firmw;
 
 extern AsyncMqttClient mqttClient;                     // MQTT async. client
+
+#ifdef MATTER_ENABLED
+/**
+ * When true, disconnects from the MQTT broker and suppresses auto-reconnect.
+ * Used during Matter BLE commissioning: ESP32-S3 shares one radio for WiFi
+ * and BLE; MQTT keepalive (PING) bypasses PublishTopic() and still consumes
+ * airtime. Call with false when BLE is idle or commissioning has finished.
+ */
+void mqttSetBleRadioHold(bool hold);
+
+/**
+ * When true, WIFI_EVENT_STA_DISCONNECTED does not start wifiReconnectTimer and
+ * connectToWiFi() is a no-op. Used while BLE GAP is up and we intentionally
+ * called esp_wifi_disconnect() for radio coexistence — otherwise the reconnect
+ * timer immediately re-associates WiFi during PASE and breaks commissioning.
+ */
+void mqttSetMatterWifiReconnectHold(bool hold);
+#endif
 
 // Various flags
 extern volatile bool startTasks;                       // flag to start loop tasks       

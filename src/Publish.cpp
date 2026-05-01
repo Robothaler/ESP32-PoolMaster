@@ -7,6 +7,7 @@
 #include <Arduino.h>
 #include "Config.h"
 #include "PoolMaster.h"
+#include "MatterBridge.h"   // matterIsBleCommissioning() — no-op stub in non-Matter builds
 
 // Size of the buffer to store outgoing JSON messages
 #define PAYLOAD_BUFFER_LENGTH 256 // Increased to accommodate potential larger payloads
@@ -46,9 +47,26 @@ void stack_mon(UBaseType_t&);
 // Publishes a JSON document or string payload to a single topic.
 // BUG FIX: uses the dedicated mqttMutex (not the I2C mutex) so MQTT publishing
 // cannot block I2C operations in CombinedPollingTask / PCF8574Manager.
+//
+// BLE-COMMISSIONING GATE: The ESP32-S3 has a single antenna shared between
+// BLE and WiFi. During Matter BLE commissioning the BTP handshake requires
+// ~11 reliable GATT indications per second to complete in <15 s; heavy MQTT
+// traffic (retained publishes, PUBACKs, TCP retransmits) starves BLE on the
+// air and causes Apple Home to time out. While `matterIsBleCommissioning()`
+// is true we skip all publishes — the measurements are retained on the
+// broker from the previous cycle and the task will catch up automatically
+// as soon as the commissioning BLE session ends (~30-90 s typical).
+// In non-Matter builds matterIsBleCommissioning() is an inline `false` stub,
+// so this branch compiles away to nothing.
 void PublishTopic(const char* topic, const char* payload, size_t n)
 {
     if (!mqttMutex) return; // Guard against pre-init calls
+
+    if (matterIsBleCommissioning()) {
+        Debug.print(DBG_DEBUG, "[PublishTopic] Skipped (BLE commissioning in progress): %s", topic);
+        return;
+    }
+
     if (!xSemaphoreTake(mqttMutex, pdMS_TO_TICKS(1000))) {
         Debug.print(DBG_ERROR, "[PublishTopic] Failed to take mqttMutex for topic %s", topic);
         return;

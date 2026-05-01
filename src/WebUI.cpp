@@ -568,6 +568,17 @@ static void onWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
 #endif
                     return;
                 }
+                if (cmd.containsKey("MatterFactoryReset")) {
+#ifdef MATTER_ENABLED
+                    bool scheduled = matterFactoryReset();
+                    client->text(scheduled
+                        ? "{\"ack\":1,\"msg\":\"factory_reset_scheduled_device_will_reboot\"}"
+                        : "{\"ack\":0,\"err\":\"factory_reset_failed\"}");
+#else
+                    client->text("{\"ack\":0,\"err\":\"matter_not_built\"}");
+#endif
+                    return;
+                }
                 String s; serializeJson(cmd, s);
                 client->text(queueCommand(s.c_str(), s.length()) ?
                     "{\"ack\":1}" : "{\"ack\":0,\"err\":\"queue_full\"}");

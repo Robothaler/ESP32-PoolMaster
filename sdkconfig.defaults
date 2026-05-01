@@ -17,11 +17,21 @@ CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
 CONFIG_SPIRAM_RODATA=y
-# Route malloc()>=512B to PSRAM instead of internal RAM (default threshold was 16384).
-# This prevents heap fragmentation in the 181KB internal region caused by hundreds of
-# medium-sized allocations (WiFi task stack 6.6KB, Matter endpoint objects ~1-2KB each,
-# NimBLE host buffers, lwIP etc.). BLE controller still gets its contiguous block because
-# it uses heap_caps_malloc(MALLOC_CAP_INTERNAL) explicitly and is not affected by this.
+# Route WiFi/LwIP dynamic buffers to PSRAM (saves ~30-40KB internal RAM and matches
+# the SolarControl matter_dev reference config that commissions reliably with Apple Home).
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+
+# CORRECTED (2026-04-20): Keep CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512 ← THIS IS REQUIRED.
+#   Kconfig-Semantik: malloc()-Requests KLEINER als dieser Schwellwert kommen aus
+#   internem RAM, GRÖSSERE Requests werden bevorzugt nach PSRAM geroutet. Bei
+#   PoolMaster (BME280, BMP180, 7 DS18B20, Nextion, AsyncMqtt, ESPAsyncWebServer,
+#   WebSockets, SPIFFS, Pump-Scheduler, PoolServer etc.) saturiert der interne
+#   320 KB-Heap OHNE diese Einstellung innerhalb ~20 s auf < 8 KB frei (Messung
+#   aus serial-20260420_201953.log → "Heap int=5391"). Der CHIP-Task blockiert
+#   dann bei BTP/PASE-Allocations → Apple-Home-Timeout 0x213.
+#   Mit =512 bleibt intern ~50 KB frei, BLE/Matter-Handshake läuft wieder.
+#   SolarControl kann auf den Default (=16384) verzichten, weil es bei weitem
+#   nicht so viele Peripherie-Tasks/Treiber gleichzeitig hält wie PoolMaster.
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512
 
 # ── ESP32-S3 Instruction Cache / IRAM balance ──────────────────────────────────
@@ -84,6 +94,10 @@ CONFIG_BT_NIMBLE_ENABLED=y
 CONFIG_BT_CONTROLLER_DISABLED=n
 # BLE advertising used by Matter for commissioning; disable after commissioned if desired
 CONFIG_ENABLE_CHIPOBLE=y
+# Pin BLE controller to Core 0 (WiFi runs on Core 1, see CONFIG_ESP32_WIFI_TASK_PINNED_TO_CORE_1).
+# SolarControl matter_dev does the same — leaving the controller unpinned causes
+# scheduling jitter on the CHIPoBLE BTP handshake (~14 s stalls observed in our logs).
+CONFIG_BT_CTRL_PINNED_TO_CORE_0=y
 
 # ── BLE / BT controller memory reduction (prevents OOM crash on boot) ──────────
 # BT controller TLSF heap ≈ 50KB base + 10KB × MAX_ACT.
@@ -95,9 +109,14 @@ CONFIG_BT_CTRL_BLE_MAX_ACT=2
 CONFIG_BT_CTRL_BLE_ADV_REPORT_FLOW_CTRL_NUM=20
 CONFIG_BT_CTRL_SCAN_DUPL_CACHE_SIZE=20
 
-# NimBLE host buffers: use default (PSRAM-capable) allocator instead of INTERNAL.
-# With SPIRAM_USE_MALLOC=y this moves ~20KB of NimBLE ACL/event buffers to PSRAM,
-# freeing contiguous internal RAM for the BT controller heap.
+# CORRECTED (2026-04-20): Route NimBLE mbufs via DEFAULT allocator (general heap).
+#   Zusammen mit CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512 landen die meisten
+#   mbufs damit in PSRAM (etwas langsamer, aber OK). Ohne diese Einstellung
+#   (= ALLOC_MODE_INTERNAL wurde testweise gesetzt) drückten die NimBLE-Buffer
+#   zusätzlich auf den ohnehin knappen internen Heap → Matter-Commissioning
+#   scheiterte weiter. Messung serial-20260420_201953.log: Heap int fiel auf
+#   5391 Bytes, Long dispatch time 750 ms für Event-Type 2, 15 s CHIP-Stille,
+#   dann BLE 0x213.
 CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_DEFAULT=y
 
 # Reduce NimBLE max connections to 1: only 1 BLE link needed for commissioning
@@ -112,6 +131,9 @@ CONFIG_ESP32_WIFI_ENABLED=y
 CONFIG_ESP32_WIFI_TASK_PINNED_TO_CORE_1=y
 CONFIG_ESP32_WIFI_SOFTAP_SUPPORT=n
 CONFIG_ESP32_WIFI_NAN_ENABLE=n
+# Disable AMPDU RX – removes the WIFI_RX_BA_WIN >= 2*STATIC_RX_BUFFER_NUM constraint
+# and allows reducing static RX buffers without a build error.
+CONFIG_ESP32_WIFI_AMPDU_RX_ENABLED=n
 # Static RX buffers must be DMA-capable internal RAM. 10×1600=16KB (default);
 # 4×1600=6.4KB is the minimum. Saves ~9.6KB of contiguous DMA-capable RAM.
 CONFIG_ESP32_WIFI_STATIC_RX_BUFFER_NUM=4
@@ -127,7 +149,16 @@ CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT=12
 
 # Matter Controller: required for PoolMaster to send commands to SolarControl
 # and subscribe to SolarControl attribute reports.
-CONFIG_ESP_MATTER_CONTROLLER_ENABLE=y
+#
+# TEMPORARILY DISABLED (2026-04-19) for Apple Home commissioning debugging.
+# Controller-Subsystem läuft im selben CHIP-Task wie der BLE/CHIPoBLE-Handler;
+# bei aktiviertem Controller bekommt der Task nicht genug Zeit, die BTP-
+# Handshake-Pakete im Apple-Home-Timeout (15 s) zu beantworten.
+# Wieder auf =y setzen, sobald Commissioning stabil läuft. Anschließend muss
+# CONFIG_CHIP_TASK_STACK_SIZE ggf. wieder angehoben werden, falls Controller-
+# Pfad zu wenig Stack hat.
+# CONFIG_ESP_MATTER_CONTROLLER_ENABLE=y
+CONFIG_ESP_MATTER_CONTROLLER_ENABLE=n
 
 # ── NVS ───────────────────────────────────────────────────────────────────────
 # NVS partition (64 KB) shared between PoolMaster config (~16 KB) and Matter (~32 KB)
@@ -135,17 +166,42 @@ CONFIG_NVS_ENCRYPTION=n
 
 # ── Stack / heap tuning ────────────────────────────────────────────────────────
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
-CONFIG_CHIP_TASK_STACK_SIZE=8192
-# Bump CHIP main task priority so BLE/CHIPoBLE handshake is processed
-# promptly even when sensor/UI tasks are busy.  Apple Home was timing out
-# during PASE because the chip task (priority 1) was being preempted by
-# the high‑rate I²C/sensor loops.  Priority 7 sits above MQTT/AsyncTCP (5)
-# but below FreeRTOS timer task (1 below configMAX_PRIORITIES).
+# 16 KB statt vormals 8 KB — wie SolarControl matter_dev (commissioniert
+# zuverlässig). Die zusätzlichen 8 KB liegen im PSRAM-fähigen Heap; CHIP-Task
+# nutzt sie u.a. während der BTP-Reassembly + PASE-Handshake.
+CONFIG_CHIP_TASK_STACK_SIZE=16384
+# CHIP-Task-Priorität: 7 (statt Default 1).
+# PoolMaster hat ~14 FreeRTOS-Tasks, die alle mit Priority 1 auf app_cpu laufen
+# (CombinedPolling, PoolMaster, TempTask, readBME280, ChlorSaltRegulation,
+# pHRegulation, FlowMeasures, StatusLights, Publish-Tasks, otaTask, MatterSync,
+# Arduino-Loop). Der CHIP-Event-Loop läuft unpinned, bekam bei Priority 1
+# aber während Commissioning nicht genügend CPU-Zeit, um die BTP-Handshake-
+# Pakete innerhalb des Apple-Home-Timeouts (15 s) zu beantworten — siehe
+# logs/serial-2026*.log: nach "CHIPoBLE subscribe received" folgen 15 s
+# CHIP-Silence, dann "BLE GAP terminated reason 0x213".
+# Ursache: einzelne PoolMaster-Tasks können Core/Lock 3+ s blockieren
+# (z.B. TempTask t_max=3609 ms bei OneWire-Konvertierung); mit gleichem
+# Priority-Niveau wird CHIP dahinter einsortiert.
+# Priority 7 entspricht dem NimBLE-Host-Task → kein Vorrangproblem zwischen
+# BLE-Stack und Matter-Stack; PoolMaster-Tasks werden bei Commissioning-
+# Events preempted.
+# SolarControl läuft mit Priority 1 zuverlässig, weil es nur eine Handvoll
+# Tasks hat; hier haben wir viel mehr Last auf gleichem Prio-Level.
 CONFIG_CHIP_TASK_PRIORITY=7
 
 # ── Logging ───────────────────────────────────────────────────────────────────
+# Runtime default stays INFO so the serial console isn't flooded. We raise the
+# compile-time MAXIMUM level to DEBUG (=4) so that detailed logs for specific
+# tags (chip[DL], chip[BLE], Ble, NimBLE) can be enabled at runtime via
+# esp_log_level_set() — see matterBridgeStart() in src/MatterBridge.cpp.
+# This is what lets us see the CHIPoBLE TX indication path ("Sending
+# indication for CHIPoBLE TX…" / "Confirm received…") during BTP handshake
+# diagnosis, without bloating every other task's log output.
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_DEFAULT_LEVEL=3
+# CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT is not set
+CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
+CONFIG_LOG_MAXIMUM_LEVEL=4
 
 # ── mbedTLS / heap ────────────────────────────────────────────────────────────
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=y

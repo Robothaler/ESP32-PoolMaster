@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include "Config.h"
 #include "PoolMaster.h"
+#include "MatterBridge.h"
 //#include <ESP_Mail_Client.h>
 
 static WiFiClient wificlient;
@@ -168,6 +169,7 @@ Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID())
   {  
     // reset watchdog
     esp_task_wdt_reset();
+    matterYieldAppTasksIfChipobleBusy();
 
     #ifdef CHRONO
     td = millis();

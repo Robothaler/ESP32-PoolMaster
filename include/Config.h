@@ -6,10 +6,59 @@
 
 //Version of config stored in EEPROM
 //Random value. Change this value (to any other value) to revert the config to default values
-#define CONFIG_VERSION  10
+#define CONFIG_VERSION  11
 
 // Matter NVS version — bump to force re-commissioning (erases chip-kvs/chip-counters/chip-config)
-#define MATTER_NVS_VERSION  3
+#define MATTER_NVS_VERSION  5
+
+// While no Matter fabric exists, keep MQTT disconnected. ESP32-S3 shares 2.4 GHz for
+// Wi‑Fi and BLE; MQTT traffic reliably breaks CHIPoBLE / PASE (Apple then often shows
+// a misleading "already in a home" message). Set to 0 only if you accept broken pairing
+// in exchange for MQTT before the device is paired.
+#if !defined(MATTER_NO_MQTT_UNTIL_COMMISSIONED)
+#define MATTER_NO_MQTT_UNTIL_COMMISSIONED  1
+#endif
+
+// Extra 2.4 GHz headroom for CHIPoBLE while still uncommissioned:
+// • MAX power-save reduces how often STA holds the radio.
+// • STA disconnect on BLE GAP connect (`esp_wifi_disconnect`) frees the 2.4 GHz radio
+//   for PASE/BTP indications; without it we still saw zero NOTIFY_TX and Apple timeout
+//   (0x213) even with CPU yield. Trade-off: rare Apple flows that need STA+BLE at the
+//   same instant can show "Gerät wurde nicht gefunden" — then set this to 0.
+#if !defined(MATTER_WIFI_PS_MAX_WHILE_UNCOMMISSIONED)
+#define MATTER_WIFI_PS_MAX_WHILE_UNCOMMISSIONED  1
+#endif
+#if !defined(MATTER_WIFI_STA_OFF_DURING_BLE_GAP)
+#define MATTER_WIFI_STA_OFF_DURING_BLE_GAP  1
+#endif
+
+// NimBLE GAP listener: SUBSCRIBE / NOTIFY_TX (indication ACK) / MTU / disconnect — logs
+// to Serial + ESP_LOG even when ChipDeviceLayer does not post kCHIPoBLE* events (typical
+// on esp_matter + Apple commissioning debug). Set 0 to disable.
+#if !defined(MATTER_BLE_GAP_DIAG_LISTENER)
+#define MATTER_BLE_GAP_DIAG_LISTENER  1
+#endif
+
+// While CHIPoBLE session is active (phone wrote RX / subscribed), call a short
+// vTaskDelay() once per loop in high-rate pool tasks so NimBLE/CHIP get CPU time.
+// Safer than vTaskSuspend (no mutex deadlocks). Set to 0 to disable.
+//
+// On esp_matter + ESP32-NimBLE, kCHIPoBLEConnectionEstablished / WriteReceived
+// often never reach PlatformMgr handlers even though chip[DL] logs GATT traffic.
+// matterYieldAppTasksIfChipobleBusy() then never ran — CPU starvation, no TX
+// indications (Apple → "schon in einem Zuhause"). When MATTER_BLE_GAP_DIAG_LISTENER
+// is on, we mirror "session active" from NimBLE GAP CONNECT / SUBSCRIBE / DISCONNECT.
+#if !defined(MATTER_THROTTLE_APP_TASKS_DURING_CHIPOBLE)
+#define MATTER_THROTTLE_APP_TASKS_DURING_CHIPOBLE  1
+#endif
+#if !defined(MATTER_CHIPOBLE_APP_YIELD_MS)
+#define MATTER_CHIPOBLE_APP_YIELD_MS  15
+#endif
+
+// Extra Matter transport logs (PASE/CASE, message layer). Very chatty — default off.
+#if !defined(MATTER_LOG_EXTRA_CHIP_TAGS)
+#define MATTER_LOG_EXTRA_CHIP_TAGS  1
+#endif
 
 #define DEBUG_LEVEL     DBG_INFO    // Possible levels : NONE/ERROR/WARNING/INFO/DEBUG/VERBOSE
 
