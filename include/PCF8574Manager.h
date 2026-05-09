@@ -28,7 +28,11 @@ public:
         return instance;
     }
     void init();
+    /** Created from createTasks() when ENABLE_TASK_T15 (Config.h) — not from init(). */
+    static void updateTaskEntry(void* parameter);
     bool queuePinUpdate(uint8_t address, uint8_t pin, bool state, QueueHandle_t responseQueue = NULL);
+    /** Ersetzt den kompletten 8-Bit-Shadow und löst Schreiben aus (z. B. Status-LED-Port 0x24). */
+    bool queueFullStateUpdate(uint8_t address, uint8_t state, QueueHandle_t responseQueue = NULL);
     bool queueUpdate(uint8_t address, uint8_t state, QueueHandle_t responseQueue = NULL);
     uint8_t getState(uint8_t address);
 
@@ -38,9 +42,9 @@ private:
     PCF8574State states[4]; // Interne Zustände
     QueueHandle_t updateQueue; // Queue für Updates
     SemaphoreHandle_t stateMutex; // Mutex für Zustandszugriff
-    TaskHandle_t taskHandle; // Task-Handle für updateTask
     uint8_t getShadowState(uint8_t address); // Private Methode für Shadow-State-Zugriff
-    static void updateTask(void* parameter);
+    // Main loop for T15 (was static updateTask)
+    void runUpdateLoop();
 };
 
 #endif

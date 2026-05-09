@@ -2,6 +2,14 @@
 // =============================================================================
 //  MatterBridge.h — PoolMaster Matter Bridge
 // =============================================================================
+//  Default: Matter Bridge (Aggregator) with bridged pump endpoints + native
+//  temperature/solar endpoints for SolarControl (see MatterBridge.cpp).
+//
+//  Set MATTER_MINIMAL_DEVICE=1 (Config.h or -D build flag) for a **single**
+//  non-bridged On/Off plugin unit only — smaller descriptor tree, easier
+//  commissioning/PASE debugging. OnOff maps to FiltPump JSON. After tests, set
+//  0 and perform a Matter factory reset before re-adding the full bridge.
+//
 //  Exposes pool devices as a Matter Bridge (Aggregator) with child endpoints:
 //    EP_FILT  – Filterpumpe         (OnOff + ElectricalMeasurement)
 //    EP_PH    – PH-Pumpe            (OnOff)
@@ -45,6 +53,13 @@ void matterBridgeInit();
  *        Prints QR-code / manual pairing code to Serial.
  */
 void matterBridgeStart();
+
+/**
+ * @brief Push ESP wall time (NTP/RTC) into the CHIP system clock.
+ *        Call from Setup after NTP/time init — early matterBridgeStart() can run
+ *        before NTP, when gettimeofday is still Y2K; without this, CASE can stall after Sigma3.
+ */
+void matterResyncChipWallClockAfterNtp();
 
 /**
  * @brief Sync current pool state to Matter attribute values.

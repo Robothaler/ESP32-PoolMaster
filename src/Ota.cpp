@@ -3,6 +3,7 @@
 #include <SPIFFS.h>
 #ifdef MATTER_ENABLED
 #include "esp_wifi.h"
+#include "MatterBridge.h"
 #endif
 #include <HardwareSerial.h>
 #include "Arduino_DebugUtils.h"
@@ -132,18 +133,45 @@ void otaTask(void *pvParameters) {
   bool otaWiFiUp = (WiFi.status() == WL_CONNECTED);
 #endif
 
-  if (spiffsOk && otaWiFiUp) {
+  const bool canStartHttp = spiffsOk && otaWiFiUp;
+  static bool s_otaHttpServerStarted = false;
+
+  auto tryStartOtaHttpServer = [&]() {
+    if (s_otaHttpServerStarted || !canStartHttp)
+      return;
+#if defined(MATTER_ENABLED) && MATTER_DEFER_HTTP_SERVER_UNTIL_COMMISSIONED
+    if (matterFabricCount() == 0 && millis() < (unsigned long)MATTER_HTTP_SERVER_FALLBACK_MS)
+      return;
+#endif
     Debug.print(DBG_INFO, "[OTA] Setting up server...");
     server.on("/upload", HTTP_GET, [](AsyncWebServerRequest *request) {
       request->send(200, "text/html", "<form method='POST' action='/upload' enctype='multipart/form-data'><input type='file' name='file' accept='.tft'><input type='submit' value='Upload'></form>");
     });
     server.on(OTA_NEXTION_PATH, HTTP_POST, [](AsyncWebServerRequest *request) {}, handleFileUpload);
-    // Register WebUI routes (before server.begin())
     initWebUI();
     server.begin();
+    s_otaHttpServerStarted = true;
     Debug.print(DBG_INFO, "[OTA] Web server started on port %d", OTA_NEXTION_PORT);
+#if defined(MATTER_ENABLED) && MATTER_AGENT_DEBUG_NDJSON
+    // #region agent log
+    printf(
+        "NDJSON{\"sessionId\":\"e37f7a\",\"hypothesisId\":\"H6\",\"location\":\"Ota.cpp:otaTask\","
+        "\"message\":\"http_server_begin\",\"data\":{\"fabric\":%u,\"ms\":%lu},\"timestamp\":%lu}\n",
+        (unsigned)matterFabricCount(), (unsigned long)millis(), (unsigned long)millis());
+    // #endregion
+#endif
+  };
+
+  if (!canStartHttp) {
+    Debug.print(DBG_WARNING, "[OTA] No web server - SPIFFS or WiFi unavailable");
   } else {
-    Debug.print(DBG_WARNING, "[OTA] No web server - SPIFFS unavailable");
+#if defined(MATTER_ENABLED) && MATTER_DEFER_HTTP_SERVER_UNTIL_COMMISSIONED
+    Debug.print(DBG_INFO, "[OTA] Web server may defer until Matter fabric>0 or %lu ms fallback",
+                (unsigned long)MATTER_HTTP_SERVER_FALLBACK_MS);
+#endif
+#if !defined(MATTER_ENABLED) || !MATTER_DEFER_HTTP_SERVER_UNTIL_COMMISSIONED
+    tryStartOtaHttpServer();
+#endif
   }
 
   // WebSocket broadcast runs directly in this task loop every 5 s (every 5 × 980 ms ticks).
@@ -155,10 +183,16 @@ void otaTask(void *pvParameters) {
   for (;;) {
     esp_task_wdt_reset();
 
-    // WebSocket status broadcast every ~5 s
-    if (++broadcastTick >= 5) {
-      broadcastTick = 0;
-      webUIBroadcast();
+#if defined(MATTER_ENABLED) && MATTER_DEFER_HTTP_SERVER_UNTIL_COMMISSIONED
+    tryStartOtaHttpServer();
+#endif
+
+    // WebSocket status broadcast every ~5 s (only after server.begin)
+    if (s_otaHttpServerStarted) {
+      if (++broadcastTick >= 5) {
+        broadcastTick = 0;
+        webUIBroadcast();
+      }
     }
 
     // Check if a new .tft file was uploaded and needs to be sent to Nextion.

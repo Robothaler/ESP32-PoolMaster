@@ -34,6 +34,29 @@ constexpr float MIN_VALID_ORP_RAW = -2000.0; // Minimaler plausibler ORP-Rohwert
 constexpr float MAX_VALID_ORP_RAW = 2000.0;  // Maximaler plausibler ORP-Rohwert (mV)
 constexpr unsigned long SENSOR_ERROR_REPORT_INTERVAL = 600000; // 10 Minuten
 
+namespace {
+
+unsigned long dosageCapMs(unsigned long windowMs, unsigned long dailyLimitMs, unsigned long usedMs) {
+  unsigned long cap = windowMs;
+  if (dailyLimitMs == 0) return cap;
+  if (dailyLimitMs < cap) cap = dailyLimitMs;
+  if (usedMs >= dailyLimitMs) return 0;
+  const unsigned long rem = dailyLimitMs - usedMs;
+  if (rem < cap) cap = rem;
+  return cap;
+}
+
+void clampPhPidOutputForSafety() {
+  const unsigned long cap = dosageCapMs(storage.PhPIDWindowSize, storage.PhPumpUpTimeLimit, PhPump.UpTime);
+  if ((unsigned long)storage.PhPIDOutput > cap) storage.PhPIDOutput = (double)cap;
+}
+
+void clampOrpPidOutputForSafety() {
+  const unsigned long cap = dosageCapMs(storage.OrpPIDWindowSize, storage.ChlPumpUpTimeLimit, ChlPump.UpTime);
+  if ((unsigned long)storage.OrpPIDOutput > cap) storage.OrpPIDOutput = (double)cap;
+}
+
+} // namespace
 
 // DS18B20 SENSOR-Mapping to map the sensoradress with the Tempname
 const char* NV_STORAGE_MAPPING_A[] = {"SolarTemp", "SolarVLTemp", "SolarRLTemp", "AirInTemp", "AirTemp"}; // Mapping of A-BUS-Sensors to NVS
@@ -382,6 +405,8 @@ void CombinedPollingTask(void *pvParameters) {
           #endif
 
           unlockI2C();
+          // After potentially long I2C/ADC section: give NimBLE/CHIP time while BLE commissioning.
+          matterYieldAppTasksIfChipobleBusy();
       }
 
       #ifdef CHRONO
@@ -463,12 +488,12 @@ void StatusLights(void *pvParameters) {
             status |= (ChlPump.UpTimeError & 1) << 7;
         }
         (status & 0xF0) ? digitalWrite(BUZZER, HIGH) : digitalWrite(BUZZER, LOW);
-        if (WiFi.status() == WL_CONNECTED) status |= 0x01;
+        if (wifiStaConnected()) status |= 0x01;
         else status &= 0xFE;
         Debug.print(DBG_VERBOSE, "Status LED : 0x%02x", status);
 
         uint8_t invertedStatus = ~status;
-        PCF8574Manager::getInstance().queueUpdate(PCF8574_ADR, invertedStatus);
+        PCF8574Manager::getInstance().queueFullStateUpdate(PCF8574_ADR, invertedStatus);
         Debug.print(DBG_VERBOSE, "[StatusLights] Queued state 0x%02X for 0x24", status);
 
         #ifdef CHRONO
@@ -528,6 +553,7 @@ void pHRegulation(void *pvParameters) {
         #ifdef SIMU
         else newpHOutput = false;
         #endif
+        clampPhPidOutputForSafety();
         unsigned long now = millis();
         if (now - storage.PhPIDwindowStartTime > storage.PhPIDWindowSize) {
           storage.PhPIDwindowStartTime += storage.PhPIDWindowSize;
@@ -692,6 +718,7 @@ void ChlorSaltRegulation(void *pvParameters) {
 #ifdef SIMU
           else newChlOutput = false;
 #endif
+          clampOrpPidOutputForSafety();
           unsigned long now = millis();
           if (now - storage.OrpPIDwindowStartTime > storage.OrpPIDWindowSize) {
             storage.OrpPIDwindowStartTime += storage.OrpPIDWindowSize;

@@ -140,6 +140,15 @@ CONFIG_ESP32_WIFI_STATIC_RX_BUFFER_NUM=4
 
 # ── Matter / CHIP stack ────────────────────────────────────────────────────────
 CONFIG_ESP_MATTER_NVS_USE_COMPACT_ATTR_STORAGE=y
+# Move heavy work off the main CHIP event loop → shorter critical sections; helps
+# Apple Home pairing when PoolMaster tasks + AsyncTCP would otherwise starve BTP.
+CONFIG_ENABLE_BG_EVENT_PROCESSING=y
+# CASE Sigma3 uses wall-clock for cert validity; without this, CHIP GetClock_RealTimeMS fails on ESP32.
+CONFIG_ENABLE_SNTP_TIME_SYNC=y
+# CHIP Device Layer platform event queue (default raised for ESP32 in connectedhomeip PR #34202).
+# Too small → "Failed to post event to CHIP Platform event queue" / lambda 1000000 under load
+# (esp-matter #313, #656; esp-matter release/v1.3 uses 40).
+CONFIG_MAX_EVENT_QUEUE_SIZE=40
 
 # Matter Bridge + native Solar endpoints:
 #   Bridged:  Aggregator + 5 pumps = 6

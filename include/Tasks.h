@@ -2,7 +2,6 @@
 #define TASKS_H
 
 #pragma once
-#include "Tasks.h"
 #include "PoolMaster.h"
 #include "Ota.h"
 #include <freertos/FreeRTOS.h>
@@ -21,10 +20,13 @@ extern void MeasuresPublish(void*);
 extern void StatusLights(void*);
 extern void otaTask(void*);
 
-// T14: Matter state sync task (compiled only when MATTER_ENABLED is set)
+// T14: MatterSyncTask (created only if MATTER_ENABLED && ENABLE_TASK_T14)
 #ifdef MATTER_ENABLED
 extern void MatterSyncTask(void*);
 #endif
+
+// T15: PCF8574 I2C update worker — PCF8574Manager::updateTaskEntry, created in createTasks()
+// when ENABLE_TASK_T15 (Config.h). Static class method; see PCF8574Manager.h.
 
 // Globale Variablen
 void createTasks(int app_cpu, TaskHandle_t* pubSetTaskHandle, TaskHandle_t* pubMeasTaskHandle);

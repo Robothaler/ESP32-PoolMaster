@@ -4,6 +4,9 @@
 #include "Config.h"
 #include "PoolMaster.h"
 #include "MatterBridge.h"
+#if MATTER_ENABLED
+#include "MatterAppTaskSuspend.h"
+#endif
 //#include <ESP_Mail_Client.h>
 
 static WiFiClient wificlient;
@@ -24,9 +27,6 @@ bool saveParam(const char* key, unsigned long val);
 bool saveParam(const char* key, String val);
 bool saveParam(const char* key, const uint8_t* val, size_t size);
 bool saveParam(const char* key, double val);
-void SetPhPID(bool);
-void SetOrpPID(bool);
-void mqttErrorPublish(const char*);
 void publishSolarMode(int event);
 void UpdateTFT(void);
 void stack_mon(UBaseType_t&);
@@ -97,7 +97,8 @@ void setMotorValvePositionsForCleanMode()
     WP_Vorlauf.close();
     WP_Mischer.open();
     Bodenablauf.close();
-    Solarvalve.close();
+    if (!storage.SolarLocExt)
+      Solarvalve.close();
   } else if (storage.CleanMode && storage.ValveSwitch)
     {
       ELD_Treppe.open();
@@ -105,7 +106,8 @@ void setMotorValvePositionsForCleanMode()
       WP_Vorlauf.close();
       WP_Mischer.open();
       Bodenablauf.close();
-      Solarvalve.close();
+      if (!storage.SolarLocExt)
+        Solarvalve.close();
     }
 }
 
@@ -167,6 +169,9 @@ Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID())
 
   for(;;)
   {  
+#if MATTER_ENABLED
+    matterPoolMasterWdtRearmIfNeededAfterPase();
+#endif
     // reset watchdog
     esp_task_wdt_reset();
     matterYieldAppTasksIfChipobleBusy();
@@ -186,6 +191,32 @@ Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID())
     SaltPump.loop();
     PhPump.loop();
     ChlPump.loop();
+
+    static bool phDailyLimitNotified = false;
+    static bool chlDailyLimitNotified = false;
+    if (PhPump.UpTimeError) {
+      if (PhPID.GetMode() == AUTOMATIC) {
+        SetPhPID(false);
+        if (!phDailyLimitNotified) {
+          phDailyLimitNotified = true;
+          mqttErrorPublish("{\"error\":\"pH pump daily runtime limit reached; pH regulation switched to MANUAL\"}");
+        }
+      }
+    } else {
+      phDailyLimitNotified = false;
+    }
+    if (ChlPump.UpTimeError) {
+      if (OrpPID.GetMode() == AUTOMATIC) {
+        SetOrpPID(false);
+        if (!chlDailyLimitNotified) {
+          chlDailyLimitNotified = true;
+          mqttErrorPublish("{\"error\":\"Chlorine pump daily runtime limit reached; ORP regulation switched to MANUAL\"}");
+        }
+      }
+    } else {
+      chlDailyLimitNotified = false;
+    }
+
     RobotPump.loop();
     WaterFill.loop();
 
@@ -337,6 +368,31 @@ Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID())
     }
 
     // ******************************************************************************************
+    // POOL HEAT PUMP (Wärmepumpe) — AUTOMATIC MODE (HeatPumpMode): Zieltemperatur + Filterpumpe
+    // ******************************************************************************************
+    // Manuell (HeatPumpMode==0): keine Überlagerung; PCF_Pump verlangt weiterhin laufende Filterpumpe.
+    // Automatik: nur bei laufender Filterpumpe; nach 5 min Filterlauf wie WaterHeat (stabile Skimmer-Temp);
+    // Hysterese um Pendeln um den Sollwert zu vermeiden. Filter aus → Wärmepumpe aus (zusätzlich zur
+    // Interlock-Logik in PCF_Pump::loop).
+    if (storage.HeatPumpMode)
+    {
+        if (FiltrationPump.IsRunning())
+        {
+            if (FiltrationPump.UpTime / 1000 / 60 > 5)
+            {
+                if (storage.WaterSTemp < (storage.WaterTemp_SetPoint - HEAT_PUMP_AUTO_HYST_BELOW_SP))
+                    HeatPump.Start();
+                else if (storage.WaterSTemp > (storage.WaterTemp_SetPoint + HEAT_PUMP_AUTO_HYST_ABOVE_SP))
+                    HeatPump.Stop();
+            }
+        }
+        else
+        {
+            HeatPump.Stop();
+        }
+    }
+
+    // ******************************************************************************************
     // SOLAR HEATING LOCAL
     // ******************************************************************************************
 
@@ -345,13 +401,15 @@ Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID())
     if (storage.AutoMode && ((hour() == 12) && (minute() == 0)))
     {
     SolarPump.Start();
-    Solarvalve.open();
+    if (!storage.SolarLocExt)
+      Solarvalve.open();
     }
 
     if (storage.AutoMode && ((hour() == 12) && (minute() == 2)))
     {
     SolarPump.Stop();
-    Solarvalve.close();
+    if (!storage.SolarLocExt)
+      Solarvalve.close();
     }
 
     //If solar heating (SolarLocExt) is set to "local" and solar mode is set to "auto" mode and filtration has been running for over 5mins (so that measured water temp is accurate), open/close the solarvalve as required
@@ -460,14 +518,16 @@ Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID())
                 setStandardHeatPumpMotorValvePositions();
             }
 
-            // Manage WaterHeat Valves (Solar bypass)
+            // Manage WaterHeat Valves (Solar bypass) — local MotorValve only when not MQTT solar
             if (storage.WaterHeat)
             {
-                Solarvalve.open();
+                if (!storage.SolarLocExt)
+                  Solarvalve.open();
             }
             else
             {
-                Solarvalve.close();
+                if (!storage.SolarLocExt)
+                  Solarvalve.close();
             }
         }
 

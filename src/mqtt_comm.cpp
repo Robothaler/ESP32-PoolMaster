@@ -3,11 +3,13 @@
 
 #undef __STRICT_ANSI__
 #include <Arduino.h>
+#include <cstring>
 #include "Config.h"
 #include "PoolMaster.h"
 #ifdef MATTER_ENABLED
 #include "esp_wifi.h"
 #include "esp_event.h"
+#include "esp_netif.h"
 #include <atomic>
 #endif
 
@@ -25,18 +27,68 @@ bool MQTTConnection = false;                                    // Status of con
 static TimerHandle_t mqttReconnectTimer;                        // Reconnect timer for MQTT
 static TimerHandle_t wifiReconnectTimer;                        // Reconnect timer for WiFi
 
-#ifdef MATTER_ENABLED
 // In MATTER_ENABLED mode, Arduino's WiFi stack is never initialized (WiFi.begin() is
 // never called — doing so after esp_matter::start() would recreate netifs → crash).
-// We therefore bypass Arduino's WiFi event bridge entirely and register our own
-// esp-idf event handlers for IP_EVENT and WIFI_EVENT_STA_DISCONNECTED.
+// We register idf event handlers (below) for IP_EVENT and WIFI_EVENT_STA_DISCONNECTED.
 
+void UpdateWiFi(bool);
+bool wifiStaConnected(void);
+
+bool wifiStaGetIpv4String(char *buf, size_t bufLen)
+{
+  if (!buf || bufLen < 16) return false;
+#if MATTER_ENABLED
+  esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+  if (!sta) return false;
+  esp_netif_ip_info_t ip_info{};
+  if (esp_netif_get_ip_info(sta, &ip_info) != ESP_OK) return false;
+  if (ip_info.ip.addr == 0) return false;
+  if (esp_ip4addr_ntoa(&ip_info.ip, buf, (int)bufLen) == nullptr) return false;
+  return true;
+#else
+  if (WiFi.status() != WL_CONNECTED) return false;
+  IPAddress ip = WiFi.localIP();
+  snprintf(buf, bufLen, "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
+  return true;
+#endif
+}
+
+#if MATTER_ENABLED
+bool wifiStaConnected(void)
+{
+  wifi_ap_record_t ap{};
+  if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) return true;
+  char scratch[16];
+  return wifiStaGetIpv4String(scratch, sizeof(scratch));
+}
+#else
+bool wifiStaConnected(void)
+{
+  return WiFi.status() == WL_CONNECTED;
+}
+#endif
+
+bool nextionNetStatusOnline(void)
+{
+  if (MQTTConnection)
+    return true;
+#if MATTER_ENABLED
+  if (wifiStaConnected())
+    return true;
+#endif
+  if (!storage.MQTTLOGIN_OnOff && wifiStaConnected())
+    return true;
+  return false;
+}
+
+#ifdef MATTER_ENABLED
 static bool s_matter_wifi_handlers_registered = false;
 
 static void _matter_ip_event_cb(void*, esp_event_base_t, int32_t event_id, void*) {
   if (event_id == IP_EVENT_STA_GOT_IP) {
     Debug.print(DBG_INFO, "[WiFi] Got IP (Matter mode) — connecting MQTT");
     if (storage.WIFI_OnOff) connectToMqtt();
+    UpdateWiFi(wifiStaConnected());
   }
 }
 
@@ -45,6 +97,7 @@ static void _matter_wifi_event_cb(void*, esp_event_base_t, int32_t event_id, voi
     if (s_matter_wifi_reconnect_hold.load(std::memory_order_acquire)) {
       Debug.print(DBG_INFO,
                   "[WiFi] STA disconnected — WiFi reconnect suppressed (Matter BLE coexistence hold)");
+      UpdateWiFi(wifiStaConnected());
       return;
     }
     Debug.print(DBG_WARNING, "[WiFi] STA disconnected (Matter mode) — scheduling reconnect");
@@ -52,6 +105,7 @@ static void _matter_wifi_event_cb(void*, esp_event_base_t, int32_t event_id, voi
     if (wifiReconnectTimer != nullptr) {
       xTimerStart(wifiReconnectTimer, 0);
     }
+    UpdateWiFi(wifiStaConnected());
   }
 }
 
@@ -242,12 +296,8 @@ void connectToMqtt() {
     Debug.print(DBG_INFO, "[MQTT] Skipping connect — BLE radio hold (Matter commissioning)");
     return;
   }
-  wifi_ap_record_t _ap_info;
-  bool _wifiUp = (esp_wifi_sta_get_ap_info(&_ap_info) == ESP_OK);
-#else
-  bool _wifiUp = (WiFi.status() == WL_CONNECTED);
 #endif
-  if (!storage.WIFI_OnOff || !_wifiUp) {
+  if (!storage.WIFI_OnOff || !wifiStaConnected()) {
     Debug.print(DBG_INFO, "[MQTT] WiFi off or not connected, skipping MQTT");
     return;
   }
@@ -343,7 +393,7 @@ void connectToWiFi() {
       case ARDUINO_EVENT_WIFI_STA_CONNECTED:
         Debug.print(DBG_INFO, "[WiFi] Connected to: %s", WiFi.SSID().c_str());
         Debug.print(DBG_INFO, "[WiFi] Hostname: %s", WiFi.getHostname());
-        UpdateWiFi(true);
+        UpdateWiFi(wifiStaConnected());
         break;
       case ARDUINO_EVENT_WIFI_STA_GOT_IP:
         Debug.print(DBG_INFO, "[WiFi] Got IP: %s", WiFi.localIP().toString().c_str());
@@ -355,12 +405,13 @@ void connectToWiFi() {
           Debug.print(DBG_INFO, "[WiFi] Connecting to MQTT...");
           connectToMqtt();  // mqttInit() wird bereits im Setup aufgerufen
         }
+        UpdateWiFi(wifiStaConnected());
         break;
       case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
         Debug.print(DBG_WARNING, "[WiFi] Connection lost");
         xTimerStop(mqttReconnectTimer, 0);
         xTimerStart(wifiReconnectTimer, 0);
-        UpdateWiFi(false);
+        UpdateWiFi(wifiStaConnected());
         break;
       default:
         Debug.print(DBG_DEBUG, "[WiFi] Unhandled event: %d", event);

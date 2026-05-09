@@ -9,7 +9,8 @@
 //      reachable (hidden when storage.Salt_Chlor == false)
 //    • Power metering via ElectricalMeasurement cluster on Filt/Heat/Salt EPs
 //
-//  Thread safety:
+//  When MATTER_MINIMAL_DEVICE=1 (Config.h): one non-bridged On/Off plugin unit only
+//  (no Aggregator, no temp/solar EPs) — for commissioning / PASE bring-up.
 //    • Matter attribute callbacks run on the CHIP task (Core 0)
 //    • Pool control tasks run on Core 1
 //    • Commands from Matter → pool: via existing queueIn (FreeRTOS-safe)
@@ -26,6 +27,7 @@
 
 #include "MatterBridge.h"
 #include "Config.h"
+#include "MatterAppTaskSuspend.h"
 #include "PoolMaster.h"
 
 // PCF8574.h defines P0-P7 as integer pin-number macros (0-7), which conflict
@@ -48,6 +50,7 @@
 #include <esp_matter_core.h>
 #include <esp_matter_cluster.h>
 #include <esp_matter_identify.h>
+#include <esp_matter_attribute_utils.h>
 
 // ── CHIP / Matter stack headers ───────────────────────────────────────────────
 #include <platform/CHIPDeviceLayer.h>
@@ -57,6 +60,7 @@
 #include <app/server/Server.h>
 #include <credentials/DeviceAttestationCredsProvider.h>
 #include <credentials/examples/DeviceAttestationCredsExample.h>
+#include <system/SystemClock.h>
 
 // ── ESP-IDF NVS / system headers (needed for direct factory-reset fallback) ──
 #include <nvs.h>
@@ -66,6 +70,8 @@
 #include <esp_log.h>
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
+
+#include <sys/time.h>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -105,6 +111,26 @@ using namespace chip::app::Clusters;
 
 static const char *TAG = "MatterBridge";
 static const char *TAG_BLE_GAP = "MatterBLE";
+
+#if MATTER_AGENT_DEBUG_NDJSON
+#include <cstdio>
+// #region agent log
+static std::atomic<uint32_t> s_agent_notify_tx_total{ 0 };
+
+static void matterAgentDbgFn(const char *hypothesisId, const char *location, const char *message, int d1,
+                              unsigned d2)
+{
+    const long long ts = (long long)esp_timer_get_time();
+    printf( // NOLINT: raw UART NDJSON for Cursor debug ingest
+        "NDJSON{\"sessionId\":\"e37f7a\",\"hypothesisId\":\"%s\",\"location\":\"%s\",\"message\":\"%s\","
+        "\"data\":{\"d1\":%d,\"d2\":%u},\"timestamp\":%lld}\n",
+        hypothesisId, location, message, d1, d2, ts);
+}
+#define MATTER_AGENT_DBG(hid, loc, msg, d1, d2) matterAgentDbgFn((hid), (loc), (msg), (d1), (d2))
+// #endregion
+#else
+#define MATTER_AGENT_DBG(hid, loc, msg, d1, d2) ((void)0)
+#endif
 
 // =============================================================================
 //  Configuration constants (override in Config.h via -D flag if needed)
@@ -189,6 +215,126 @@ static bool     s_solar_subscribed = false;   // Subscription active
 // =============================================================================
 //  Internal helpers
 // =============================================================================
+
+/** Apple Home reads General Commissioning attrs 0x09–0x0C (Matter 1.3+). esp_matter does not
+ *  create them on this cluster yet. Use ATTRIBUTE_FLAG_NONE (external storage): MANAGED_INTERNALLY
+ *  leaves EmberAfAttributeMetadata type/size at 0, so IM reads fail even if the attr exists.
+ */
+static void matterPatchGeneralCommissioningAppleAttrs(node_t *node)
+{
+    constexpr uint32_t kClusterGc                  = 0x00000030u;
+    constexpr uint32_t kAttrTcUpdateDeadline       = 0x00000009u;
+    constexpr uint32_t kAttrRecoveryIdentifier     = 0x0000000Au;
+    constexpr uint32_t kAttrNetworkRecoveryReason  = 0x0000000Bu;
+    constexpr uint32_t kAttrIsCommissioningWoPower = 0x0000000Cu;
+
+    endpoint_t *ep = endpoint::get(node, 0);
+    if (!ep) {
+        ESP_LOGW(TAG, "GC Apple patch: endpoint 0 missing");
+        return;
+    }
+    cluster_t *cl = esp_matter::cluster::get(ep, kClusterGc);
+    if (!cl) {
+        ESP_LOGW(TAG, "GC Apple patch: GeneralCommissioning cluster missing");
+        return;
+    }
+
+    auto add_if_missing = [&](uint32_t aid, uint16_t flags, esp_matter_attr_val_t val, uint16_t max_sz = 0) {
+        if (attribute::get(cl, aid)) {
+            return;
+        }
+        attribute_t *a = attribute::create(cl, aid, flags, val, max_sz);
+        if (a) {
+            ESP_LOGI(TAG, "GC Apple patch: registered attribute 0x%08lx", (unsigned long)aid);
+        } else {
+            ESP_LOGW(TAG, "GC Apple patch: attribute::create failed for 0x%08lx", (unsigned long)aid);
+        }
+    };
+
+    // 0x09: nullable epoch-us — null = no TC deadline (wired pool controller).
+    add_if_missing(kAttrTcUpdateDeadline, ATTRIBUTE_FLAG_NONE, esp_matter_nullable_uint64(nullable<uint64_t>()));
+    add_if_missing(kAttrRecoveryIdentifier, ATTRIBUTE_FLAG_NONE, esp_matter_octet_str(nullptr, 0), 16);
+    add_if_missing(kAttrNetworkRecoveryReason, ATTRIBUTE_FLAG_NONE, esp_matter_enum8(0));
+    add_if_missing(kAttrIsCommissioningWoPower, ATTRIBUTE_FLAG_NONE, esp_matter_bool(false));
+}
+
+#if !(defined(CONFIG_ENABLE_ICD_SERVER) && CONFIG_ENABLE_ICD_SERVER)
+/** Apple Home issues reads against ICD Management (0x46) on the root endpoint even when
+ *  CONFIG_ENABLE_ICD_SERVER is off (no Thread MTD). Without this cluster, IM returns
+ *  UnsupportedCluster (logged as err …5c3 / status 0xc3) and commissioning aborts.
+ *  Provide a minimal non–sleepy stub: mains-powered Wi-Fi device (short idle, normal active).
+ */
+static void matterPatchIcdManagementAppleStub(node_t *node)
+{
+    endpoint_t *ep = endpoint::get(node, 0);
+    if (!ep) {
+        ESP_LOGW(TAG, "ICD Apple stub: endpoint 0 missing");
+        return;
+    }
+    constexpr uint32_t kIcdClusterId = IcdManagement::Id;
+    if (esp_matter::cluster::get(ep, kIcdClusterId)) {
+        return;
+    }
+    cluster_t *cl = esp_matter::cluster::create(ep, kIcdClusterId, CLUSTER_FLAG_SERVER);
+    if (!cl) {
+        ESP_LOGW(TAG, "ICD Apple stub: cluster create failed");
+        return;
+    }
+    constexpr uint16_t kIcdRevision = 2; // esp_matter_cluster_revisions icd_management
+    esp_matter::cluster::global::attribute::create_feature_map(cl, 0);
+    esp_matter::cluster::global::attribute::create_cluster_revision(cl, kIcdRevision);
+
+    auto add = [&](uint32_t aid, esp_matter_attr_val_t val, uint16_t max_sz = 0) {
+        if (attribute::get(cl, aid)) {
+            return;
+        }
+        attribute_t *a = attribute::create(cl, aid, ATTRIBUTE_FLAG_NONE, val, max_sz);
+        if (a) {
+            ESP_LOGI(TAG, "ICD Apple stub: registered attribute 0x%08lx", (unsigned long)aid);
+        } else {
+            ESP_LOGW(TAG, "ICD Apple stub: attribute::create failed for 0x%08lx", (unsigned long)aid);
+        }
+    };
+
+    add(IcdManagement::Attributes::IdleModeDuration::Id, esp_matter_uint32(1));
+    add(IcdManagement::Attributes::ActiveModeDuration::Id, esp_matter_uint32(300));
+    add(IcdManagement::Attributes::ActiveModeThreshold::Id, esp_matter_uint16(300));
+    add(IcdManagement::Attributes::UserActiveModeTriggerHint::Id, esp_matter_bitmap32(0));
+    add(IcdManagement::Attributes::UserActiveModeTriggerInstruction::Id, esp_matter_char_str(nullptr, 0),
+        esp_matter::cluster::icd_management::attribute::k_user_active_mode_trigger_instruction_length);
+}
+#else
+static void matterPatchIcdManagementAppleStub(node_t *) {}
+#endif
+
+/** Apple Home reads a manufacturer-extended cluster on endpoint 0 logged as clusterId **0x1349_FC00**
+ *  (ChipLogFormatMEI): high 16 bits are Apple's Matter vendor id **0x1349**, low 16 bits **0xFC00**
+ *  (manufacturer cluster range — same layout as ESP RainMaker **0x131BFC00**).
+ *  Attribute **0x00000001** must be readable; without the cluster, IM returns UnsupportedCluster (**err …5c3**)
+ *  and commissioning aborts (ArmFailSafe 0s / fail-safe expiry).
+ */
+static void matterPatchAppleHomeKitMeiStub(node_t *node)
+{
+    endpoint_t *ep = endpoint::get(node, 0);
+    if (!ep) {
+        ESP_LOGW(TAG, "Apple MEI stub: endpoint 0 missing");
+        return;
+    }
+    constexpr uint32_t kAppleHomeKitMeiClusterId = 0x1349FC00u;
+    if (esp_matter::cluster::get(ep, kAppleHomeKitMeiClusterId)) {
+        return;
+    }
+    cluster_t *cl = esp_matter::cluster::create(ep, kAppleHomeKitMeiClusterId, CLUSTER_FLAG_SERVER);
+    if (!cl) {
+        ESP_LOGW(TAG, "Apple MEI stub: cluster create failed");
+        return;
+    }
+    attribute::create(cl, Globals::Attributes::ClusterRevision::Id, ATTRIBUTE_FLAG_NONE, esp_matter_uint16(1));
+    /* Type for attr 1 is not public; UINT32 zero is a safe first guess (capability / flags pattern). */
+    constexpr uint32_t kAppleMeiAttr1 = 0x00000001u;
+    attribute::create(cl, kAppleMeiAttr1, ATTRIBUTE_FLAG_NONE, esp_matter_uint32(0));
+    ESP_LOGI(TAG, "Apple MEI stub: cluster 0x1349FC00 + ClusterRevision + attr 1 on EP0");
+}
 
 /**
  * @brief Send a JSON command string to the existing MQTT/Matter command queue.
@@ -477,7 +623,7 @@ static void on_device_event(const chip::DeviceLayer::ChipDeviceEvent *event, int
         case DeviceEventType::kCommissioningComplete:
             ESP_LOGI(TAG, "Matter commissioning complete!");
             Serial.println("[Matter] Commissioning erfolgreich abgeschlossen — Fabric angelegt.");
-#ifdef CONFIG_ESP_MATTER_CONTROLLER_ENABLE
+#if defined(CONFIG_ESP_MATTER_CONTROLLER_ENABLE) && !MATTER_MINIMAL_DEVICE
             if (s_solar_node_id != 0 && !s_solar_subscribed) {
                 subscribeToSolarControl(s_solar_node_id);
             }
@@ -632,6 +778,10 @@ static void processBleRadioHoldChipEvent(const chip::DeviceLayer::ChipDeviceEven
                      static_cast<long long>(t_us), static_cast<unsigned>(fabrics),
                      static_cast<unsigned>(ble_cons), heap_i);
             matterSerialChipf("CHIPoBLE: RX-Write (Phone schreibt)");
+#if MATTER_AGENT_DEBUG_NDJSON
+            MATTER_AGENT_DBG("H2", "CHIP_EVT", "WriteReceived", static_cast<int>(heap_i),
+                             static_cast<unsigned>(ble_cons));
+#endif
             if (s_started && fabrics == 0) {
                 s_chipoble_session_evt.store(true, std::memory_order_release);
                 syncBleGapRadioHoldFromStack();
@@ -681,6 +831,15 @@ static void processBleRadioHoldChipEvent(const chip::DeviceLayer::ChipDeviceEven
             s_chipoble_session_evt.store(false, std::memory_order_release);
             matterReleaseGapWifiCoexSession();
             syncBleGapRadioHoldFromStack();
+#if MATTER_SUSPEND_APP_TASKS_DURING_GAP_PASE
+            /* Always resume: commissioning often continues over Wi‑Fi after BLE teardown while
+             * FabricCount() is still 0 (until AddNOC). Leaving PoolMaster suspended that whole time
+             * trips the task watchdog (see serial: PoolMaster did not reset TWDT). Idempotent. */
+            matterResumeAppTasksAfterGapPase();
+#if MATTER_AGENT_DEBUG_NDJSON
+            MATTER_AGENT_DBG("H7", "CHIPoBLE", "task_resume_closed", (int)event->Type, (int)fabrics);
+#endif
+#endif
             break;
 
         case DeviceEventType::kCommissioningComplete:
@@ -689,6 +848,12 @@ static void processBleRadioHoldChipEvent(const chip::DeviceLayer::ChipDeviceEven
             s_chipoble_session_evt.store(false, std::memory_order_release);
             matterReleaseGapWifiCoexSession();
             syncBleGapRadioHoldFromStack();
+#if MATTER_SUSPEND_APP_TASKS_DURING_GAP_PASE
+            matterResumeAppTasksAfterGapPase();
+#if MATTER_AGENT_DEBUG_NDJSON
+            MATTER_AGENT_DBG("H7", "CommissioningComplete", "task_resume", 1, 0);
+#endif
+#endif
             break;
 
         case DeviceEventType::kFabricRemoved:
@@ -703,6 +868,11 @@ static void processBleRadioHoldChipEvent(const chip::DeviceLayer::ChipDeviceEven
             ESP_LOGW(TAG, "CHIP evt: FailSafeTimerExpired t=%lldus fabrics=%u", static_cast<long long>(t_us),
                      static_cast<unsigned>(fabrics));
             matterSerialChipf("Fail-Safe Timer abgelaufen");
+#if MATTER_SUSPEND_APP_TASKS_DURING_GAP_PASE
+            if (fabrics == 0) {
+                matterResumeAppTasksAfterGapPase();
+            }
+#endif
             break;
 
         case DeviceEventType::kSecureSessionEstablished:
@@ -766,6 +936,43 @@ static void chipobleSessionHintFromBleGap(bool active)
 // NimBLE posts GAP events for the same PHY actions — log them here for Apple commissioning.
 static struct ble_gap_event_listener s_matter_ble_gap_diag_listener;
 
+#if MATTER_AGENT_DEBUG_NDJSON
+static int64_t s_agent_gap_connect_us;
+static int64_t s_agent_tx_cccd_subscribe_us;
+#endif
+
+#if !MATTER_WIFI_STA_OFF_DURING_BLE_GAP && MATTER_WIFI_DISCONNECT_AFTER_BLE_INDICATE_SUBSCRIBE
+static esp_timer_handle_t s_wifi_subscribe_relief_timer;
+static std::atomic<bool>     s_subscribe_relief_sta_down{ false };
+
+static void wifiSubscribeReliefTimerCb(void * /*arg*/)
+{
+#if MATTER_AGENT_DEBUG_NDJSON
+    MATTER_AGENT_DBG("H1", "relief_cb", "entry", (int)(esp_timer_get_time() - s_agent_tx_cccd_subscribe_us),
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+#endif
+    if (!s_started) {
+        return;
+    }
+    if (chip::Server::GetInstance().GetFabricTable().FabricCount() != 0) {
+        return;
+    }
+    ESP_LOGI(TAG,
+             "Commissioning: WiFi STA disconnect (TX CCCD 0x%04x subscribed, deferred %u ms)",
+             static_cast<unsigned>(MATTER_CHIPOBLE_GAP_TX_CCCD_ATTR_HANDLE),
+             static_cast<unsigned>(MATTER_WIFI_BLE_SUBSCRIBE_RELIEVE_US / 1000u));
+    mqttSetMatterWifiReconnectHold(true);
+    s_subscribe_relief_sta_down.store(true, std::memory_order_release);
+    esp_err_t w = esp_wifi_disconnect();
+#if MATTER_AGENT_DEBUG_NDJSON
+    MATTER_AGENT_DBG("H1", "relief_cb", "post_wifi_disc", (int)w, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+#endif
+    if (w != ESP_OK && w != ESP_ERR_WIFI_NOT_STARTED) {
+        ESP_LOGW(TAG, "esp_wifi_disconnect (subscribe relief): %s", esp_err_to_name(w));
+    }
+}
+#endif
+
 static int matterBleGapDiagEvent(struct ble_gap_event *event, void * /*arg*/)
 {
     if (!s_started) {
@@ -778,23 +985,70 @@ static int matterBleGapDiagEvent(struct ble_gap_event *event, void * /*arg*/)
     }
 
     const unsigned hi = static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    const unsigned hi_max = static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     const int64_t t_us = esp_timer_get_time();
 
     switch (event->type) {
     case BLE_GAP_EVENT_CONNECT:
-        ESP_LOGW(TAG_BLE_GAP, "GAP CONNECT status=%d t=%lldus heap_int=%u", static_cast<int>(event->connect.status),
-                 static_cast<long long>(t_us), hi);
-        Serial.printf("[Matter] GAP CONNECT status=%d heap=%u\r\n", static_cast<int>(event->connect.status), hi);
+        ESP_LOGW(TAG_BLE_GAP, "GAP CONNECT status=%d t=%lldus heap_int=%u heap_max_blk=%u",
+                 static_cast<int>(event->connect.status), static_cast<long long>(t_us), hi, hi_max);
+        MATTER_AGENT_DBG("H5", "GAP_CONNECT", "evt", (int)event->connect.status, hi_max);
+#if MATTER_AGENT_DEBUG_NDJSON
+        if (event->connect.status == 0) {
+            s_agent_gap_connect_us = esp_timer_get_time();
+        }
+#endif
+#if !MATTER_WIFI_STA_OFF_DURING_BLE_GAP && MATTER_WIFI_DISCONNECT_AFTER_BLE_INDICATE_SUBSCRIBE
+        if (s_wifi_subscribe_relief_timer) {
+            (void)esp_timer_stop(s_wifi_subscribe_relief_timer);
+        }
+#endif
         if (event->connect.status == 0 && fabrics == 0) {
+#if MATTER_AGENT_DEBUG_NDJSON
+            s_agent_notify_tx_total.store(0, std::memory_order_relaxed);
+#endif
             chipobleSessionHintFromBleGap(true);
-            matterSerialChipf("GAP: Session-Hint an (CPU-Yield fuer CHIPoBLE aktiv).");
+            ESP_LOGI(TAG, "GAP: Session-Hint an (CPU-Yield fuer CHIPoBLE aktiv).");
+#if MATTER_SUSPEND_APP_TASKS_DURING_GAP_PASE
+            matterSuspendAppTasksForGapPase();
+#if MATTER_AGENT_DEBUG_NDJSON
+            MATTER_AGENT_DBG("H7", "GAP_CONNECT", "task_suspend", 1, 0);
+#endif
+#endif
         }
         break;
     case BLE_GAP_EVENT_DISCONNECT:
-        ESP_LOGW(TAG_BLE_GAP, "GAP DISCONNECT reason=0x%02x t=%lldus heap_int=%u", event->disconnect.reason,
-                 static_cast<long long>(t_us), hi);
-        Serial.printf("[Matter] GAP DISCONNECT reason=0x%02x heap=%u\r\n", event->disconnect.reason, hi);
+        ESP_LOGW(TAG_BLE_GAP, "GAP DISCONNECT reason=0x%02x t=%lldus heap_int=%u heap_max_blk=%u",
+                 event->disconnect.reason, static_cast<long long>(t_us), hi, hi_max);
+#if MATTER_AGENT_DEBUG_NDJSON
+        MATTER_AGENT_DBG("H5", "GAP_DISCONNECT", "evt", (int)event->disconnect.reason,
+                         (unsigned)((esp_timer_get_time() - s_agent_gap_connect_us) / 1000));
+        MATTER_AGENT_DBG("H1", "GAP_DISCONNECT", "notify_tx_total_ms",
+                         (int)s_agent_notify_tx_total.load(std::memory_order_relaxed),
+                         (unsigned)((esp_timer_get_time() - s_agent_gap_connect_us) / 1000));
+#endif
+#if !MATTER_WIFI_STA_OFF_DURING_BLE_GAP && MATTER_WIFI_DISCONNECT_AFTER_BLE_INDICATE_SUBSCRIBE
+        if (s_wifi_subscribe_relief_timer) {
+            (void)esp_timer_stop(s_wifi_subscribe_relief_timer);
+        }
+        if (s_subscribe_relief_sta_down.exchange(false, std::memory_order_acq_rel)) {
+            mqttSetMatterWifiReconnectHold(false);
+            esp_err_t wr = esp_wifi_connect();
+            if (wr != ESP_OK && wr != ESP_ERR_WIFI_CONN) {
+                ESP_LOGW(TAG, "esp_wifi_connect (subscribe relief end): %s", esp_err_to_name(wr));
+            }
+            ESP_LOGI(TAG, "Commissioning: WiFi STA reconnect after BLE GAP disconnect");
+        }
+#endif
         chipobleSessionHintFromBleGap(false);
+#if MATTER_SUSPEND_APP_TASKS_DURING_GAP_PASE
+        if (fabrics != 0) {
+            matterResumeAppTasksAfterGapPase();
+#if MATTER_AGENT_DEBUG_NDJSON
+            MATTER_AGENT_DBG("H7", "GAP_DISCONNECT", "task_resume", (int)event->disconnect.reason, 1);
+#endif
+        }
+#endif
         break;
     case BLE_GAP_EVENT_SUBSCRIBE:
         ESP_LOGW(TAG_BLE_GAP,
@@ -803,24 +1057,45 @@ static int matterBleGapDiagEvent(struct ble_gap_event *event, void * /*arg*/)
                  static_cast<unsigned>(event->subscribe.reason), event->subscribe.prev_notify,
                  event->subscribe.prev_indicate, event->subscribe.cur_notify, event->subscribe.cur_indicate,
                  static_cast<long long>(t_us), hi);
-        Serial.printf("[Matter] GAP SUBSCRIBE attr=0x%04x cur_ind=%u cur_ntf=%u reason=%u heap=%u\r\n",
-                      event->subscribe.attr_handle, event->subscribe.cur_indicate, event->subscribe.cur_notify,
-                      static_cast<unsigned>(event->subscribe.reason), hi);
+        MATTER_AGENT_DBG("H4", "GAP_SUBSCRIBE", "evt", (int)event->subscribe.attr_handle,
+                         (unsigned)event->subscribe.cur_indicate | ((unsigned)event->subscribe.reason << 8u));
         if (fabrics == 0 && event->subscribe.cur_indicate != 0) {
             chipobleSessionHintFromBleGap(true);
+#if MATTER_AGENT_DEBUG_NDJSON
+            if (event->subscribe.attr_handle == MATTER_CHIPOBLE_GAP_TX_CCCD_ATTR_HANDLE) {
+                s_agent_tx_cccd_subscribe_us = esp_timer_get_time();
+            }
+#endif
+#if !MATTER_WIFI_STA_OFF_DURING_BLE_GAP && MATTER_WIFI_DISCONNECT_AFTER_BLE_INDICATE_SUBSCRIBE
+            if (event->subscribe.attr_handle == MATTER_CHIPOBLE_GAP_TX_CCCD_ATTR_HANDLE &&
+                s_wifi_subscribe_relief_timer &&
+                !s_subscribe_relief_sta_down.load(std::memory_order_acquire)) {
+                MATTER_AGENT_DBG("H2", "relief_arm", "pre_timer",
+                                 (int)(esp_timer_get_time() - s_agent_gap_connect_us),
+                                 (unsigned)(esp_timer_get_time() - s_agent_tx_cccd_subscribe_us));
+                (void)esp_timer_stop(s_wifi_subscribe_relief_timer);
+                esp_err_t te =
+                    esp_timer_start_once(s_wifi_subscribe_relief_timer, MATTER_WIFI_BLE_SUBSCRIBE_RELIEVE_US);
+                if (te != ESP_OK) {
+                    ESP_LOGW(TAG, "subscribe-relief timer start: %s", esp_err_to_name(te));
+                }
+            }
+#endif
         }
         break;
     case BLE_GAP_EVENT_MTU:
         ESP_LOGW(TAG_BLE_GAP, "GAP MTU conn=%u value=%u channel=0x%04x", event->mtu.conn_handle, event->mtu.value,
                  event->mtu.channel_id);
-        Serial.printf("[Matter] GAP MTU=%u ch=0x%04x\r\n", event->mtu.value, event->mtu.channel_id);
         break;
     case BLE_GAP_EVENT_NOTIFY_TX:
+#if MATTER_AGENT_DEBUG_NDJSON
+        s_agent_notify_tx_total.fetch_add(1, std::memory_order_relaxed);
+#endif
         ESP_LOGW(TAG_BLE_GAP, "GAP NOTIFY_TX status=%d attr=0x%04x indication=%u t=%lldus heap=%u",
                  event->notify_tx.status, event->notify_tx.attr_handle, event->notify_tx.indication,
                  static_cast<long long>(t_us), hi);
-        Serial.printf("[Matter] GAP NOTIFY_TX st=%d attr=0x%04x ind=%u heap=%u\r\n", event->notify_tx.status,
-                      event->notify_tx.attr_handle, event->notify_tx.indication, hi);
+        MATTER_AGENT_DBG("H3", "NOTIFY_TX", "evt", (int)event->notify_tx.status,
+                         (unsigned)event->notify_tx.attr_handle | ((unsigned)event->notify_tx.indication << 16u));
         break;
     case BLE_GAP_EVENT_CONN_UPDATE:
         ESP_LOGI(TAG_BLE_GAP, "GAP CONN_UPDATE status=%d", static_cast<int>(event->conn_update.status));
@@ -833,6 +1108,18 @@ static int matterBleGapDiagEvent(struct ble_gap_event *event, void * /*arg*/)
 
 static void registerMatterBleGapDiagListener()
 {
+#if !MATTER_WIFI_STA_OFF_DURING_BLE_GAP && MATTER_WIFI_DISCONNECT_AFTER_BLE_INDICATE_SUBSCRIBE
+    if (!s_wifi_subscribe_relief_timer) {
+        const esp_timer_create_args_t targs = {
+            .callback = &wifiSubscribeReliefTimerCb,
+            .name = "matter_sub_relief",
+        };
+        esp_err_t te = esp_timer_create(&targs, &s_wifi_subscribe_relief_timer);
+        if (te != ESP_OK) {
+            ESP_LOGE(TAG, "esp_timer_create(matter_sub_relief): %s", esp_err_to_name(te));
+        }
+    }
+#endif
     int r = ble_gap_event_listener_register(&s_matter_ble_gap_diag_listener, matterBleGapDiagEvent, nullptr);
     if (r != 0) {
         ESP_LOGW(TAG, "ble_gap_event_listener_register(diag) failed: %d", r);
@@ -859,10 +1146,24 @@ static int matterBleGapSessionOnlyEvent(struct ble_gap_event *event, void * /*ar
     case BLE_GAP_EVENT_CONNECT:
         if (event->connect.status == 0 && fabrics == 0) {
             chipobleSessionHintFromBleGap(true);
+#if MATTER_SUSPEND_APP_TASKS_DURING_GAP_PASE
+            matterSuspendAppTasksForGapPase();
+#if MATTER_AGENT_DEBUG_NDJSON
+            MATTER_AGENT_DBG("H7", "GAP_CONNECT", "task_suspend", 1, 0);
+#endif
+#endif
         }
         break;
     case BLE_GAP_EVENT_DISCONNECT:
         chipobleSessionHintFromBleGap(false);
+#if MATTER_SUSPEND_APP_TASKS_DURING_GAP_PASE
+        if (fabrics != 0) {
+            matterResumeAppTasksAfterGapPase();
+#if MATTER_AGENT_DEBUG_NDJSON
+            MATTER_AGENT_DBG("H7", "GAP_DISCONNECT", "task_resume", (int)event->disconnect.reason, 1);
+#endif
+        }
+#endif
         break;
     case BLE_GAP_EVENT_SUBSCRIBE:
         if (fabrics == 0 && event->subscribe.cur_indicate != 0) {
@@ -893,6 +1194,27 @@ static struct ble_gap_event_listener s_matter_gap_wifi_coex_listener;
 // just finished). Otherwise mqttSetMatterWifiReconnectHold stays true and WiFi
 // never returns — Apple Home shows "Gerät nicht gefunden" after setup.
 static std::atomic<bool> s_matter_gap_wifi_coex_engaged{ false };
+static esp_timer_handle_t s_coex_wifi_disconnect_timer;
+
+static void coexWifiDisconnectTimerCb(void * /*arg*/)
+{
+    if (!s_started) {
+        return;
+    }
+    if (chip::Server::GetInstance().GetFabricTable().FabricCount() != 0) {
+        return;
+    }
+    ESP_LOGI(TAG, "Coexistence (deferred): WiFi STA disconnect for BLE (fabrics=0)");
+    Serial.println("[Matter] WiFi getrennt (Coexist, verzoegert) fuer BLE.\r\n");
+    // Before esp_wifi_disconnect(): suppress WiFi reconnect timer — otherwise
+    // STA_DISCONNECTED immediately starts connectToWiFi() during PASE (0x213).
+    mqttSetMatterWifiReconnectHold(true);
+    s_matter_gap_wifi_coex_engaged.store(true, std::memory_order_release);
+    esp_err_t w = esp_wifi_disconnect();
+    if (w != ESP_OK && w != ESP_ERR_WIFI_NOT_STARTED) {
+        ESP_LOGW(TAG, "esp_wifi_disconnect: %s", esp_err_to_name(w));
+    }
+}
 
 static int matterGapWifiCoexEvent(struct ble_gap_event *event, void * /*arg*/)
 {
@@ -907,19 +1229,28 @@ static int matterGapWifiCoexEvent(struct ble_gap_event *event, void * /*arg*/)
                 if (fabrics != 0) {
                     break;
                 }
-                ESP_LOGI(TAG, "Coexistence: BLE GAP connected — WiFi STA disconnect (fabrics=0)");
-                Serial.println("[Matter] BLE verbunden — WiFi getrennt für Funk-Koexistenz.\r\n");
-                // Before esp_wifi_disconnect(): suppress WiFi reconnect timer — otherwise
-                // STA_DISCONNECTED immediately starts connectToWiFi() during PASE (0x213).
-                mqttSetMatterWifiReconnectHold(true);
-                s_matter_gap_wifi_coex_engaged.store(true, std::memory_order_release);
-                esp_err_t w = esp_wifi_disconnect();
-                if (w != ESP_OK && w != ESP_ERR_WIFI_NOT_STARTED) {
-                    ESP_LOGW(TAG, "esp_wifi_disconnect: %s", esp_err_to_name(w));
+                // Never call esp_wifi_disconnect() directly from this NimBLE GAP callback —
+                // it can break CHIPoBLE advertising (NimBLE "Adv reattempt failed; rc=3").
+                if (!s_coex_wifi_disconnect_timer) {
+                    break;
+                }
+                (void)esp_timer_stop(s_coex_wifi_disconnect_timer);
+                esp_err_t te =
+                    esp_timer_start_once(s_coex_wifi_disconnect_timer, MATTER_WIFI_STA_OFF_BLE_GAP_DELAY_US);
+                if (te != ESP_OK) {
+                    ESP_LOGW(TAG, "coex WiFi-off timer start: %s", esp_err_to_name(te));
+                } else {
+                    ESP_LOGI(TAG, "Coexistence: BLE GAP connected — WiFi STA disconnect in %u ms",
+                             static_cast<unsigned>(MATTER_WIFI_STA_OFF_BLE_GAP_DELAY_US / 1000));
+                    Serial.printf("[Matter] BLE verbunden — WiFi-Trennung in %u ms (Coexist).\r\n",
+                                  static_cast<unsigned>(MATTER_WIFI_STA_OFF_BLE_GAP_DELAY_US / 1000));
                 }
             }
             break;
         case BLE_GAP_EVENT_DISCONNECT:
+            if (s_coex_wifi_disconnect_timer) {
+                (void)esp_timer_stop(s_coex_wifi_disconnect_timer);
+            }
             if (s_matter_gap_wifi_coex_engaged.exchange(false, std::memory_order_acq_rel)) {
                 ESP_LOGI(TAG, "Coexistence: BLE GAP disconnected — WiFi STA reconnect");
                 Serial.println("[Matter] BLE getrennt — WiFi reconnect.\r\n");
@@ -938,6 +1269,16 @@ static int matterGapWifiCoexEvent(struct ble_gap_event *event, void * /*arg*/)
 
 static void registerMatterBleGapWifiCoexListener()
 {
+    if (!s_coex_wifi_disconnect_timer) {
+        const esp_timer_create_args_t targs = {
+            .callback = &coexWifiDisconnectTimerCb,
+            .name = "matter_coex_wifi",
+        };
+        esp_err_t te = esp_timer_create(&targs, &s_coex_wifi_disconnect_timer);
+        if (te != ESP_OK) {
+            ESP_LOGE(TAG, "esp_timer_create(matter_coex_wifi): %s", esp_err_to_name(te));
+        }
+    }
     int r = ble_gap_event_listener_register(&s_matter_gap_wifi_coex_listener, matterGapWifiCoexEvent, nullptr);
     if (r != 0) {
         ESP_LOGW(TAG, "ble_gap_event_listener_register(coex) failed: %d", r);
@@ -956,6 +1297,9 @@ static void matterReleaseGapWifiCoexSession()
 {
     mqttSetMatterWifiReconnectHold(false);
 #if MATTER_WIFI_STA_OFF_DURING_BLE_GAP
+    if (s_coex_wifi_disconnect_timer) {
+        (void)esp_timer_stop(s_coex_wifi_disconnect_timer);
+    }
     if (s_matter_gap_wifi_coex_engaged.exchange(false, std::memory_order_acq_rel)) {
         esp_err_t w = esp_wifi_connect();
         if (w != ESP_OK && w != ESP_ERR_WIFI_CONN) {
@@ -963,6 +1307,18 @@ static void matterReleaseGapWifiCoexSession()
         }
         ESP_LOGI(TAG, "Matter: coexistence released (CHIP path) — WiFi STA reconnect");
         Serial.println("[Matter] Coexistence beendet (CHIP) — WiFi verbindet wieder.\r\n");
+    }
+#endif
+#if MATTER_BLE_GAP_DIAG_LISTENER && !MATTER_WIFI_STA_OFF_DURING_BLE_GAP && MATTER_WIFI_DISCONNECT_AFTER_BLE_INDICATE_SUBSCRIBE
+    if (s_wifi_subscribe_relief_timer) {
+        (void)esp_timer_stop(s_wifi_subscribe_relief_timer);
+    }
+    if (s_subscribe_relief_sta_down.exchange(false, std::memory_order_acq_rel)) {
+        esp_err_t w = esp_wifi_connect();
+        if (w != ESP_OK && w != ESP_ERR_WIFI_CONN) {
+            ESP_LOGW(TAG, "esp_wifi_connect (subscribe relief release): %s", esp_err_to_name(w));
+        }
+        ESP_LOGI(TAG, "Matter: subscribe-relief released — WiFi STA reconnect");
     }
 #endif
 }
@@ -1029,7 +1385,11 @@ static endpoint_t *createPumpEndpoint(node_t *node, const char *label, bool with
 // =============================================================================
 void matterBridgeInit()
 {
-    ESP_LOGI(TAG, "Initialising Matter Bridge (Phase 1 — node + endpoint creation)...");
+    ESP_LOGI(TAG, "Initialising Matter (Phase 1 — node + endpoint creation)...");
+
+#if MATTER_MINIMAL_DEVICE
+    ESP_LOGW(TAG, "MATTER_MINIMAL_DEVICE: single On/Off plugin unit (no bridge) — PASE/commissioning debug");
+#endif
 
     // ── Matter node configuration ──────────────────────────────────────────────
     // vendor_id and product_id are set via sdkconfig (CONFIG_DEVICE_VENDOR_ID /
@@ -1040,12 +1400,43 @@ void matterBridgeInit()
             MATTER_DEVICE_NAME,
             sizeof(node_cfg.root_node.basic_information.node_label) - 1);
 
+    /* memset zeroes nested cluster configs. Network Commissioning (0x31) FeatureMap must advertise at
+     * least one network interface when the cluster exists — all-zero is out of spec; Apple Home then
+     * stops commissioning after early reads and issues ArmFailSafe(0s). Match esp_matter defaults:
+     * esp_matter_cluster.h network_commissioning::config_t ctor. */
+#if CHIP_DEVICE_CONFIG_ENABLE_WIFI
+    node_cfg.root_node.network_commissioning.feature_map =
+        chip::to_underlying(NetworkCommissioning::Feature::kWiFiNetworkInterface);
+#elif CHIP_DEVICE_CONFIG_ENABLE_THREAD
+    node_cfg.root_node.network_commissioning.feature_map =
+        chip::to_underlying(NetworkCommissioning::Feature::kThreadNetworkInterface);
+#else
+    node_cfg.root_node.network_commissioning.feature_map =
+        chip::to_underlying(NetworkCommissioning::Feature::kEthernetNetworkInterface);
+#endif
+
     // ── Create root node ───────────────────────────────────────────────────────
     s_node = node::create(&node_cfg, on_attribute_update, on_identification);
     if (!s_node) {
         ESP_LOGE(TAG, "FATAL: Failed to create Matter node!");
         return;
     }
+
+#if MATTER_MINIMAL_DEVICE
+    {
+        endpoint::on_off_plugin_unit::config_t ep_cfg;
+        memset(&ep_cfg, 0, sizeof(ep_cfg));
+        ep_cfg.on_off.on_off = false;
+        endpoint_t *ep =
+            endpoint::on_off_plugin_unit::create(s_node, &ep_cfg, ENDPOINT_FLAG_NONE, nullptr);
+        if (!ep) {
+            ESP_LOGE(TAG, "FATAL: minimal On/Off endpoint failed");
+            return;
+        }
+        s_ep_filt = endpoint::get_id(ep);
+        ESP_LOGI(TAG, "Minimal OnOff EP id=%u (OnOff → FiltPump for debug)", s_ep_filt);
+    }
+#else  // !MATTER_MINIMAL_DEVICE
 
     // ── Create Aggregator endpoint (bridge root, device type 0x000E) ───────────
     // All ENDPOINT_FLAG_BRIDGE child endpoints are automatically grouped under it.
@@ -1126,12 +1517,68 @@ void matterBridgeInit()
     loadSolarConfig();
 #endif
 
+#endif  // !MATTER_MINIMAL_DEVICE
+
+    matterPatchGeneralCommissioningAppleAttrs(s_node);
+    matterPatchIcdManagementAppleStub(s_node);
+    matterPatchAppleHomeKitMeiStub(s_node);
+
     // ── Use example/test Device Attestation Credentials ───────────────────────
     // IMPORTANT: Replace with real DAC for production devices!
     chip::Credentials::SetDeviceAttestationCredentialsProvider(
         chip::Credentials::Examples::GetExampleDACProvider());
 
+#if MATTER_MINIMAL_DEVICE
+    ESP_LOGI(TAG, "Matter minimal device init complete (Phase 1).");
+#else
     ESP_LOGI(TAG, "Matter Bridge init complete (Phase 1).");
+#endif
+}
+
+// Matter operational certs and CASE (SetEffectiveTime) need a wall clock in a sensible range.
+// gettimeofday is often still 2000-01-01 (946684800) at esp_matter::start() because NTP runs
+// later in Setup.cpp — that value must NOT be written into CHIP; it overwrites LKGT (~build time).
+// Reject everything before 2020-01-01 UTC; use matterResyncChipWallClockAfterNtp() after NTP.
+static constexpr int64_t kMatterPlausibleMinUnixSec = 1577836800; // 2020-01-01 00:00:00 UTC
+
+/** ESP32 Matter: with CONFIG_ENABLE_SNTP_TIME_SYNC, CHIP reads wall time via gettimeofday().
+ *  Push RTC/NTP-adjusted ESP time into CHIP so CASE Sigma3 (SetEffectiveTime) matches real UTC.
+ */
+static void matterSyncChipWallClockFromEsp()
+{
+    struct timeval tv {};
+    if (gettimeofday(&tv, nullptr) != 0) {
+        ESP_LOGW(TAG, "CHIP wall clock: gettimeofday failed");
+        return;
+    }
+    if (tv.tv_sec < kMatterPlausibleMinUnixSec) {
+        ESP_LOGW(TAG,
+                 "CHIP wall clock: ESP time not plausible for Matter (tv_sec=%ld; need >= 2020 — "
+                 "usually pre-NTP default). Not overwriting CHIP clock; LKGT/build time applies.",
+                 (long) tv.tv_sec);
+        return;
+    }
+    if (esp_matter::lock::chip_stack_lock(pdMS_TO_TICKS(MATTER_LOCK_TIMEOUT_MS)) != ESP_OK) {
+        ESP_LOGW(TAG, "CHIP wall clock: chip stack lock timeout");
+        return;
+    }
+    chip::System::Clock::Microseconds64 us(
+        static_cast<uint64_t>(tv.tv_sec) * UINT64_C(1000000) + static_cast<uint64_t>(tv.tv_usec));
+    CHIP_ERROR ce = chip::System::SystemClock().SetClock_RealTime(us);
+    esp_matter::lock::chip_stack_unlock();
+    if (ce == CHIP_NO_ERROR) {
+        ESP_LOGI(TAG, "CHIP wall clock synced from ESP (Unix s=%ld)", (long)tv.tv_sec);
+    } else {
+        ESP_LOGW(TAG, "CHIP SetClock_RealTime failed: %" CHIP_ERROR_FORMAT, ce.Format());
+    }
+}
+
+void matterResyncChipWallClockAfterNtp()
+{
+    if (!s_started) {
+        return;
+    }
+    matterSyncChipWallClockFromEsp();
 }
 
 // =============================================================================
@@ -1189,6 +1636,8 @@ void matterBridgeStart()
 
     s_started = true;
 
+    matterSyncChipWallClockFromEsp();
+
     // Receive low-level BLE / commissioning ChipDeviceEvents that esp_matter does not pass
     // to on_device_event (verified on-device: CHIPoBLE RX writes in log but no hold ON).
     chip::DeviceLayer::PlatformMgr().AddEventHandler(platformBleHoldEventHandler, 0);
@@ -1219,14 +1668,20 @@ void matterBridgeStart()
     PrintOnboardingCodes(
         chip::RendezvousInformationFlags(chip::RendezvousInformationFlag::kBLE));
 
+#if MATTER_MINIMAL_DEVICE
+    ESP_LOGI(TAG, "Matter minimal stack started — waiting for commissioning.");
+#else
     ESP_LOGI(TAG, "Matter Bridge started — waiting for commissioning.");
+#endif
 
     // Do not call syncBleGapRadioHoldFromStack() here — it drives mqttSetBleRadioHold(),
     // which uses FreeRTOS timers that are not created until Setup.cpp runs initTimers().
 
-    // Apply initial reachability state for conditional endpoints
+    // Apply initial reachability state for conditional endpoints (full bridge only)
+#if !MATTER_MINIMAL_DEVICE
     matterUpdateConditionalEndpoints(storage.Salt_Chlor);
     s_salt_chl_was_active = storage.Salt_Chlor;
+#endif
 }
 
 // =============================================================================
@@ -1246,6 +1701,11 @@ void matterUpdateConditionalEndpoints(bool active)
 void matterBridgeSync()
 {
     if (!s_started) return;
+
+#if MATTER_MINIMAL_DEVICE
+    // Single OnOff EP — no ElectricalMeasurement cluster on minimal device
+    updateOnOff(s_ep_filt, FiltrationPump.IsRunning());
+#else
 
     // ── Filtration pump ────────────────────────────────────────────────────────
     {
@@ -1326,6 +1786,8 @@ void matterBridgeSync()
             ESP_LOGI(TAG, "Solar-Mode-Request → %s", solarRequest ? "ON (pool heating)" : "OFF");
         }
     }
+
+#endif  // !MATTER_MINIMAL_DEVICE
 
     ESP_LOGV(TAG, "Matter sync complete");
 }
@@ -1564,6 +2026,7 @@ void MatterSyncTask(void *pvParameters)
     bool             prev_scan_ble = false;
 
     for (;;) {
+        matterYieldAppTasksIfChipobleBusy();
         const bool scanBle =
             (startTasks && s_started && chip::Server::GetInstance().GetFabricTable().FabricCount() == 0);
         const TickType_t period = scanBle ? periodFast : periodSlow;

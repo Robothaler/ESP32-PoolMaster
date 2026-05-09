@@ -110,6 +110,12 @@ extern SemaphoreHandle_t prefsMutex;
 void prefsLock(void);
 void prefsUnlock(void);
 
+/** Ensure libc TZ is Europe/Berlin (CET/CEST) before localtime()/strftime — matches NTP path in Setup.cpp. */
+void poolEnsureEuropeBerlinTz(void);
+
+/** Push Europe/Berlin local calendar time into the ESP-IDF wall clock (libc). Matter/CHIP uses gettimeofday(). */
+void poolApplyEspSystemTimeFromLocalTm(struct tm *tmLocal);
+
 bool lockI2C(); // Declaration of the lockI2C function
 void unlockI2C(); // Declaration of the unlockI2C function
 unsigned long getDurationSafe(unsigned long start, unsigned long current);
@@ -167,10 +173,16 @@ void publishPoolMode(int event);
 void publishSolarMode(int event);
 void mqttInit();
 void mqttErrorPublish(const char* Payload);
-void publishPoolMode(int event);
-void publishSolarMode(int event);
+void SetPhPID(bool Enable);
+void SetOrpPID(bool Enable);
 void connectToWiFi();
 void connectToMqtt();
+/** STA association + IP path (Matter: uses esp_wifi; never rely on `WiFi.status()` alone). */
+bool wifiStaConnected(void);
+/** Dotted IPv4 for STA; Matter uses `esp_netif` (not `WiFi.localIP()`). Returns false if no address. */
+bool wifiStaGetIpv4String(char *buf, size_t bufLen);
+/** Nextion-Leiste (`vaMqttState.txt`, `pXNetW`): „online“, wenn MQTT verbunden ist oder LAN ohne/fehlenden MQTT (Matter/BLE, MQTT aus). */
+bool nextionNetStatusOnline(void);
 
 // Converts ESP32 reset reason to a human-readable C-string literal.
 // inline to avoid multiple-definition errors when included in several TUs.

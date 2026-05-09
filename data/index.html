@@ -283,6 +283,12 @@ input:checked+.slider::before{transform:translateX(18px)}
           <button class="btn btn-sm btn-neutral" id="bt-winter-m" onclick="sendCmd({WinterMode:0})">MAN</button>
         </div>
       </div>
+      <div class="pump-row"><span class="pump-name">Wärmepumpe (Regelung)</span>
+        <div class="pump-controls">
+          <button class="btn btn-sm btn-neutral" id="bt-heatpm-a" onclick="sendCmd({HeatPumpMode:1})">AUTO</button>
+          <button class="btn btn-sm btn-neutral" id="bt-heatpm-m" onclick="sendCmd({HeatPumpMode:0})">MAN</button>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -369,13 +375,17 @@ input:checked+.slider::before{transform:translateX(18px)}
   <!-- Time range + controls bar -->
   <div class="card" style="margin-bottom:16px;padding:14px 18px">
     <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
-      <div style="display:flex;gap:6px;flex-wrap:wrap" id="range-btns">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center" id="range-btns">
         <button class="range-btn active" onclick="setLogRange('1h',this)">1h</button>
         <button class="range-btn" onclick="setLogRange('6h',this)">6h</button>
         <button class="range-btn" onclick="setLogRange('1d',this)">1d</button>
         <button class="range-btn" onclick="setLogRange('7d',this)">7d</button>
         <button class="range-btn" onclick="setLogRange('30d',this)">30d</button>
         <button class="range-btn" onclick="setLogRange('all',this)">Gesamt</button>
+        <span style="width:1px;height:22px;background:var(--border);margin:0 4px"></span>
+        <button type="button" class="btn btn-sm btn-off" onclick="logPanBack()" title="Zeitfenster zurück">◀</button>
+        <button type="button" class="btn btn-sm btn-off" onclick="logPanForward()" title="Zeitfenster vor">▶</button>
+        <button type="button" class="btn btn-sm btn-primary" onclick="logJumpToNow()" title="Ans Ende (live)">Jetzt</button>
       </div>
       <div id="log-range-info" style="font-size:11px;color:var(--text3)">–</div>
       <button class="btn btn-sm btn-off" onclick="loadLogData()" title="Neu laden" style="display:flex;align-items:center;gap:5px">
@@ -412,7 +422,7 @@ input:checked+.slider::before{transform:translateX(18px)}
         </label>
       </div>
     </div>
-    <div class="chart-wrap" style="height:260px"><canvas id="chart-overview"></canvas></div>
+    <div class="chart-wrap" style="height:320px"><canvas id="chart-overview"></canvas></div>
   </div>
 
   <!-- 5 detail charts stacked vertically with shared time axis -->
@@ -649,7 +659,24 @@ input:checked+.slider::before{transform:translateX(18px)}
       </div>
       <button class="btn btn-primary" onclick="setWaterFillSettings()">Befüllung setzen</button>
     </div>
-    <!-- Filtration -->
+    <!-- Wärmepumpe & Wassertemperatur -->
+    <div class="card">
+      <div class="form-section-title">Wärmepumpe &amp; Wassertemperatur</div>
+      <div class="val-row"><span class="val-name">Regelung Wärmepumpe</span>
+        <div class="pump-controls">
+          <button class="btn btn-sm btn-neutral" id="bt-set-heatpm-a" onclick="sendCmd({HeatPumpMode:1})">AUTO</button>
+          <button class="btn btn-sm btn-neutral" id="bt-set-heatpm-m" onclick="sendCmd({HeatPumpMode:0})">MAN</button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Wasser-Solltemperatur (°C)</label>
+        <div style="display:flex;gap:8px">
+          <input class="form-input" type="number" id="s-water-sp" step="0.5" min="5" max="45" placeholder="28">
+          <button class="btn btn-primary" onclick="setWaterTempSP()">Setzen</button>
+        </div>
+        <div class="form-hint">Für die Automatik der Wärmepumpe (Zielwert vs. Ist-Temperatur Skimmer).</div>
+      </div>
+    </div>
     <div class="card">
       <div class="form-section-title">Filtration Zeitplan</div>
       <div class="form-group">
@@ -888,6 +915,18 @@ input:checked+.slider::before{transform:translateX(18px)}
 let state = {};
 let histData = {ts:[],ph:[],orp:[],psi:[],temp:[],air:[]};
 let charts = {};
+/** Always detach Chart.js from a canvas (fixes \"Canvas is already in use\" if registry ref was lost). */
+function destroyExistingChart(canvasEl, registryKey) {
+  if (!canvasEl) return;
+  const key = registryKey || canvasEl.id;
+  const attached = typeof Chart !== 'undefined' && Chart.getChart ? Chart.getChart(canvasEl) : null;
+  if (attached) {
+    try { attached.destroy(); } catch (e) {}
+  } else if (key && charts[key]) {
+    try { charts[key].destroy(); } catch (e) {}
+  }
+  if (key) delete charts[key];
+}
 let ws = null;
 let wsReady = false;
 
@@ -1090,9 +1129,9 @@ function updateUI() {
   setText('v-flow2a',fmt(v.flow,2)+' m³/h');
   setText('v-flow2b',fmt(v.flow2,2)+' m³/h');
 
-  // Water/Air temperatures — 2 decimals
-  setText('t-ws', fmt(v.wS,2)+'°C'); setText('t-wi', fmt(v.wI,2)+'°C'); setText('t-wb', fmt(v.wB,2)+'°C');
-  setText('t-wwp', fmt(v.wWP,2)+'°C'); setText('t-air', fmt(v.air,2)+'°C');
+  // Water/Air temperatures — 1 decimal (Messwerte / Anzeige)
+  setText('t-ws', fmt(v.wS,1)+'°C'); setText('t-wi', fmt(v.wI,1)+'°C'); setText('t-wb', fmt(v.wB,1)+'°C');
+  setText('t-wwp', fmt(v.wWP,1)+'°C'); setText('t-air', fmt(v.air,1)+'°C');
   // Humidity & air pressure — no decimals
   setText('t-hum', fmt(v.airHum,0)+'%'); setText('t-press', fmt(v.airPress,0)+' hPa');
   setText('v-salt', fmt(v.saltConc,2)+' g/L'); setText('v-salt-need', fmt(tanks.saltNeeded,2)+' kg');
@@ -1125,6 +1164,8 @@ function updateUI() {
   setModeBtns('bt-orp-a',    'bt-orp-m',    m.orpReg);
   setModeBtns('bt-fill-a',   'bt-fill-m',   m.fill);
   setModeBtns('bt-winter-a', 'bt-winter-m', m.winter);
+  setModeBtns('bt-heatpm-a', 'bt-heatpm-m', m.heat);
+  setModeBtns('bt-set-heatpm-a', 'bt-set-heatpm-m', m.heat);
   setModeBtns('bt-php-a',    'bt-php-m',    m.phReg);
   setModeBtns('bt-chl-a',    'bt-chl-m',    m.orpReg);
 
@@ -1156,13 +1197,13 @@ function updateUI() {
   setText('v-wfdur', '–');
   setText('v-wfutl', '–');
 
-  // Solar — 2 decimal temps
-  setText('t-sroof',    fmt(s.solar?.roofTemp,2)+'°C');
-  setText('t-sboiler',  fmt(s.solar?.boilerTemp,2)+'°C');
-  setText('t-sstorage', fmt(s.solar?.storageTemp,2)+'°C');
-  setText('t-sbackflow',fmt(s.solar?.backflow,2)+'°C');
-  setText('t-svl',  fmt(v.solarVL,2)+'°C');
-  setText('t-srl',  fmt(v.solarRL,2)+'°C');
+  // Solar — 1 decimal for temperatures
+  setText('t-sroof',    fmt(s.solar?.roofTemp,1)+'°C');
+  setText('t-sboiler',  fmt(s.solar?.boilerTemp,1)+'°C');
+  setText('t-sstorage', fmt(s.solar?.storageTemp,1)+'°C');
+  setText('t-sbackflow',fmt(s.solar?.backflow,1)+'°C');
+  setText('t-svl',  fmt(v.solarVL,1)+'°C');
+  setText('t-srl',  fmt(v.solarRL,1)+'°C');
   setChip('c-solpump',  s.solar?.pump,    ['Läuft','Gestoppt']);
   setChip('c-solmode',  m.solar,          ['POOL','AUS']);
   setChip('c-solvalve', s.solar?.valvePool,['Pool','Boiler']);
@@ -1331,6 +1372,11 @@ function setFiltSettings() {
   if(!isNaN(stop))  sendCmd({FiltStop:stop});
   if(!isNaN(delay)) sendCmd({DelayPID:delay});
 }
+function setWaterTempSP() {
+  const v = parseFloat(document.getElementById('s-water-sp').value);
+  if (isNaN(v) || v < 5 || v > 45) { alert('Solltemperatur zwischen 5 und 45 °C'); return; }
+  sendCmd({ WSetPoint: v });
+}
 
 // ════ HISTORY ════
 function applyHistory(d) {
@@ -1365,7 +1411,7 @@ const chartDefaults = {
 
 function mkChart(id, label, data, color, yMin, yMax) {
   const cv = document.getElementById(id); if(!cv) return null;
-  if (charts[id]) { charts[id].destroy(); }
+  destroyExistingChart(cv, id);
   const cfg = JSON.parse(JSON.stringify(chartDefaults));
   if (yMin!==undefined) cfg.options.scales.y.min = yMin;
   if (yMax!==undefined) cfg.options.scales.y.max = yMax;
@@ -1425,6 +1471,7 @@ async function loadSettings() {
     set('s-filt-start', d.filtStart);
     set('s-filt-stop',  d.filtStop);
     set('s-delay-pid',  d.delayPID);
+    set('s-water-sp',   d.waterTempSP);
     set('inp-ph-sp',    d.phSP);
     set('inp-orp-sp',   d.orpSP);
     Firmw = d.firmware || '–';
@@ -1432,6 +1479,7 @@ async function loadSettings() {
     setText('sys-fw', Firmw);
     if (d.uptime) setText('sys-uptime', fmtUptime(d.uptime));
     updateKpPreview();
+    setModeBtns('bt-set-heatpm-a', 'bt-set-heatpm-m', d.heatPumpMode === 1 || d.heatPumpMode === true);
   } catch (e) { console.warn('Settings load failed:', e); }
 }
 
@@ -1439,33 +1487,150 @@ async function loadSettings() {
 let logStore = { ts:[], tsRaw:[], ph:[], orp:[], psi:[], temp:[], pumps:[] };
 let logEvents = [];
 let logRange = '1h';
+/** Right edge of viewing window (ms). null = live (aligned to now). */
+let logViewEnd = null;
+/** Fixed X-axis window from last API query (ms) — keeps charts aligned when data are sparse */
+let logQueryRange = { lo: 0, hi: 0 };
 
 const RANGE_S = { '1h':3600, '6h':21600, '1d':86400, '7d':604800, '30d':2592000 };
 const PUMP_NAMES = ['Filterpumpe','pH-Pumpe','Chlorpumpe','Heizung','Salzelektrolyse','Roboter','Solar','Befüllung'];
 const PUMP_COLORS = ['#22c55e','#3b82f6','#06b6d4','#f97316','#eab308','#a855f7','#ef4444','#8b5cf6'];
 
+function getLogSpanSec() {
+  if (logRange === 'all') return 86400 * 7;
+  return RANGE_S[logRange] || 3600;
+}
+
 function setLogRange(r, btn) {
   logRange = r;
-  document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
+  logViewEnd = null;
+  document.querySelectorAll('#range-btns .range-btn').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
   loadLogData();
 }
 
+function logPanBack() {
+  if (logRange === 'all') return;
+  const spanMs = getLogSpanSec() * 1000;
+  const now = Date.now();
+  let end = logViewEnd == null ? now : logViewEnd;
+  end -= spanMs;
+  if (end < 0) end = 0;
+  logViewEnd = end;
+  loadLogData();
+}
+
+function logPanForward() {
+  if (logRange === 'all') return;
+  const spanMs = getLogSpanSec() * 1000;
+  const now = Date.now();
+  let end = logViewEnd == null ? now : logViewEnd;
+  end = Math.min(now, end + spanMs);
+  if (end >= now - 30000) logViewEnd = null;
+  else logViewEnd = end;
+  loadLogData();
+}
+
+function logJumpToNow() {
+  logViewEnd = null;
+  loadLogData();
+}
+
+function createMidnightPlugin() {
+  return {
+    id: 'midnightLines',
+    beforeDatasetsDraw(chart) {
+      const xS = chart.scales.x;
+      const { ctx, chartArea } = chart;
+      if (!xS || !chartArea) return;
+      const minMs = xS.min;
+      const maxMs = xS.max;
+      let d = new Date(minMs);
+      d.setHours(0, 0, 0, 0);
+      while (d.getTime() < minMs) d.setDate(d.getDate() + 1);
+      ctx.save();
+      ctx.strokeStyle = 'rgba(148, 163, 184, 0.22)';
+      ctx.fillStyle = 'rgba(148, 163, 184, 0.55)';
+      ctx.font = '10px Segoe UI, system-ui, sans-serif';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([5, 5]);
+      for (; d.getTime() <= maxMs; d.setDate(d.getDate() + 1)) {
+        const ms = d.getTime();
+        const px = xS.getPixelForValue(ms);
+        if (px < chartArea.left - 2 || px > chartArea.right + 2) continue;
+        ctx.beginPath();
+        ctx.moveTo(px + 0.5, chartArea.top);
+        ctx.lineTo(px + 0.5, chartArea.bottom);
+        ctx.stroke();
+        const lab = d.getDate() + '.' + (d.getMonth() + 1) + '.';
+        ctx.setLineDash([]);
+        ctx.fillText(lab, Math.min(px + 3, chartArea.right - 36), chartArea.top + 11);
+        ctx.setLineDash([5, 5]);
+      }
+      ctx.restore();
+    }
+  };
+}
+
+/** Horizontal segments: ON … OFF for one device (y = device index). */
+function buildEventLineData(dev, rangeHiMs) {
+  const evs = logEvents.filter(e => e.dev === dev).sort((a, b) => a.ts - b.ts);
+  const pts = [];
+  let onTs = null;
+  for (const e of evs) {
+    if (e.state === 1) {
+      onTs = e.ts;
+    } else if (e.state === 0 && onTs != null) {
+      pts.push({ x: onTs * 1000, y: dev });
+      pts.push({ x: e.ts * 1000, y: dev });
+      pts.push({ x: e.ts * 1000, y: NaN });
+      onTs = null;
+    }
+  }
+  if (onTs != null) {
+    pts.push({ x: onTs * 1000, y: dev });
+    pts.push({ x: rangeHiMs, y: dev });
+  }
+  return pts;
+}
+
+function buildEventMarkers(dev) {
+  return logEvents.filter(e => e.dev === dev).map(e => ({
+    x: e.ts * 1000, y: dev, st: e.state
+  }));
+}
+
+/** Cancels stale responses when Verlauf is opened / refreshed quickly. */
+let loadLogSeq = 0;
+
 async function loadLogData() {
-  const now = Math.floor(Date.now() / 1000);
-  const from = (logRange === 'all') ? 0 : now - (RANGE_S[logRange] || 3600);
-  const to = now;
+  const seq = ++loadLogSeq;
+  const nowSec = Math.floor(Date.now() / 1000);
+  let fromSec, toSec;
+  if (logRange === 'all') {
+    fromSec = 0;
+    toSec = nowSec;
+  } else {
+    const spanSec = RANGE_S[logRange] || 3600;
+    const endMs = logViewEnd == null ? Date.now() : logViewEnd;
+    toSec = Math.floor(endMs / 1000);
+    fromSec = toSec - spanSec;
+    if (fromSec < 0) fromSec = 0;
+  }
+  logQueryRange = { lo: fromSec * 1000, hi: toSec * 1000 };
 
   setText('log-range-info', 'Lade…');
   try {
     const [logR, evtR, infoR] = await Promise.all([
-      fetch('/api/log?from=' + from + '&to=' + to + '&pts=500'),
-      fetch('/api/events?from=' + from + '&to=' + to),
+      fetch('/api/log?from=' + fromSec + '&to=' + toSec + '&pts=500'),
+      fetch('/api/events?from=' + fromSec + '&to=' + toSec),
       fetch('/api/loginfo')
     ]);
+    if (seq !== loadLogSeq) return;
     const logJ  = logR.ok  ? await logR.json()  : {};
     const evtJ  = evtR.ok  ? await evtR.json()  : {};
     const infoJ = infoR.ok ? await infoR.json() : {};
+    if (seq !== loadLogSeq) return;
 
     // Parse sensor records
     logStore = { ts:[], tsRaw:[], ph:[], orp:[], psi:[], temp:[], pumps:[] };
@@ -1487,18 +1652,22 @@ async function loadLogData() {
     // Update info cards
     applyLogInfo(infoJ);
     const exp = document.getElementById('li-export');
-    if (exp) exp.href = '/api/export.csv?from=' + from + '&to=' + to;
+    if (exp) exp.href = '/api/export.csv?from=' + fromSec + '&to=' + toSec;
 
     const n = logStore.ts.length;
-    setText('log-range-info', n > 0
+    const isLive = logRange === 'all' || logViewEnd == null || logViewEnd >= Date.now() - 60000;
+    const suffix = isLive ? ' · Live-Ansicht' : ' · Historie';
+    setText('log-range-info', (n > 0
       ? n + ' Messpunkte  ·  ' + fmtAbsTs(logStore.tsRaw[0]) + ' – ' + fmtAbsTs(logStore.tsRaw[n - 1])
-      : 'Keine Daten im gewählten Zeitraum');
+      : 'Keine Daten im gewählten Zeitraum') + suffix);
 
+    if (seq !== loadLogSeq) return;
     renderDetailCharts();
+    if (seq !== loadLogSeq) return;
     refreshOverviewChart();
   } catch (ex) {
     console.warn('Log load error:', ex);
-    setText('log-range-info', 'Fehler: ' + ex.message);
+    if (seq === loadLogSeq) setText('log-range-info', 'Fehler: ' + ex.message);
   }
 }
 
@@ -1541,14 +1710,18 @@ function normalize(arr, lo, hi) {
 
 // ── Compute shared X-axis time range across both sensors and events
 function sharedTimeRange() {
-  let lo = Infinity, hi = -Infinity;
-  logStore.tsRaw.forEach(t => { if (t<lo) lo=t; if (t>hi) hi=t; });
-  logEvents.forEach(e => { if (e.ts<lo) lo=e.ts; if (e.ts>hi) hi=e.ts; });
-  if (!isFinite(lo) || !isFinite(hi)) {
-    const now = Math.floor(Date.now()/1000);
-    lo = now - (RANGE_S[logRange]||3600); hi = now;
+  if (logQueryRange && logQueryRange.hi > logQueryRange.lo) {
+    return { lo: logQueryRange.lo, hi: logQueryRange.hi };
   }
-  return { lo:lo*1000, hi:hi*1000 };
+  let lo = Infinity, hi = -Infinity;
+  logStore.tsRaw.forEach(t => { if (t < lo) lo = t; if (t > hi) hi = t; });
+  logEvents.forEach(e => { if (e.ts < lo) lo = e.ts; if (e.ts > hi) hi = e.ts; });
+  if (!isFinite(lo) || !isFinite(hi)) {
+    const now = Math.floor(Date.now() / 1000);
+    lo = now - (RANGE_S[logRange] || 3600);
+    hi = now;
+  }
+  return { lo: lo * 1000, hi: hi * 1000 };
 }
 
 // X-axis options used by every chart (shared range, linear time scale in ms)
@@ -1576,8 +1749,21 @@ function asXY(yArr) {
 
 function mkDetailChart(id, label, data, color, yMin, yMax, range) {
   const cv = document.getElementById(id); if (!cv) return;
-  if (charts[id]) { charts[id].destroy(); delete charts[id]; }
+  destroyExistingChart(cv, id);
+  const tempChart = id === 'chart-temp-log';
+  const tip = tempChart ? {
+    mode: 'index',
+    intersect: false,
+    callbacks: {
+      label(ctx) {
+        const y = ctx.parsed.y;
+        if (y == null || !Number.isFinite(y)) return label + ': –';
+        return label + ': ' + y.toFixed(1) + ' °C';
+      }
+    }
+  } : { mode: 'index', intersect: false };
   charts[id] = new Chart(cv, {
+    plugins: [createMidnightPlugin()],
     type: 'line',
     data: {
       datasets: [{ label, data, borderColor: color, backgroundColor: color + '18',
@@ -1586,7 +1772,7 @@ function mkDetailChart(id, label, data, color, yMin, yMax, range) {
     },
     options: {
       responsive: true, maintainAspectRatio: false, animation: false,
-      plugins: { legend: { display: false }, tooltip: { mode:'index', intersect:false } },
+      plugins: { legend: { display: false }, tooltip: tip },
       scales: {
         x: sharedXAxis(range),
         y: { min: yMin, max: yMax, ticks: { color:'#5a6e8a' }, grid: { color:'rgba(255,255,255,0.06)' } }
@@ -1595,51 +1781,109 @@ function mkDetailChart(id, label, data, color, yMin, yMax, range) {
   });
 }
 
-// Build the events-only timeline chart (one Y-row per device, scatter dots)
+// Ereignisse: eine Zeile pro Aktor; horizontale Linien verbinden EIN→AUS; Marker an den Schaltzeitpunkten
 function mkEventsChart(range) {
   const cv = document.getElementById('chart-events-log'); if (!cv) return;
-  if (charts['chart-events-log']) { charts['chart-events-log'].destroy(); delete charts['chart-events-log']; }
-  // Devices (subset) we want to show in the event chart
-  const devs = [0,1,2,3,4]; // Filt, pH, Chl, Heat, Salt
-  const ds = devs.map(dev => {
-    const pts = logEvents.filter(e => e.dev === dev).map(e => ({
-      x: e.ts*1000, y: dev, state: e.state, name: e.name
-    }));
-    return {
-      label: PUMP_NAMES[dev],
-      data: pts,
-      type: 'scatter',
-      pointRadius: 6,
-      pointStyle: pts.map(p => p.state ? 'triangle' : 'rectRot'),
-      backgroundColor: PUMP_COLORS[dev],
-      borderColor: PUMP_COLORS[dev],
-      showLine: false,
-      parsing: false
-    };
-  }).filter(d => d.data.length > 0);
+  destroyExistingChart(cv, 'chart-events-log');
+
+  const lineDatasets = [];
+  const scatterDatasets = [];
+  const devsWith = [...new Set(logEvents.map(e => e.dev))].sort((a, b) => a - b);
+  const rangeHi = range.hi;
+
+  devsWith.forEach(dev => {
+    const lp = buildEventLineData(dev, rangeHi);
+    if (lp.length) {
+      lineDatasets.push({
+        type: 'line',
+        label: PUMP_NAMES[dev],
+        data: lp,
+        borderColor: PUMP_COLORS[dev % PUMP_COLORS.length],
+        backgroundColor: 'transparent',
+        borderWidth: 3,
+        pointRadius: 0,
+        spanGaps: false,
+        tension: 0,
+        parsing: false,
+        order: 10 + dev
+      });
+    }
+    const mk = buildEventMarkers(dev);
+    if (mk.length) {
+      scatterDatasets.push({
+        type: 'scatter',
+        label: PUMP_NAMES[dev],
+        data: mk,
+        borderColor: PUMP_COLORS[dev % PUMP_COLORS.length],
+        backgroundColor: PUMP_COLORS[dev % PUMP_COLORS.length],
+        pointRadius: 8,
+        pointBorderWidth: 1,
+        pointBorderColor: 'rgba(255,255,255,0.85)',
+        pointStyle(ctx) {
+          const r = ctx.raw;
+          return (r && r.st) ? 'triangle' : 'rectRot';
+        },
+        parsing: false,
+        order: 50 + dev
+      });
+    }
+  });
+
+  let allDs = lineDatasets.concat(scatterDatasets);
+  if (!allDs.length) {
+    allDs.push({
+      type: 'line', label: 'Keine Ereignisse', data: [],
+      borderColor: 'rgba(255,255,255,0.08)', parsing: false
+    });
+  }
 
   charts['chart-events-log'] = new Chart(cv, {
-    data: { datasets: ds },
+    plugins: [createMidnightPlugin()],
+    type: 'line',
+    data: { datasets: allDs },
     options: {
       responsive: true, maintainAspectRatio: false, animation: false,
       plugins: {
-        legend: { display:true, position:'bottom',
-          labels:{ color:'#8fa0bd', font:{size:11}, boxWidth:12, padding:10 } },
-        tooltip: { callbacks: {
-          label: ctx => {
-            const r = ctx.raw;
-            const ts = new Date(r.x);
-            return `${ctx.dataset.label}: ${r.state?'EIN':'AUS'}  ·  ${ts.toLocaleString('de-DE')}`;
+        legend: {
+          display: true, position: 'bottom',
+          labels: {
+            color: '#8fa0bd', font: { size: 11 }, boxWidth: 12, padding: 10,
+            filter(item, chartOrData) {
+              const root = chartOrData && chartOrData.data !== undefined ? chartOrData.data : chartOrData;
+              const datasets = root && root.datasets;
+              if (!datasets || item.datasetIndex == null) return true;
+              const ds = datasets[item.datasetIndex];
+              return ds && ds.type === 'line';
+            }
           }
-        } }
+        },
+        tooltip: {
+          callbacks: {
+            label(ctx) {
+              const r = ctx.raw;
+              const ts = new Date(r.x);
+              if (r && r.st !== undefined) {
+                return `${ctx.dataset.label}: ${r.st ? 'EIN' : 'AUS'} · ${ts.toLocaleString('de-DE')}`;
+              }
+              const di = r && Number.isFinite(r.y) ? Math.round(r.y) : -1;
+              const nm = di >= 0 && di < PUMP_NAMES.length ? PUMP_NAMES[di] : '';
+              return `${ctx.dataset.label}: ${nm} · ${ts.toLocaleString('de-DE')}`;
+            }
+          }
+        }
       },
       scales: {
         x: sharedXAxis(range),
         y: {
-          min: -0.5, max: devs.length-0.5,
-          ticks: { color:'#5a6e8a', stepSize:1,
-            callback: v => PUMP_NAMES[v] || '' },
-          grid: { color:'rgba(255,255,255,0.06)' }
+          min: -0.5, max: 7.5,
+          ticks: {
+            color: '#5a6e8a', stepSize: 1,
+            callback(v) {
+              const i = Math.round(v);
+              return (i >= 0 && i < PUMP_NAMES.length) ? PUMP_NAMES[i] : '';
+            }
+          },
+          grid: { color: 'rgba(255,255,255,0.06)' }
         }
       }
     }
@@ -1671,70 +1915,145 @@ function refreshOverviewChart() {
   });
 
   const cv = document.getElementById('chart-overview'); if (!cv) return;
-  if (charts['chart-overview']) { charts['chart-overview'].destroy(); delete charts['chart-overview']; }
+  destroyExistingChart(cv, 'chart-overview');
 
   const range = sharedTimeRange();
+  const showEvt = dstChecked('dst-evt') && logEvents.length > 0;
   const ds = [];
-  const norm = (arr, lo, hi) => arr.map((v,i) => ({
-    x: logStore.tsRaw[i]*1000,
+  const norm = (arr, lo, hi) => arr.map((v, i) => ({
+    x: logStore.tsRaw[i] * 1000,
     y: (v == null) ? null : Math.max(0, Math.min(100, (v - lo) / (hi - lo) * 100))
   }));
 
   if (dstChecked('dst-ph'))
-    ds.push({ label:'pH', data: norm(logStore.ph, 6.5, 8.5),
-      borderColor:'#3b82f6', backgroundColor:'transparent', fill:false,
-      pointRadius:0, borderWidth:2, tension:0.3, spanGaps:true, parsing:false });
+    ds.push({
+      label: 'pH', yAxisID: 'y', data: norm(logStore.ph, 6.5, 8.5),
+      borderColor: '#3b82f6', backgroundColor: 'transparent', fill: false,
+      pointRadius: 0, borderWidth: 2, tension: 0.3, spanGaps: true, parsing: false
+    });
 
   if (dstChecked('dst-orp'))
-    ds.push({ label:'ORP', data: norm(logStore.orp, 200, 900),
-      borderColor:'#06b6d4', backgroundColor:'transparent', fill:false,
-      pointRadius:0, borderWidth:2, tension:0.3, spanGaps:true, parsing:false });
+    ds.push({
+      label: 'ORP', yAxisID: 'y', data: norm(logStore.orp, 200, 900),
+      borderColor: '#06b6d4', backgroundColor: 'transparent', fill: false,
+      pointRadius: 0, borderWidth: 2, tension: 0.3, spanGaps: true, parsing: false
+    });
 
   if (dstChecked('dst-temp'))
-    ds.push({ label:'Wassertemp', data: norm(logStore.temp, 10, 40),
-      borderColor:'#f97316', backgroundColor:'transparent', fill:false,
-      pointRadius:0, borderWidth:2, tension:0.3, spanGaps:true, parsing:false });
+    ds.push({
+      label: 'Wassertemp', yAxisID: 'y', data: norm(logStore.temp, 10, 40),
+      borderColor: '#f97316', backgroundColor: 'transparent', fill: false,
+      pointRadius: 0, borderWidth: 2, tension: 0.3, spanGaps: true, parsing: false
+    });
 
   if (dstChecked('dst-psi'))
-    ds.push({ label:'Druck', data: norm(logStore.psi, 0, 4),
-      borderColor:'#a855f7', backgroundColor:'transparent', fill:false,
-      pointRadius:0, borderWidth:2, tension:0.3, spanGaps:true, parsing:false });
+    ds.push({
+      label: 'Druck', yAxisID: 'y', data: norm(logStore.psi, 0, 4),
+      borderColor: '#a855f7', backgroundColor: 'transparent', fill: false,
+      pointRadius: 0, borderWidth: 2, tension: 0.3, spanGaps: true, parsing: false
+    });
 
-  if (dstChecked('dst-evt') && logEvents.length) {
-    const devsPresent = [...new Set(logEvents.map(e => e.dev))];
-    devsPresent.forEach(dev => {
-      const pts = logEvents.filter(e => e.dev === dev).map(e => ({
-        x: e.ts*1000, y: e.state ? 95 : 5
-      }));
-      if (!pts.length) return;
-      ds.push({
-        label: PUMP_NAMES[dev] || ('Gerät ' + dev),
-        data: pts,
-        type: 'scatter',
-        pointRadius: 5,
-        pointStyle: 'circle',
-        backgroundColor: PUMP_COLORS[dev % PUMP_COLORS.length] + 'cc',
-        borderColor: PUMP_COLORS[dev % PUMP_COLORS.length],
-        showLine: false, parsing: false
-      });
+  if (showEvt) {
+    const devSeen = [...new Set(logEvents.map(e => e.dev))].sort((a, b) => a - b);
+    devSeen.forEach(dev => {
+      const lp = buildEventLineData(dev, range.hi);
+      if (lp.length) {
+        ds.push({
+          type: 'line',
+          yAxisID: 'y1',
+          label: PUMP_NAMES[dev],
+          data: lp,
+          borderColor: PUMP_COLORS[dev % PUMP_COLORS.length],
+          backgroundColor: 'transparent',
+          borderWidth: 3,
+          pointRadius: 0,
+          spanGaps: false,
+          tension: 0,
+          parsing: false
+        });
+      }
+      const mk = buildEventMarkers(dev);
+      if (mk.length) {
+        ds.push({
+          type: 'scatter',
+          yAxisID: 'y1',
+          label: PUMP_NAMES[dev] + ' ',
+          data: mk,
+          borderColor: PUMP_COLORS[dev % PUMP_COLORS.length],
+          backgroundColor: PUMP_COLORS[dev % PUMP_COLORS.length],
+          pointRadius: 6,
+          pointBorderWidth: 1,
+          pointBorderColor: 'rgba(255,255,255,0.8)',
+          pointStyle(ctx) {
+            const r = ctx.raw;
+            return (r && r.st) ? 'triangle' : 'rectRot';
+          },
+          parsing: false
+        });
+      }
     });
   }
 
+  if (!ds.length) {
+    ds.push({
+      label: '–', yAxisID: 'y', data: [],
+      borderColor: 'rgba(255,255,255,0.06)', parsing: false
+    });
+  }
+
+  const scales = {
+    x: sharedXAxis(range),
+    y: {
+      type: 'linear',
+      position: 'left',
+      min: 0, max: 100,
+      ticks: { color: '#5a6e8a', callback: v => v + '%' },
+      grid: { color: 'rgba(255,255,255,0.06)' }
+    }
+  };
+  if (showEvt) {
+    scales.y1 = {
+      type: 'linear',
+      position: 'right',
+      min: -0.5,
+      max: 7.5,
+      offset: true,
+      ticks: {
+        color: '#94a3b8',
+        stepSize: 1,
+        callback(v) {
+          const i = Math.round(v);
+          return (i >= 0 && i < PUMP_NAMES.length) ? PUMP_NAMES[i] : '';
+        }
+      },
+      grid: { drawOnChartArea: false }
+    };
+  }
+
   charts['chart-overview'] = new Chart(cv, {
+    plugins: [createMidnightPlugin()],
     type: 'line',
     data: { datasets: ds },
     options: {
       responsive: true, maintainAspectRatio: false, animation: false,
       plugins: {
-        legend: { display: true, position: 'bottom',
-          labels: { color:'#8fa0bd', font:{ size:11 }, boxWidth:12, padding:12 }
+        legend: {
+          display: true, position: 'bottom',
+          labels: {
+            color: '#8fa0bd', font: { size: 11 }, boxWidth: 12, padding: 12,
+            filter(item, chartOrData) {
+              const root = chartOrData && chartOrData.data !== undefined ? chartOrData.data : chartOrData;
+              const datasets = root && root.datasets;
+              if (!datasets || item.datasetIndex == null) return true;
+              const dset = datasets[item.datasetIndex];
+              if (!dset) return true;
+              return typeof dset.label !== 'string' || !dset.label.endsWith(' ');
+            }
+          }
         },
-        tooltip: { mode:'index', intersect:false }
+        tooltip: { mode: 'index', intersect: false }
       },
-      scales: {
-        x: sharedXAxis(range),
-        y: { min:0, max:100, ticks:{ color:'#5a6e8a', callback: v => v + '%' }, grid:{ color:'rgba(255,255,255,0.06)' } }
-      }
+      scales
     }
   });
 }

@@ -30,9 +30,24 @@
 #include <WiFi.h>
 #ifdef MATTER_ENABLED
 #include "MatterBridge.h"
+#include <esp_wifi.h>
 #endif
 
 extern Arduino_DebugUtils Debug;
+
+#ifndef MATTER_ENABLED
+static int poolWifiRssi(bool wifiUp)
+{
+  return wifiUp ? WiFi.RSSI() : 0;
+}
+#else
+static int poolWifiRssi(bool wifiUp)
+{
+  if (!wifiUp) return 0;
+  wifi_ap_record_t ap{};
+  return (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) ? ap.rssi : 0;
+}
+#endif
 extern Preferences nvs;
 extern void connectToWiFi();
 extern void connectToMqtt();
@@ -470,11 +485,14 @@ static String buildStatusJson() {
     JsonObject net = doc.createNestedObject("net");
     net["wifi"]    = storage.WIFI_OnOff ? 1 : 0;
     net["mqtt"]    = storage.MQTTLOGIN_OnOff ? 1 : 0;
-    bool wifiUp    = (WiFi.status() == WL_CONNECTED);
+    bool wifiUp    = wifiStaConnected();
     net["wifiUp"]  = wifiUp ? 1 : 0;
     net["ssid"]    = storage.SSID;
-    net["ip"]      = wifiUp ? WiFi.localIP().toString() : String("–");
-    net["rssi"]    = wifiUp ? WiFi.RSSI() : 0;
+    {
+        char ipb[20];
+        net["ip"] = (wifiUp && wifiStaGetIpv4String(ipb, sizeof(ipb))) ? String(ipb) : String("–");
+    }
+    net["rssi"]    = poolWifiRssi(wifiUp);
     net["mqttUp"]  = MQTTConnection ? 1 : 0;
 
     JsonObject solar = doc.createNestedObject("solar");
@@ -608,7 +626,7 @@ void initWebUI() {
 
     // ── Settings ───────────────────────────────────────────────────────────────
     server.on("/api/settings", HTTP_GET, [](AsyncWebServerRequest* req) {
-        StaticJsonDocument<1024> doc;
+        StaticJsonDocument<1280> doc;
         doc["poolVol"]    = (double)storage.PoolVolume;
         doc["phSP"]       = storage.Ph_SetPoint;
         doc["orpSP"]      = storage.Orp_SetPoint;
@@ -630,6 +648,8 @@ void initWebUI() {
         doc["filtStart"]  = storage.FiltrationStart;
         doc["filtStop"]   = storage.FiltrationStop;
         doc["delayPID"]   = storage.DelayPIDs;
+        doc["waterTempSP"] = storage.WaterTemp_SetPoint;
+        doc["heatPumpMode"] = storage.HeatPumpMode ? 1 : 0;
         doc["firmware"]   = Firmw;
         doc["uptime"]     = storage.Uptime;
         String out; serializeJson(doc, out);
@@ -694,10 +714,13 @@ void initWebUI() {
         doc["mqttUser"] = storage.MQTT_USER;
         doc["mqttPass"] = storage.MQTT_PASS;
         doc["mqttName"] = storage.MQTT_NAME;
-        bool wifiUp     = (WiFi.status() == WL_CONNECTED);
+        bool wifiUp     = wifiStaConnected();
         doc["wifiUp"]   = wifiUp;
-        doc["ip"]       = wifiUp ? WiFi.localIP().toString() : String("–");
-        doc["rssi"]     = wifiUp ? WiFi.RSSI() : 0;
+        {
+            char ipb[20];
+            doc["ip"] = (wifiUp && wifiStaGetIpv4String(ipb, sizeof(ipb))) ? String(ipb) : String("–");
+        }
+        doc["rssi"]     = poolWifiRssi(wifiUp);
         doc["mqttUp"]   = MQTTConnection;
         String out; serializeJson(doc, out);
         req->send(200, "application/json", out);

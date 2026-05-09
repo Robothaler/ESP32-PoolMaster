@@ -7,7 +7,7 @@
 #include <Arduino.h>
 #include "Config.h"
 #include "PoolMaster.h"
-#include "MatterBridge.h"   // matterIsBleCommissioning() — no-op stub in non-Matter builds
+#include "MatterBridge.h"   // matterIsBleCommissioning(), matterYieldAppTasksIfChipobleBusy()
 
 // Size of the buffer to store outgoing JSON messages
 #define PAYLOAD_BUFFER_LENGTH 256 // Increased to accommodate potential larger payloads
@@ -116,6 +116,7 @@ void SettingsPublish(void *pvParameters)
     StaticJsonDocument<JSON_OBJECT_SIZE(16)> root; // Increased size for Calibration (13 keys)
 
     for (;;) {
+        matterYieldAppTasksIfChipobleBusy();
 #ifdef CHRONO
         td = millis();
 #endif
@@ -134,8 +135,8 @@ void SettingsPublish(void *pvParameters)
             root["FDu"] = storage.FiltrationDuration;     // Filtration duration (hours)
             root["FStoM"] = storage.FiltrationStopMax;    // Maximum filtration stop time (hour)
             root["FSto"] = storage.FiltrationStop;        // Filtration stop time (hour)
-            root["pHUTL"] = storage.PhPumpUpTimeLimit / 60; // pH pump uptime limit (minutes)
-            root["ChlUTL"] = storage.ChlPumpUpTimeLimit / 60; // Chlorine pump uptime limit (minutes)
+            root["pHUTL"] = storage.PhPumpUpTimeLimit / 60000UL; // minutes (storage in ms)
+            root["ChlUTL"] = storage.ChlPumpUpTimeLimit / 60000UL; // minutes (storage in ms)
             root["SStaM"] = storage.SolarStartMin;        // Solar pump start time (minute)
             root["SStoM"] = storage.SolarStopMax;         // Solar pump stop time (minute)
             n = serializeJson(root, Payload);
@@ -339,6 +340,7 @@ void MeasuresPublish(void *pvParameters)
     lastSystemRoot.clear();
 
     for (;;) {
+        matterYieldAppTasksIfChipobleBusy();
         rc = ulTaskNotifyTake(pdFALSE, WaitTimeOut);
 
         if (rc != 0) {

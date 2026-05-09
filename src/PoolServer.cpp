@@ -147,31 +147,34 @@ void ProcessCommand(void *pvParameters)
             }
 }
 
-        //Provide the external solar valve command.
+        //Provide the external solar valve command (JSON key "SolarValve").
+        // Local mode (SolarLocExt=0): drive the physical MotorValve from API.
+        // MQTT/SolarControl mode (SolarLocExt=1): valve is controlled remotely — do not actuate local hardware.
         if (command.containsKey(F("SolarValve")))
         {
-            if (storage.SolarLocExt == 1) { // Nur im externen Modus aktualisieren
+            if (storage.SolarLocExt == 1) {
+                Debug.print(DBG_INFO,
+                            "[PoolServer] SolarValve JSON ignored — MQTT solar (no local MotorValve)");
+            } else {
                 String solValveCmd = command["SolarValve"].as<String>();
                 if (solValveCmd == "on" || solValveCmd == "1") {
                     Solarvalve.open();
-                    storage.ValveStatus = 1; // Speichere Status (Pool)
-                    Debug.print(DBG_DEBUG, "External Solar Valve opened");
+                    storage.ValveStatus = 1;
+                    Debug.print(DBG_DEBUG, "Local Solar Valve opened (JSON)");
                 } else if (solValveCmd == "off" || solValveCmd == "0") {
                     Solarvalve.close();
-                    storage.ValveStatus = 0; // Speichere Status (Puffer)
-                    Debug.print(DBG_DEBUG, "External Solar Valve closed");
+                    storage.ValveStatus = 0;
+                    Debug.print(DBG_DEBUG, "Local Solar Valve closed (JSON)");
                 } else {
                     Debug.print(DBG_WARNING, "Invalid Solar Valve command: %s", solValveCmd.c_str());
                 }
-            } else {
-                Debug.print(DBG_WARNING, "Ignoring SolarValve command in Local Mode (SolarLocExt = 0)");
             }
         }
 
         //"SolarValve" command which turns the MotorValve of the Solar valve to desired position
         else if (command.containsKey(F("SOLARVALVE")))
         {
-          if (storage.SolarLocExt == 0) { // Nur im externen Modus aktualisieren
+          if (storage.SolarLocExt == 0) { // Nur im lokalen Modus (SolarLocExt=0)
             if (command[F("SOLARVALVE")] == "open")
             {
               Solarvalve.open(); //open MotorValve
@@ -195,7 +198,7 @@ void ProcessCommand(void *pvParameters)
             }
           } else
           {
-            Debug.print(DBG_WARNING, "Ignoring SOLARVALVE command in Local Mode (SolarLocExt = 0)");
+            Debug.print(DBG_WARNING, "Ignoring SOLARVALVE command in MQTT solar mode (SolarLocExt = 1)");
           }
         }
 
@@ -1170,6 +1173,15 @@ void ProcessCommand(void *pvParameters)
         else if (command.containsKey(F("Date"))) //"Date" command which sets the Date of RTC module
         {
           setTime((uint8_t)command[F("Date")][4], (uint8_t)command[F("Date")][5], (uint8_t)command[F("Date")][6], (uint8_t)command[F("Date")][0], (uint8_t)command[F("Date")][2], (uint8_t)command[F("Date")][3]); //(Day of the month, Day of the week, Month, Year, Hour, Minute, Second)
+          struct tm tm_sys = {};
+          tm_sys.tm_year = year() - 1900;
+          tm_sys.tm_mon = month() - 1;
+          tm_sys.tm_mday = day();
+          tm_sys.tm_hour = hour();
+          tm_sys.tm_min = minute();
+          tm_sys.tm_sec = second();
+          tm_sys.tm_isdst = -1;
+          poolApplyEspSystemTimeFromLocalTm(&tm_sys);
         }
         else if (command.containsKey(F("FiltT0"))) //"FiltT0" command which sets the earliest hour when starting Filtration pump
         {
@@ -1365,11 +1377,14 @@ void ProcessCommand(void *pvParameters)
         }
         else if (command.containsKey(F("HeatPump"))) //"HeatPump" command which starts or stops the Heatpump
         {
-          if ((int)command[F("HeatPump")] == 0){
-            HeatPump.Stop();    //stop Heatpump
+          if ((int)command[F("HeatPump")] == 0) {
+            HeatPump.Stop();
+          } else if (FiltrationPump.IsRunning()) {
+            HeatPump.Start();
           } else {
-            HeatPump.Start();   //start Heatpump
-          }  
+            Debug.print(DBG_WARNING, "[HeatPump] Start ignored: FiltrationPump not running");
+            mqttErrorPublish("{\"error\":\"HeatPump start ignored: FiltrationPump not running\"}");
+          }
         }
         else if (command.containsKey(F("WaterFill"))) //"WaterFill" command which starts or stops the WaterFill tap
         {

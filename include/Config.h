@@ -1,7 +1,7 @@
 #pragma once 
 
 // Firmware revision
-#define FIRMW           "ESP-3.0"
+#define FIRMW           "ESP-3.3.6"
 #define TFT_FIRMW       "TFT-2.0"
 
 //Version of config stored in EEPROM
@@ -9,7 +9,7 @@
 #define CONFIG_VERSION  11
 
 // Matter NVS version — bump to force re-commissioning (erases chip-kvs/chip-counters/chip-config)
-#define MATTER_NVS_VERSION  5
+#define MATTER_NVS_VERSION  6
 
 // While no Matter fabric exists, keep MQTT disconnected. ESP32-S3 shares 2.4 GHz for
 // Wi‑Fi and BLE; MQTT traffic reliably breaks CHIPoBLE / PASE (Apple then often shows
@@ -21,20 +21,43 @@
 
 // Extra 2.4 GHz headroom for CHIPoBLE while still uncommissioned:
 // • MAX power-save reduces how often STA holds the radio.
-// • STA disconnect on BLE GAP connect (`esp_wifi_disconnect`) frees the 2.4 GHz radio
-//   for PASE/BTP indications; without it we still saw zero NOTIFY_TX and Apple timeout
-//   (0x213) even with CPU yield. Trade-off: rare Apple flows that need STA+BLE at the
-//   same instant can show "Gerät wurde nicht gefunden" — then set this to 0.
+// • STA disconnect on BLE GAP connect can help PASE when NOTIFY_TX stalls, but Apple Home
+//   often needs STA+BLE during setup → default OFF. If you set this to 1, disconnect is
+//   deferred (MATTER_WIFI_STA_OFF_BLE_GAP_DELAY_US) so NimBLE is not wedged from the GAP
+//   callback (avoids "Adv reattempt failed; rc=3" / "Gerät wurde nicht gefunden").
 #if !defined(MATTER_WIFI_PS_MAX_WHILE_UNCOMMISSIONED)
 #define MATTER_WIFI_PS_MAX_WHILE_UNCOMMISSIONED  1
 #endif
 #if !defined(MATTER_WIFI_STA_OFF_DURING_BLE_GAP)
-#define MATTER_WIFI_STA_OFF_DURING_BLE_GAP  1
+#define MATTER_WIFI_STA_OFF_DURING_BLE_GAP  0
+#endif
+#if !defined(MATTER_WIFI_STA_OFF_BLE_GAP_DELAY_US)
+#define MATTER_WIFI_STA_OFF_BLE_GAP_DELAY_US  300000u // 300 ms after GAP CONNECT
 #endif
 
-// NimBLE GAP listener: SUBSCRIBE / NOTIFY_TX (indication ACK) / MTU / disconnect — logs
-// to Serial + ESP_LOG even when ChipDeviceLayer does not post kCHIPoBLE* events (typical
-// on esp_matter + Apple commissioning debug). Set 0 to disable.
+// When MATTER_WIFI_STA_OFF_DURING_BLE_GAP is 0: optional defer WiFi STA disconnect after
+// CHIPoBLE TX CCCD SUBSCRIBE (handle MATTER_CHIPOBLE_GAP_TX_CCCD_ATTR_HANDLE).
+// **Default OFF:** serial-20260501_163018 showed correct trigger (0x0012 @ ~18230 ms, disconnect
+// @ ~18630 ms) yet **zero** `MatterBLE: GAP NOTIFY_TX` and **0x213** — STA drop during the
+// open BLE link appears to break BTP on this build. Set to 1 only for experiments.
+#if !defined(MATTER_WIFI_DISCONNECT_AFTER_BLE_INDICATE_SUBSCRIBE)
+#define MATTER_WIFI_DISCONNECT_AFTER_BLE_INDICATE_SUBSCRIBE  0
+#endif
+#if !defined(MATTER_CHIPOBLE_GAP_TX_CCCD_ATTR_HANDLE)
+#define MATTER_CHIPOBLE_GAP_TX_CCCD_ATTR_HANDLE  0x0012u
+#endif
+#if !defined(MATTER_WIFI_BLE_SUBSCRIBE_RELIEVE_US)
+#define MATTER_WIFI_BLE_SUBSCRIBE_RELIEVE_US  400000u
+#endif
+
+// Agent NDJSON lines — bei Pairing serial/aus (printf kann NimBLE blockieren).
+#if !defined(MATTER_AGENT_DEBUG_NDJSON)
+#define MATTER_AGENT_DEBUG_NDJSON  0
+#endif
+
+// NimBLE GAP listener: SUBSCRIBE / NOTIFY_TX (indication ACK) / MTU / disconnect — ESP_LOG
+// only from the GAP callback (Serial there garbles chip[DL] lines and can block NimBLE).
+// Set 0 to disable.
 #if !defined(MATTER_BLE_GAP_DIAG_LISTENER)
 #define MATTER_BLE_GAP_DIAG_LISTENER  1
 #endif
@@ -52,12 +75,43 @@
 #define MATTER_THROTTLE_APP_TASKS_DURING_CHIPOBLE  1
 #endif
 #if !defined(MATTER_CHIPOBLE_APP_YIELD_MS)
-#define MATTER_CHIPOBLE_APP_YIELD_MS  15
+#define MATTER_CHIPOBLE_APP_YIELD_MS  32
 #endif
 
 // Extra Matter transport logs (PASE/CASE, message layer). Very chatty — default off.
 #if !defined(MATTER_LOG_EXTRA_CHIP_TAGS)
 #define MATTER_LOG_EXTRA_CHIP_TAGS  1
+#endif
+
+// Defer otaTask's AsyncWebServer (WebUI) until Fabric existiert oder Fallback — stark empfohlen
+// fürs Apple-Pairing (AsyncTCP/WebSocket konkurriert mit CHIPoBLE auf 2,4 GHz).
+// Nach erfolgreicher Einrichtung (fabric>0) startet der Server sofort im otaTask.
+#if !defined(MATTER_DEFER_HTTP_SERVER_UNTIL_COMMISSIONED)
+#define MATTER_DEFER_HTTP_SERVER_UNTIL_COMMISSIONED  1
+#endif
+#if !defined(MATTER_HTTP_SERVER_FALLBACK_MS)
+#define MATTER_HTTP_SERVER_FALLBACK_MS  (90UL * 1000UL)
+#endif
+
+// Suspend pool FreeRTOS tasks (see Tasks.cpp) on BLE GAP connect while fabric==0;
+// resume on disconnect / CommissioningComplete / CHIPoBLE closed.
+//
+// Default OFF: suspending PoolMaster/PCF during GAP correlated with CHIP failing to post
+// to the Platform event queue (0x01000000 / "Failed to schedule work") and BLE teardown
+// 0x213 once the phone sends the first GATT write (see logs/serial-20260503_162037.log).
+// MATTER_THROTTLE_APP_TASKS_DURING_CHIPOBLE yields Core-1 loops instead — fewer deadlock risks.
+//
+// Enable (=1) only if you run heavy tasks (e.g. CombinedPolling) during commissioning and see
+// chip[DL] Long dispatch / PASE timeouts — logs/serial-20260503_110709.log style.
+#if !defined(MATTER_SUSPEND_APP_TASKS_DURING_GAP_PASE)
+#define MATTER_SUSPEND_APP_TASKS_DURING_GAP_PASE  0
+#endif
+
+// Set to 1 to expose a **single** On/Off device (no Aggregator/bridge, no extra endpoints).
+// Reduces RAM / descriptors — useful for commissioning/PASE debugging. Maps OnOff → Filterpump JSON.
+// Switching minimal ↔ full usually requires a Matter factory reset (different endpoint layout).
+#if !defined(MATTER_MINIMAL_DEVICE)
+#define MATTER_MINIMAL_DEVICE  0
 #endif
 
 #define DEBUG_LEVEL     DBG_INFO    // Possible levels : NONE/ERROR/WARNING/INFO/DEBUG/VERBOSE
@@ -238,6 +292,10 @@
 #define ROBOT_DELAY       60     // Robot start delay after filtration in mn
 #define ROBOT_DURATION    90     // Robot cleaning duration in mn
 
+// Pool heat pump (Wärmepumpe): AUTO mode compares WaterSTemp to WaterTemp_SetPoint (Schmitt trigger)
+#define HEAT_PUMP_AUTO_HYST_BELOW_SP  0.45   // °C — start heating when temp < setpoint − this
+#define HEAT_PUMP_AUTO_HYST_ABOVE_SP  0.45   // °C — stop heating when temp > setpoint + this
+
 //Display timeout before blanking
 //-------------------------------
 #define TFT_SLEEP         60000L 
@@ -257,6 +315,56 @@
 // T11: PublishMeasures
 // T12: PublishSettings
 // T13: OTATask (for Nextion display OTA updates)
+// T14: MatterSyncTask (esp_matter state sync — created only if MATTER_ENABLED && ENABLE_TASK_T14)
+// T15: PCF8574Manager update task (I2C expander writes)
+//
+// Task creation: 1 = all pool loop tasks, 0 = minimal set for Matter commissioning bisect
+// (#else: T1+T2+T4…T13 off, T3 PoolMaster on; T14/T15 default 0 here but see MATTER_ENABLED override below.)
+// T6 and T7 in comments are one task (ChlorSaltRegulation) — controlled by ENABLE_TASK_T6.
+#ifndef POOLMASTER_ENABLE_ALL_POOL_TASKS
+#define POOLMASTER_ENABLE_ALL_POOL_TASKS 1
+#endif
+#if POOLMASTER_ENABLE_ALL_POOL_TASKS
+#define ENABLE_TASK_T1        1
+#define ENABLE_TASK_T2        1
+#define ENABLE_TASK_T3        1
+#define ENABLE_TASK_T4        1
+#define ENABLE_TASK_T5        1
+#define ENABLE_TASK_T6        1
+#define ENABLE_TASK_T8        1
+#define ENABLE_TASK_T9        1
+#define ENABLE_TASK_T10       1
+#define ENABLE_TASK_T11       1
+#define ENABLE_TASK_T12       1
+#define ENABLE_TASK_T13       1
+#define ENABLE_TASK_T14       1
+#define ENABLE_TASK_T15       1
+#else
+#define ENABLE_TASK_T1        0
+#define ENABLE_TASK_T2        0
+#define ENABLE_TASK_T3        1
+#define ENABLE_TASK_T4        0
+#define ENABLE_TASK_T5        0
+#define ENABLE_TASK_T6        0
+#define ENABLE_TASK_T8        0
+#define ENABLE_TASK_T9        0
+#define ENABLE_TASK_T10       0
+#define ENABLE_TASK_T11       0
+#define ENABLE_TASK_T12       0
+#define ENABLE_TASK_T13       0
+#define ENABLE_TASK_T14       0
+#define ENABLE_TASK_T15       0
+#endif
+
+// Minimal pool task set + Matter: must keep T14 (MatterSyncTask) and T15 (PCF worker).
+// With T15=0, PoolMaster still drives PCF8574 sync every PT3 → endless DBG_ERROR / Serial spam,
+// CHIP event loop starvation ("Long dispatch time" ~880 ms), FailSafe timeout, Apple Home abort.
+#if !POOLMASTER_ENABLE_ALL_POOL_TASKS && defined(MATTER_ENABLED)
+#undef ENABLE_TASK_T14
+#define ENABLE_TASK_T14       1
+#undef ENABLE_TASK_T15
+#define ENABLE_TASK_T15       1
+#endif
 
 // Periods 
 // Task12 period is initialized with PUBLISHINTERVAL and can be changed dynamically
@@ -303,6 +411,7 @@
 #define STACK_T11         8192  // PublishMeasures
 #define STACK_T12         5120  // PublishSettings
 #define STACK_T13         6144  // OTATask — SPIFFS + HardwareSerial + 512 B file buffer
+#define STACK_T15         4096  // PCF8574Manager update (I2C / Wire)
 
 // Task priorities angepasst für bessere Synchronisation
 #define PRIORITY_T1       1    // CombinedPolling höchste Priorität
@@ -318,6 +427,7 @@
 #define PRIORITY_T11      1
 #define PRIORITY_T12      1
 #define PRIORITY_T13      1         // Priority for OTA task
+#define PRIORITY_T15      2         // PCF worker — above pool loops (legacy tskIDLE_PRIORITY+2)
 
 // Timing Parameter für PCF8574
 #define PCF_UPDATE_INTERVAL    50    // Minimale Zeit zwischen PCF Updates (ms)
@@ -347,7 +457,7 @@
 // Sync period: how often pool state is pushed to Matter attribute cache (ms)
 #define MATTER_SYNC_PERIOD_MS   5000
 
-// T14: Matter sync task parameters (used by createTasks() when MATTER_ENABLED)
+// T14: Matter sync task parameters (used by createTasks() when MATTER_ENABLED && ENABLE_TASK_T14)
 #ifndef STACK_T14
   #define STACK_T14             4096
 #endif
@@ -355,7 +465,9 @@
   #define PT14                  MATTER_SYNC_PERIOD_MS
 #endif
 #define DT14                    (2000 / portTICK_PERIOD_MS)  // Start offset
-#define PRIORITY_T14            1
+#ifndef PRIORITY_T14
+  #define PRIORITY_T14          1
+#endif
 
 // =============================================================================
 // Matter SolarControl integration — NVS keys and constants

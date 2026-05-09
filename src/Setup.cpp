@@ -6,6 +6,9 @@
 #include <SPIFFS.h>
 #include "esp_chip_info.h"
 #include <esp_system.h>             // for esp_reset_reason
+#include <sys/time.h>
+#include <string.h>
+#include <errno.h>
 
 #include "Config.h"
 #include "I2CConfig.h"
@@ -99,9 +102,9 @@ StoreStruct storage =
     {0x28, 0xAA, 0x0F, 0x8D, 0x16, 0x13, 0x02, 0x38}, // address_W_3: WaterWPTemp
     {0x28, 0xAA, 0xCA, 0x93, 0x13, 0x13, 0x02, 0xD0}, // address_W_4: WaterWTTemp
     {0, 1, 2, 3, 4}, // Array_W
-    2700/*PhPumpUpTimeLimit*/, 2700/*ChlPumpUpTimeLimit*/, 900000/*WaterFillUpTimeLimit*/, 300000/* WaterFillDuration*/, 0/*SaltPumpRunTime*/, 30000/*PublishPeriod*/,
+    900000UL/*PhPumpUpTimeLimit ms (15 min)*/, 2500000UL/*ChlPumpUpTimeLimit ms (~41.7 min, ex 2500 s)*/, 900000/*WaterFillUpTimeLimit*/, 300000/* WaterFillDuration*/, 0/*SaltPumpRunTime*/, 30000/*PublishPeriod*/,
     1800000/*PhPIDWindowSize*/, 1800000/*OrpPIDWindowSize*/, 0/*PhPIDwindowStartTime*/, 0/*OrpPIDwindowStartTime*/, 0/*WaterFillAnCon*/,
-    7.2/*Ph_SetPoint*/, 740.0/*Orp_SetPoint*/, 1.5/*PSI_HighThreshold*/, 0.3/*PSI_MedThreshold*/, 0.2/*FLOW_Pulse*/, 200.0/*FLOW_HighThreshold*/, 40.0/*FLOW_MedThreshold*/, 4.5/*FLOW2_Pulse*/, 60/*FLOW2_HighThreshold*/, 1.0/*FLOW2_MedThreshold*/, 10.0/*WaterTempLowThreshold*/, 30.0/*WaterTemp_SetPoint*/, -2.3183/*pHCalibCoeffs0*/, 6.68/*pHCalibCoeffs1*/, 465.0/*OrpCalibCoeffs0*/, 0.0/*OrpCalibCoeffs1*/, 1.31/*PSICalibCoeffs0*/, -0.1/*PSICalibCoeffs1*/, 30.0/*SaltDiff*/,
+    7.2/*Ph_SetPoint*/, 740.0/*Orp_SetPoint*/, 1.5/*PSI_HighThreshold*/, 0.3/*PSI_MedThreshold*/, 0.8/*FLOW_Pulse*/, 120.0/*FLOW_HighThreshold*/, 60.0/*FLOW_MedThreshold*/, 4.5/*FLOW2_Pulse*/, 60/*FLOW2_HighThreshold*/, 1.0/*FLOW2_MedThreshold*/, 10.0/*WaterTempLowThreshold*/, 30.0/*WaterTemp_SetPoint*/, -2.3183/*pHCalibCoeffs0*/, 6.68/*pHCalibCoeffs1*/, 465.0/*OrpCalibCoeffs0*/, 0.0/*OrpCalibCoeffs1*/, 1.31/*PSICalibCoeffs0*/, -0.1/*PSICalibCoeffs1*/, 30.0/*SaltDiff*/,
     2700000.0/*Ph_Kp*/, 0.0/*Ph_Ki*/, 0.0/*Ph_Kd*/, 18000.0/*Orp_Kp*/, 0.0/*Orp_Ki*/, 0.0/*Orp_Kd*/, 0.0/*PhPIDOutput*/, 0.0/*OrpPIDOutput*/, 6.8/*PhValue*/, 0.0/*PhRawValue*/, 720./*OrpValue*/, 0.0/*OrpRawValue*/, 1.3/*PSIValue*/, 70/*FLOWValue*/, 9/*FLOW2Value*/,
     0.0/*WaterSTemp*/, 0.0/*WaterITemp*/, 0.0/*WaterBTemp*/, 0.0/*WaterWPTemp*/, 0.0/*WaterWTTemp*/, 0.0/*AirInTemp*/, 0.0/*AirTemp*/, 0.0/*AirHum*/, 0.0/*AirPress*/, 0.0/*SolarTemp*/, 0.0/*SolarVLTemp*/, 0.0/*SolarRLTemp*/,
     25.0/*AcidFill*/, 60.0/*ChlFill*/, 20.0/*pHTankVol*/, 20.0/*ChlTankVol*/, 2.7/*pHPumpFR*/, 2.7/*ChlPumpFR*/, 15.0/*WaterFillFR*/, 0.0/*SaltCurrentValue*/, 0.0/*FilterCurrentValue*/, 0.0/*HeatCurrentValue*/, 10.0/*SaltCurrentCalibCoeffs0*/, -25.0/*SaltCurrentCalibCoeffs1 | 100 mV/A, 2.5V bei 0A*/, 10.0/*FilterCurrentCalibCoeffs0*/, -25.0/*FilterCurrentCalibCoeffs1 | 100 mV/A, 2.5V bei 0A */, 10.0/*HeatCurrentCalibCoeffs0*/, -25.0/*HeatCurrentCalibCoeffs1 | 100 mV/A, 2.5V bei 0A*/,
@@ -131,9 +134,9 @@ StoreStruct storage =
     {0x28, 0xAA, 0x0F, 0x8D, 0x16, 0x13, 0x02, 0x38}, // address_W_3: WaterWPTemp
     {0x28, 0xAA, 0xCA, 0x93, 0x13, 0x13, 0x02, 0xD0}, // address_W_4: WaterWTTemp
     {0, 1, 2, 3, 4}, // Array_W
-    2700/*PhPumpUpTimeLimit*/, 2700/*ChlPumpUpTimeLimit*/, 900000/*WaterFillUpTimeLimit*/, 300000/* WaterFillDuration*/, 0/*SaltPumpRunTime*/, 30000/*PublishPeriod*/,
+    900000UL/*PhPumpUpTimeLimit ms (15 min)*/, 2500000UL/*ChlPumpUpTimeLimit ms (~41.7 min, ex 2500 s)*/, 900000/*WaterFillUpTimeLimit*/, 300000/* WaterFillDuration*/, 0/*SaltPumpRunTime*/, 30000/*PublishPeriod*/,
     1800000/*PhPIDWindowSize*/, 1800000/*OrpPIDWindowSize*/, 0/*PhPIDwindowStartTime*/, 0/*OrpPIDwindowStartTime*/, 0/*WaterFillAnCon*/,
-    7.2/*Ph_SetPoint*/, 740.0/*Orp_SetPoint*/, 1.5/*PSI_HighThreshold*/, 0.3/*PSI_MedThreshold*/, 0.2/*FLOW_Pulse*/, 200.0/*FLOW_HighThreshold*/, 40.0/*FLOW_MedThreshold*/, 4.5/*FLOW2_Pulse*/, 6.0/*FLOW2_HighThreshold*/, 1.0/*FLOW2_MedThreshold*/, 10.0/*WaterTempLowThreshold*/, 30.0/*WaterTemp_SetPoint*/, 3.61078313/*pHCalibCoeffs0*/, -3.88020422/*pHCalibCoeffs1*/, -966.946396/*OrpCalibCoeffs0*/, 2526.88809/*OrpCalibCoeffs1*/, 1.31/*PSICalibCoeffs0*/, -0.1/*PSICalibCoeffs1*/, 30.0/*SaltDiff*/,
+    7.2/*Ph_SetPoint*/, 740.0/*Orp_SetPoint*/, 1.5/*PSI_HighThreshold*/, 0.3/*PSI_MedThreshold*/, 0.8/*FLOW_Pulse*/, 120.0/*FLOW_HighThreshold*/, 60.0/*FLOW_MedThreshold*/, 4.5/*FLOW2_Pulse*/, 60/*FLOW2_HighThreshold*/, 1.0/*FLOW2_MedThreshold*/, 10.0/*WaterTempLowThreshold*/, 30.0/*WaterTemp_SetPoint*/, 3.61078313/*pHCalibCoeffs0*/, -3.88020422/*pHCalibCoeffs1*/, -966.946396/*OrpCalibCoeffs0*/, 2526.88809/*OrpCalibCoeffs1*/, 1.31/*PSICalibCoeffs0*/, -0.1/*PSICalibCoeffs1*/, 30.0/*SaltDiff*/,
     2700000.0/*Ph_Kp*/, 0.0/*Ph_Ki*/, 0.0/*Ph_Kd*/, 18000.0/*Orp_Kp*/, 0.0/*Orp_Ki*/, 0.0/*Orp_Kd*/, 0.0/*PhPIDOutput*/, 0.0/*OrpPIDOutput*/, 6.8/*PhValue*/, 0.0/*PhRawValue*/, 720./*OrpValue*/, 0.0/*OrpRawValue*/, 1.3/*PSIValue*/, 70/*FLOWValue*/, 9/*FLOW2Value*/,
     0.0/*WaterSTemp*/, 0.0/*WaterITemp*/, 0.0/*WaterBTemp*/, 0.0/*WaterWPTemp*/, 0.0/*WaterWTTemp*/, 0.0/*AirInTemp*/, 0.0/*AirTemp*/, 0.0/*AirHum*/, 0.0/*AirPress*/, 0.0/*SolarTemp*/, 0.0/*SolarVLTemp*/, 0.0/*SolarRLTemp*/,
     25.0/*AcidFill*/, 60.0/*ChlFill*/, 20.0/*pHTankVol*/, 20.0/*ChlTankVol*/, 2.7/*pHPumpFR*/, 2.7/*ChlPumpFR*/, 15.0/*WaterFillFR*/, 0.0/*SaltCurrentValue*/, 0.0/*FilterCurrentValue*/, 0.0/*HeatCurrentValue*/, 10.0/*SaltCurrentCalibCoeffs0*/, -25.0/*SaltCurrentCalibCoeffs1 | 100 mV/A, 2.5V bei 0A*/, 10.0/*FilterCurrentCalibCoeffs0*/, -25.0/*FilterCurrentCalibCoeffs1 | 100 mV/A, 2.5V bei 0A */, 10.0/*HeatCurrentCalibCoeffs0*/, -25.0/*HeatCurrentCalibCoeffs1 | 100 mV/A, 2.5V bei 0A*/,
@@ -528,6 +531,10 @@ void setup()
   StartTime();
   readLocalTime();
   setTime(timeinfo.tm_hour,timeinfo.tm_min,timeinfo.tm_sec,timeinfo.tm_mday,timeinfo.tm_mon+1,timeinfo.tm_year-100);
+#ifdef MATTER_ENABLED
+  // matterBridgeStart() runs earlier, before NTP; push real UTC into CHIP (not Y2K).
+  matterResyncChipWallClockAfterNtp();
+#endif
   Debug.print(DBG_INFO,"%d/%02d/%02d %02d:%02d:%02d",year(),month(),day(),hour(),minute(),second());
 
   // Save reset reason and timestamp
@@ -546,7 +553,7 @@ void setup()
     if (!MDNS.begin("PoolMaster"))
       Debug.print(DBG_WARNING, "[SETUP] mDNS start failed — skipping");
     else
-      MDNS.addService("http", "tcp", SERVER_PORT);
+      MDNS.addService("http", "tcp", OTA_NEXTION_PORT);
 
     ArduinoOTA.setPort(OTA_PORT);
     ArduinoOTA.setHostname(OTA_HOST);
@@ -643,15 +650,15 @@ void setup()
   PhPump.SetFlowRate(storage.pHPumpFR);
   PhPump.SetTankVolume(storage.pHTankVol);
   PhPump.SetTankFill(storage.AcidFill);
-  PhPump.SetMaxUpTime(storage.PhPumpUpTimeLimit * 1000);
+  PhPump.SetMaxUpTime(storage.PhPumpUpTimeLimit);
 
   ChlPump.SetFlowRate(storage.ChlPumpFR);
   ChlPump.SetTankVolume(storage.ChlTankVol);
   ChlPump.SetTankFill(storage.ChlFill);
-  ChlPump.SetMaxUpTime(storage.ChlPumpUpTimeLimit * 1000);
+  ChlPump.SetMaxUpTime(storage.ChlPumpUpTimeLimit);
 
   //WaterFill.SetFlowRate(storage.WaterFillFR);
-  WaterFill.SetMaxUpTime(storage.WaterFillUpTimeLimit * 1000);
+  WaterFill.SetMaxUpTime(storage.WaterFillUpTimeLimit);
   WaterFill.Stop(); // Safety: ensure valve is physically closed on every startup
 
   // Start filtration pump at power-on if within scheduled time slots -- You can choose not to do this and start pump manually
@@ -699,6 +706,14 @@ void setup()
   if(storage.SolarLocExt)
   Solarvalve.calibrate();
   }
+
+// NVS: Gixy31 speicherte Sekunden; dieser Fork speichert Millisekunden (ganze Minuten, Vielfaches von 60000).
+static unsigned long migratePoolUpLimitToMs(unsigned long v) {
+  if (v == 0) return 0;
+  if (v >= 60000UL && (v % 60000UL) == 0UL) return v;
+  if (v <= 86400UL) return v * 1000UL;
+  return v;
+}
 
 namespace {
 struct PrefsGuard {
@@ -756,8 +771,8 @@ bool loadConfig() {
   storage.SolarStartMin         = nvs.getUChar("SolarStartMin",11);
   storage.SolarStopMax          = nvs.getUChar("SolarStopMax",18);
   storage.DelayPIDs             = nvs.getUChar("DelayPIDs",0);
-  storage.PhPumpUpTimeLimit     = nvs.getULong("PhPumpUTL",900);
-  storage.ChlPumpUpTimeLimit    = nvs.getULong("ChlPumpUTL",2500);
+  storage.PhPumpUpTimeLimit     = migratePoolUpLimitToMs(nvs.getULong("PhPumpUTL",900));
+  storage.ChlPumpUpTimeLimit    = migratePoolUpLimitToMs(nvs.getULong("ChlPumpUTL",2500));
   storage.PublishPeriod         = nvs.getULong("PublishPeriod",30000);
   storage.PhPIDWindowSize       = nvs.getULong("PhPIDWSize",60000);
   storage.OrpPIDWindowSize      = nvs.getULong("OrpPIDWSize",60000);
@@ -815,7 +830,7 @@ bool loadConfig() {
   storage.ChlPumpFR             = nvs.getDouble("ChlPumpFR",1.5);
   storage.WaterFillFR           = nvs.getDouble("WaterFillFR",15.0);
   storage.WaterFillAnCon        = nvs.getULong("WaterFillAnCon",0);
-  storage.WaterFillUpTimeLimit  = nvs.getULong("WaterFillUTL",900000);
+  storage.WaterFillUpTimeLimit  = migratePoolUpLimitToMs(nvs.getULong("WaterFillUTL",900000));
   storage.WaterFillDuration     = nvs.getULong("WaterFillDur",0);
   storage.SaltPumpRunTime       = nvs.getULong("SaltPumpRunTime",0);
   storage.SaltCurrentValue      = nvs.getDouble("SaltCurrentVal",0.0);
@@ -1195,7 +1210,7 @@ void unlockI2C() {
 
 void clearStatusLEDs(void) {
   PCF8574Manager& pcfManager = PCF8574Manager::getInstance();
-  pcfManager.queueUpdate(PCF8574_ADR, 0xFF, NULL); // All LEDs off
+  pcfManager.queueFullStateUpdate(PCF8574_ADR, 0xFF, NULL); // active-low: all high = off
 }
 
 // Connect to the BME280 sensor
@@ -1221,6 +1236,49 @@ void bme280Init() {
     }
   }
 
+// Match MatterBridge `kMatterPlausibleMinUnixSec` / WebUI — wall clock must not look like Y2K default.
+static constexpr time_t kMinEpochWallClockUtc = 1577836800; // 2020-01-01 00:00 UTC
+
+void poolEnsureEuropeBerlinTz(void)
+{
+  static bool configured = false;
+  if (configured) {
+    return;
+  }
+  setenv("TZ", "CET-1CEST,M3.5.0/2,M10.5.0/3", 1);
+  tzset();
+  configured = true;
+}
+
+void poolApplyEspSystemTimeFromLocalTm(struct tm *tmLocal)
+{
+  if (tmLocal == nullptr) {
+    return;
+  }
+  poolEnsureEuropeBerlinTz();
+  struct tm tmWork = *tmLocal;
+  if (tmWork.tm_isdst < 0 || tmWork.tm_isdst > 1) {
+    tmWork.tm_isdst = -1;
+  }
+  time_t utc = mktime(&tmWork);
+  if (utc == (time_t) -1) {
+    Debug.print(DBG_WARNING, "[Time] mktime failed — ESP system clock unchanged");
+    return;
+  }
+  if (utc < kMinEpochWallClockUtc) {
+    Debug.print(DBG_WARNING, "[Time] epoch %ld before 2020 — skip settimeofday", (long) utc);
+    return;
+  }
+  struct timeval tv = {};
+  tv.tv_sec = utc;
+  tv.tv_usec = 0;
+  if (settimeofday(&tv, nullptr) != 0) {
+    Debug.print(DBG_WARNING, "[Time] settimeofday failed: errno=%d", errno);
+    return;
+  }
+  Debug.print(DBG_INFO, "[Time] settimeofday OK (UTC epoch %ld) — libc/Matter gettimeofday aligned", (long) utc);
+}
+
 // Set time parameters, including DST
 void StartTime()
 {
@@ -1228,9 +1286,8 @@ void StartTime()
   if (storage.WIFI_OnOff && wifiIsConnected()) {
     if (!ntpConfigured) {
       Debug.print(DBG_INFO, "[NTP] Configuring time with NTP servers: 0.pool.ntp.org, 1.pool.ntp.org, 2.pool.ntp.org (CET/CEST)");
+      poolEnsureEuropeBerlinTz();
       configTime(0, 0,"0.pool.ntp.org","1.pool.ntp.org","2.pool.ntp.org"); // 3 possible NTP servers
-      setenv("TZ","CET-1CEST,M3.5.0/2,M10.5.0/3",1);                       // configure local time with automatic DST  
-      tzset();
       ntpConfigured = true;
       Debug.print(DBG_INFO, "[NTP] NTP configuration completed");
     } else {
@@ -1260,8 +1317,10 @@ void StartTime()
 
 void readLocalTime()
 {
+  poolEnsureEuropeBerlinTz();
   bool timeSynced = false;
   struct tm localTimeInfo;
+  memset(&localTimeInfo, 0, sizeof(localTimeInfo));
 
   if (storage.WIFI_OnOff && wifiIsConnected()) {
     if (getLocalTime(&localTimeInfo, 5000U)) {
@@ -1318,6 +1377,8 @@ void readLocalTime()
   }
 
   if (timeSynced) {
+    // Arduino TimeLib alone does not update libc — Matter/CHIP reads gettimeofday().
+    poolApplyEspSystemTimeFromLocalTm(&localTimeInfo);
     // Setze Time-Bibliothek mit lokaler Zeit (inkl. DST) direkt aus localTimeInfo
     setTime(localTimeInfo.tm_hour, localTimeInfo.tm_min, localTimeInfo.tm_sec,
             localTimeInfo.tm_mday, localTimeInfo.tm_mon + 1, localTimeInfo.tm_year + 1900);
@@ -1332,13 +1393,17 @@ void readLocalTime()
 // Notify PublishSettings task 
 void PublishSettings()
 {
-  xTaskNotifyGive(pubSetTaskHandle);
+  if (pubSetTaskHandle != nullptr) {
+    xTaskNotifyGive(pubSetTaskHandle);
+  }
 }
 
 // Notify PublishMeasures task
 void PublishMeasures()
 {
-  xTaskNotifyGive(pubMeasTaskHandle);
+  if (pubMeasTaskHandle != nullptr) {
+    xTaskNotifyGive(pubMeasTaskHandle);
+  }
 }
 
 void scanI2CBus() {

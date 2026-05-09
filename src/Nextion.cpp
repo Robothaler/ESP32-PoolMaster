@@ -13,6 +13,9 @@
 #include "Config.h"
 #include "PoolMaster.h"
 #include "EasyNextionLibrary.h"
+#ifdef MATTER_ENABLED
+#include <esp_wifi.h>
+#endif
 
 /** DS18 NVS addresses mirrored in `storage` after loadConfig — do not read NVS here (race with prefs). */
 static const uint8_t* dsAddrSlotW(int idx)
@@ -98,7 +101,8 @@ const unsigned long displayInterval = 2000;
 static struct TFTStruct
 {
   float pH, pHRaw, Orp, OrpRaw, pHSP, OrpSP, WST, WIT, WBT, WWPT, WWTT, WTSP, AT, AH, AP, AIT, ST, SVLT, SRLT, PSI, flow, flow2, F1H, F1L, F2H, F2L, PsiH, PsiL, WTLow, pHPumpFR, ChlPumpFR, WaterFillFR, Ph_Kp, Ph_Ki, Ph_Kd, Orp_Kp, Orp_Ki, Orp_Kd, SaltCurrentValue, SaltNeeded, FiltPower, HeatPower, SaltCurrent_Raw, FilterCurrent_Raw, HeatCurrent_Raw;
-  uint8_t FSta, FSto, FStaT0, FStoT1, SStaT0, SStoT1, pHTkFill, OrpTkFill, PIDpH, PIDChl, PubInt, PumpMaxUp, WFMaxUp, FillDur, WFMinLvl, WFMaxLvl, DelayPID, pHPIDW, OrpPIDW, FLOW_Pulse, FLOW2_Pulse, SaltDiff, ResetReason;
+  uint8_t FSta, FSto, FStaT0, FStoT1, SStaT0, SStoT1, pHTkFill, OrpTkFill, PIDpH, PIDChl, PubInt, DelayPID, pHPIDW, OrpPIDW, FLOW_Pulse, FLOW2_Pulse, SaltDiff, ResetReason;
+  uint16_t PumpMaxUp, WFMaxUp, FillDur, WFMinLvl, WFMaxLvl;
   uint16_t MQTT_PORT;
   uint32_t Uptime;
   boolean WIFI_OnOff, MqttLogin, BUSA_B, Mode, SolarLoEx, SolarOnline, SolarMode, WaterFillMode, SaltMode, NetW, Filt, Robot, R0, R1, R2, pHUTErr, ChlUTErr, WFUTErr, WFErr, PSIErr, FLOWErr, FLOW2Err, pHTLErr, ChlTLErr, PhPump, ChlPump, Heat, HeatPump, SaltPump, SolarPump ,Salt_Chlor, SaltPolarity, ValveMode, CleanMode, ValveSwitch, WaterFill, HeatMode, SolarValve;
@@ -110,7 +114,8 @@ static struct TFTStruct
 } TFTStruc =
 { //default values to force update on next refresh
   -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., 0.0, -1., -1., -1., -1., -1.,
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,0,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0,
   MQTT_SERVER_PORT,
   0U,
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -293,11 +298,27 @@ void ResetTFT()
 void UpdateWiFi(bool wifi){
   if(wifi){
     char wbuf[64];
+#ifdef MATTER_ENABLED
+    wifi_ap_record_t ap{};
+    if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+      snprintf(wbuf, sizeof(wbuf), "WiFi: %s", reinterpret_cast<const char*>(ap.ssid));
+    } else {
+      snprintf(wbuf, sizeof(wbuf), "WiFi: %s", storage.SSID.c_str());
+    }
+    myNex.writeStr("page0.vaSSID.txt", wbuf);
+    char ipbuf[20];
+    if (wifiStaGetIpv4String(ipbuf, sizeof(ipbuf)))
+      snprintf(wbuf, sizeof(wbuf), "IP: %s", ipbuf);
+    else
+      snprintf(wbuf, sizeof(wbuf), "IP: --");
+    myNex.writeStr("page0.vaIP.txt", wbuf);
+#else
     snprintf(wbuf, sizeof(wbuf), "WiFi: %s", WiFi.SSID().c_str());
     myNex.writeStr("page0.vaSSID.txt", wbuf);
     IPAddress ip = WiFi.localIP();
     snprintf(wbuf, sizeof(wbuf), "IP: %d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
     myNex.writeStr("page0.vaIP.txt", wbuf);
+#endif
   } else {
     myNex.writeStr("page0.vaSSID.txt","not connected");
     myNex.writeStr("page0.vaIP.txt","");
@@ -318,7 +339,18 @@ void UpdateTFT()
 
   myNex.NextionListen();
 
-  sprintf(HourBuffer, "%02d:%02d:%02d", hour(), minute(), second());
+  UpdateWiFi(wifiStaConnected());
+
+  poolEnsureEuropeBerlinTz();
+  time_t nowWall = time(nullptr);
+  struct tm lt = {};
+  if (nowWall != (time_t)-1 && localtime_r(&nowWall, &lt) != nullptr) {
+    snprintf(HourBuffer, sizeof(HourBuffer), "%02d:%02d:%02d",
+             lt.tm_hour, lt.tm_min, lt.tm_sec);
+  } else {
+    snprintf(HourBuffer, sizeof(HourBuffer), "%02d:%02d:%02d",
+             hour(), minute(), second());
+  }
   myNex.writeStr("page0.vaTime.txt", HourBuffer);
 
   if (millis() - lastDisplaySwitch >= displayInterval || !refresh) {
@@ -436,23 +468,26 @@ void UpdateTFT()
     if (CurrentPage == 24)  myNex.writeStr(F("pwd.txt"), TFTStruc.PASSW);
   }
   
-  if (MQTTConnection != TFTStruc.NetW || !refresh) {
-    TFTStruc.NetW = MQTTConnection;
-    myNex.writeNum(F("page1.vabNetW.val"), TFTStruc.NetW);
-    const char* netwStr = TFTStruc.NetW ? "ONLINE" : "OFFLINE";
-    myNex.writeStr(F("page0.vaMqttState.txt"), netwStr);
-    myNex.writeStr(F("page19.MqttState.txt"), netwStr);
+  {
+    const bool netOnline = nextionNetStatusOnline();
+    if (netOnline != TFTStruc.NetW || !refresh) {
+      TFTStruc.NetW = netOnline;
+      myNex.writeNum(F("page1.vabNetW.val"), TFTStruc.NetW);
+      const char* netwStr = TFTStruc.NetW ? "ONLINE" : "OFFLINE";
+      myNex.writeStr(F("page0.vaMqttState.txt"), netwStr);
+      myNex.writeStr(F("page19.MqttState.txt"), netwStr);
 
-    // Generic indicator update: pXNetW.pic=5/6 (pages 0-19 except 11)
-    if (CurrentPage >= 0 && CurrentPage <= 19) {
-      char cmd[20];
-      snprintf(cmd, sizeof(cmd), "p%dNetW.pic=%d", CurrentPage, TFTStruc.NetW ? 5 : 6);
-      myNex.writeStr(cmd);
-      if (CurrentPage == 11) {
-        myNex.writeStr(TFTStruc.NetW ? F("b6.picc=43") : F("b6.picc=42"));
-        myNex.writeStr(TFTStruc.NetW ? F("b6.picc2=42") : F("b6.picc2=43"));
-      } else if (CurrentPage == 19) {
-        myNex.writeStr(F("MqttState.txt"), netwStr);
+      // Generic indicator update: pXNetW.pic=5/6 (pages 0-19 except 11)
+      if (CurrentPage >= 0 && CurrentPage <= 19) {
+        char cmd[20];
+        snprintf(cmd, sizeof(cmd), "p%dNetW.pic=%d", CurrentPage, TFTStruc.NetW ? 5 : 6);
+        myNex.writeStr(cmd);
+        if (CurrentPage == 11) {
+          myNex.writeStr(TFTStruc.NetW ? F("b6.picc=43") : F("b6.picc=42"));
+          myNex.writeStr(TFTStruc.NetW ? F("b6.picc2=42") : F("b6.picc2=43"));
+        } else if (CurrentPage == 19) {
+          myNex.writeStr(F("MqttState.txt"), netwStr);
+        }
       }
     }
   }
@@ -1185,9 +1220,9 @@ void UpdateTFT()
       if (CurrentPage == 3)
       {
         if (TFTStruc.HeatMode == 1)
-        myNex.writeStr(F("bHeatMode.picc=9"));
+          myNex.writeStr(F("page3.bHeatMode.picc=9"));
         else
-        myNex.writeStr(F("bSolMode.picc=8"));
+          myNex.writeStr(F("page3.bHeatMode.picc=8"));
       }
     }
     else
@@ -1986,10 +2021,11 @@ void UpdateTFT()
     if (CurrentPage == 16)  myNex.writeStr(F("ChlPumpFR.txt"), buf);
   }
 
-  if (storage.PhPumpUpTimeLimit != TFTStruc.PumpMaxUp || !refresh)
+  const unsigned long phLimMin = storage.PhPumpUpTimeLimit / 60000UL;
+  if (phLimMin != (unsigned long)TFTStruc.PumpMaxUp || !refresh)
   {
-    TFTStruc.PumpMaxUp = storage.PhPumpUpTimeLimit / 60000; // milliseconds in minutes
-    snprintf(buf, sizeof(buf), "%lu", TFTStruc.PumpMaxUp);
+    TFTStruc.PumpMaxUp = (uint16_t)(phLimMin > 65535UL ? 65535UL : phLimMin);
+    snprintf(buf, sizeof(buf), "%lu", (unsigned long)phLimMin);
     myNex.writeStr(F("page0.vaPumpsMaxUp.txt"), buf);
     if (CurrentPage == 14)  myNex.writeStr(F("PumpsMaxUp.txt"), buf);
   }
@@ -2002,18 +2038,20 @@ void UpdateTFT()
     if (CurrentPage == 17)  myNex.writeStr(F("WFFR.txt"), buf);
   }
 
-  if (storage.WaterFillUpTimeLimit != TFTStruc.WFMaxUp || !refresh)
+  const unsigned long wfLimMin = storage.WaterFillUpTimeLimit / 60000UL;
+  if (wfLimMin != (unsigned long)TFTStruc.WFMaxUp || !refresh)
   {
-    TFTStruc.WFMaxUp = storage.WaterFillUpTimeLimit / 60000; // milliseconds in minutes
-    snprintf(buf, sizeof(buf), "%lu", TFTStruc.WFMaxUp);
+    TFTStruc.WFMaxUp = (uint16_t)(wfLimMin > 65535UL ? 65535UL : wfLimMin);
+    snprintf(buf, sizeof(buf), "%lu", (unsigned long)wfLimMin);
     myNex.writeStr(F("page0.vaWFMaxUp.txt"), buf);
     if (CurrentPage == 17)  myNex.writeStr(F("WFMaxUp.txt"), buf);
   }
 
-  if (storage.WaterFillDuration != TFTStruc.FillDur || !refresh)
+  const unsigned long fillDurMin = storage.WaterFillDuration / 60000UL;
+  if (fillDurMin != (unsigned long)TFTStruc.FillDur || !refresh)
   {
-    TFTStruc.FillDur = storage.WaterFillDuration / 60000; // milliseconds in minutes
-    snprintf(buf, sizeof(buf), "%lu", TFTStruc.FillDur);
+    TFTStruc.FillDur = (uint16_t)(fillDurMin > 65535UL ? 65535UL : fillDurMin);
+    snprintf(buf, sizeof(buf), "%lu", (unsigned long)fillDurMin);
     myNex.writeStr(F("page0.vaFillDur.txt"), buf);
     if (CurrentPage == 17)  myNex.writeStr(F("FillDur.txt"), buf);
   }
@@ -2052,7 +2090,7 @@ void trigger1()
 {
   if(!TFT_ON)
   {
-    UpdateWiFi(WiFi.status() == WL_CONNECTED);
+    UpdateWiFi(wifiStaConnected());
     TFT_ON = true;
     refresh = false;
   }
@@ -2196,7 +2234,8 @@ void trigger14()
   sendBoolCmd("OrpPID", target);
 }
 
-//HEAT MODE button was toggled
+//HEAT MODE button was toggled (Haus-Wasserheizung → MQTT "Heat"). Nutzt dasselbe
+// vabHeatMode wie die WP-Automatik auf page 3; unqualifiziert = Variable der aktiven Seite.
 //printh 23 02 54 0F
 void trigger15()
 {
@@ -2336,7 +2375,7 @@ void trigger35()
 //printh 23 02 54 24
 void trigger36()
 {
-  int target = computeToggleTarget("vabHeatPum.val", HeatPump.IsRunning() ? 1 : 0);
+  int target = computeToggleTarget("page3.vabHeatPum.val", HeatPump.IsRunning() ? 1 : 0);
   TFTStruc.HeatPump = (boolean)target;
   debounceHP = 1;
   Debug.print(DBG_INFO, "[Nextion] HeatPump (pump=%d, target=%d)",
@@ -2529,17 +2568,15 @@ void trigger54() { onPageLoaded(27); }
 //printh 23 02 54 37
 void trigger55() { onPageLoaded(22); }
 
-//HEATPUMP MODE button was toggled
-//printh 23 02 54 38
+// HEATPUMP MODE (HeatPumpMode / MQTT "HeatPumpMode") — page 3 Wärmepumpe.
+// printh 23 02 54 38
 //
-// NOTE: this trigger and trigger15 (HEAT MODE) intentionally share the same
-// vab variable name "vabHeatMode.val" — they live on different Nextion pages
-// (page 3 = HeatPump, page 18 = Solar/Heat). The unqualified name resolves
-// to whichever page is currently active, which is the page that fired the
-// trigger. UpdateTFT() syncs each page's variable separately.
+// Mit trigger15 (WaterHeat / "Heat") wird dasselbe Variablennamen-Schema genutzt,
+// aber auf einer anderen Seite. Hier page3.vabHeatMode.val qualifizieren, damit
+// readNumber immer die WP-Seite trifft. UpdateTFT() schreibt page3.vabHeatMode + picc.
 void trigger56()
 {
-  int target = computeToggleTarget("vabHeatMode.val", storage.HeatPumpMode ? 1 : 0);
+  int target = computeToggleTarget("page3.vabHeatMode.val", storage.HeatPumpMode ? 1 : 0);
   TFTStruc.HeatMode = (boolean)target;
   debounceHPM = 1;
   Debug.print(DBG_INFO, "[Nextion] HEATPUMP MODE (storage=%d, target=%d)",
