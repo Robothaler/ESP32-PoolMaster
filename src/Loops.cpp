@@ -1315,7 +1315,11 @@ void getTemp()
             else if (strcmp(fieldName, "SolarVLTemp") == 0)
                 assignTemperature(storage.SolarVLTemp, temp_A[i], fieldName, i, "A");
             else if (strcmp(fieldName, "SolarRLTemp") == 0)
-                assignTemperature(storage.SolarRLTemp, temp_A[i], fieldName, i, "A");
+            {
+                if (storage.SolarLocExt == 0)
+                    assignTemperature(storage.SolarRLTemp, temp_A[i], fieldName, i, "A");
+                /* SolarLocExt==1: RL comes from SolarControl (HTTP/Matter), not local DS18B20 */
+            }
             else if (strcmp(fieldName, "AirInTemp") == 0)
                 assignTemperature(storage.AirInTemp, temp_A[i], fieldName, i, "A");
             else if (strcmp(fieldName, "AirTemp") == 0)

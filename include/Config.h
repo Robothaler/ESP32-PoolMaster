@@ -478,6 +478,15 @@
 // Example:
 //   SET_SOLAR_NODE 0000000000000002 5 6 7 8
 // =============================================================================
+
+// Legacy simple hysteresis (some diagnostics); external solar regulation uses
+// SOLAR_EXT_* together with poolSolarBridgeSolarModeRequest().
+#define SOLAR_MODE_HYSTERESIS  1.0f   // °C
+
+// External solar (MQTT, HTTP pool–solar bridge, Matter): same thresholds as PoolMaster regulation.
+#define SOLAR_EXT_COLLECTOR_DELTA_MIN  4.0   // °C — collector must exceed pool water by this to request pool heating
+#define SOLAR_EXT_RL_STOP_MARGIN       2.0   // °C — prefer buffer when RL + margin <= pool water
+
 #ifdef MATTER_ENABLED
 constexpr char NVS_KEY_SOLAR_NODE_ID[]  = "solar_node_id";  // uint64_t — SolarControl Matter NodeId
 constexpr char NVS_KEY_SOLAR_EP_PUMP[]  = "solar_ep_pump";  // uint16_t — SolarControl pump EP (default 5)
@@ -485,9 +494,6 @@ constexpr char NVS_KEY_SOLAR_EP_VALVE[] = "solar_ep_valve"; // uint16_t — Sola
 constexpr char NVS_KEY_SOLAR_EP_CIRC[]  = "solar_ep_circ";  // uint16_t — SolarControl circulation EP (default 7)
 constexpr char NVS_KEY_SOLAR_EP_ILLUM[] = "solar_ep_illum"; // uint16_t — SolarControl illumination EP (default 8)
 
-// Hysteresis for the Solar-Mode-Request endpoint:
-// Solar heating is requested when PoolTemp < (PoolSolltemp - SOLAR_MODE_HYSTERESIS)
-#define SOLAR_MODE_HYSTERESIS  1.0f   // °C
 #endif // MATTER_ENABLED
 
 #define CHRONO                    // Activate tasks timings traces for profiling

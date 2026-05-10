@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include "Config.h"
 #include "PoolMaster.h"
+#include "PoolSolarBridge.h"
 #include "MatterBridge.h"
 #if MATTER_ENABLED
 #include "MatterAppTaskSuspend.h"
@@ -419,7 +420,8 @@ Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID())
         hour() >= storage.SolarStartMin && hour() < storage.SolarStopMax) // Check if it's within time range to activate solar heating
     {
         // Check if the temperature difference is large enough to turn on solar pump and valve
-        if (storage.WaterSTemp < storage.WaterTemp_SetPoint && storage.SolarTemp > storage.WaterSTemp + 4)
+        if (storage.WaterSTemp < storage.WaterTemp_SetPoint &&
+            storage.SolarTemp > storage.WaterSTemp + SOLAR_EXT_COLLECTOR_DELTA_MIN)
         {
             SolarPump.Start();
             Solarvalve.open();
@@ -432,29 +434,13 @@ Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID())
     }
 
     // ******************************************************************************************
-    // SOLAR HEATING EXTERNAL (MQTT)
+    // SOLAR HEATING EXTERNAL (MQTT / LAN bridge — SolarControl)
     // ******************************************************************************************
-
-    //If solar heating (SolarLocExt) is set to "external" and solar mode is set to "auto" mode and filtration has been running for over 5mins (so that measured water temp is accurate), open/close the solarvalve as required
-    //in order to regulate the water temp.    
-    if (storage.AutoMode && storage.SolarLocExt && storage.SolarMode && FiltrationPump.IsRunning() && 
-        FiltrationPump.UpTime / 1000 / 60 > 5 && 
-        hour() >= storage.SolarStartMin && hour() < storage.SolarStopMax) // Check if it's within time range to activate solar heating
+    // Logic shared with HTTP GET /read and Matter Solar-Mode-Request (PoolSolarBridge).
     {
-        // Check if the temperature difference is large enough to turn on solar pump and valve
-        if (storage.WaterSTemp < storage.WaterTemp_SetPoint && storage.SolarTemp > storage.WaterSTemp + 4)
-        {
-            //SolarPump.Start();
-            publishSolarMode(1);
-        }
-        else if (storage.WaterSTemp >= storage.WaterTemp_SetPoint || storage.SolarRLTemp + 2 <= storage.WaterSTemp)
-        {
-            //SolarPump.Stop();
-            publishSolarMode(2);
-        }
-    } else
-    {
-      publishSolarMode(3);
+        const int solarEv = poolSolarBridgeExternalSolarPublishEvent();
+        if (solarEv >= 1)
+            publishSolarMode(solarEv);
     }
 
     if (storage.SolarLocExt)

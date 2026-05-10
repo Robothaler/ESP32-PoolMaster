@@ -10,6 +10,7 @@
 #include "Config.h"
 #include "PoolMaster.h"
 #include "WebUI.h"
+#include "PoolSolarBridge.h"
 
 extern Arduino_DebugUtils Debug;
 
@@ -194,6 +195,8 @@ void otaTask(void *pvParameters) {
         webUIBroadcast();
       }
     }
+
+    poolSolarBridgePollTick();
 
     // Check if a new .tft file was uploaded and needs to be sent to Nextion.
     // updateNextion() uses delay() internally — call it only from this task,

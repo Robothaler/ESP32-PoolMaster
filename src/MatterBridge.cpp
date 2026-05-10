@@ -29,6 +29,7 @@
 #include "Config.h"
 #include "MatterAppTaskSuspend.h"
 #include "PoolMaster.h"
+#include "PoolSolarBridge.h"
 
 // PCF8574.h defines P0-P7 as integer pin-number macros (0-7), which conflict
 // with function parameter names in CHIP crypto headers (CHIPCryptoPAL.h uses
@@ -445,10 +446,20 @@ static void solarReportCallback(uint64_t /*remote_node_id*/,
         int16_t raw = 0;
         if (data->Get(raw) == CHIP_NO_ERROR) {
             const float temp = raw / 100.0f;
-            if      (ep == 1) { storage.solarRoofTemp    = temp; }
+            if      (ep == 1) {
+                storage.solarRoofTemp = temp;
+                if (storage.SolarLocExt)
+                    storage.SolarTemp = (double)temp;
+            }
             else if (ep == 2) { storage.solarBoilerTemp  = temp; }
             else if (ep == 3) { storage.solarStorageTemp = temp; }
-            else if (ep == 4) { storage.solarBackflowTemp = temp; }
+            else if (ep == 4) {
+                storage.solarBackflowTemp = temp;
+                if (storage.SolarLocExt)
+                    storage.SolarRLTemp = (double)temp;
+            }
+            if (storage.SolarLocExt)
+                storage.SolarOnline = true;
             ESP_LOGD(TAG, "SolarControl EP%u temp: %.2f°C", ep, temp);
         }
     }
@@ -456,8 +467,18 @@ static void solarReportCallback(uint64_t /*remote_node_id*/,
     else if (cid == kOnOffClusterId && aid == kOnOffAttrId) {
         bool val = false;
         if (data->Get(val) == CHIP_NO_ERROR) {
-            if      (ep == s_solar_ep_pump)  { storage.solarPumpRunning = val; }
-            else if (ep == s_solar_ep_valve) { storage.solarValvePool   = val; }
+            if      (ep == s_solar_ep_pump)  {
+                storage.solarPumpRunning = val;
+                if (storage.SolarLocExt)
+                    storage.SolarPumpStatus = val ? 1 : 0;
+            }
+            else if (ep == s_solar_ep_valve) {
+                storage.solarValvePool   = val;
+                if (storage.SolarLocExt)
+                    storage.ValveStatus = val ? 1 : 0;
+            }
+            if (storage.SolarLocExt)
+                storage.SolarOnline = true;
             ESP_LOGD(TAG, "SolarControl EP%u OnOff: %d", ep, (int)val);
         }
     }
@@ -465,7 +486,11 @@ static void solarReportCallback(uint64_t /*remote_node_id*/,
     else if (cid == kBoolStateClusterId && aid == kBoolStateAttrId) {
         bool val = false;
         if (data->Get(val) == CHIP_NO_ERROR) {
-            if (ep == 9) { storage.solarValveOK = val; }
+            if (ep == 9) {
+                storage.solarValveOK = val;
+                if (storage.SolarLocExt)
+                    storage.SolarOnline = true;
+            }
             ESP_LOGD(TAG, "SolarControl EP%u BoolState: %d", ep, (int)val);
         }
     }
@@ -1774,12 +1799,9 @@ void matterBridgeSync()
     }
 
     // ── Solar-Mode-Request endpoint (OnOff) ───────────────────────────────────
-    // true  = PoolMaster requests solar pool heating
-    //         conditions: AutoMode active AND PoolTemp < (Solltemp − Hysteresis)
-    // false = no heating request (SolarControl heats boiler or stays idle)
+    // true  = PoolMaster requests solar pool heating (same logic as HTTP /read + MQTT).
     {
-        const bool solarRequest = storage.AutoMode &&
-            (storage.WaterSTemp < (storage.WaterTemp_SetPoint - SOLAR_MODE_HYSTERESIS));
+        const bool solarRequest = poolSolarBridgeSolarModeRequest();
         if (solarRequest != s_last_solar_mode) {
             updateOnOff(s_ep_solar_mode, solarRequest);
             s_last_solar_mode = solarRequest;

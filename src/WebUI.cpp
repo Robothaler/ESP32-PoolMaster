@@ -17,11 +17,13 @@
 //   GET /api/events  ?from=<ts>&to=<ts>            pump events (JSON)
 //   GET /api/loginfo                               storage stats
 //   POST /api/logclear                             delete all log files
+//   GET /api/pool-solar/v1/read                    SolarControl LAN poll (JSON bridge)
 
 #include "Ota.h"
 #include "PoolMaster.h"
 #include "Config.h"
 #include "WebUI.h"
+#include "PoolSolarBridge.h"
 #include <ArduinoJson.h>
 #include <ESPAsyncWebServer.h>
 #include <SPIFFS.h>
@@ -502,6 +504,18 @@ static String buildStatusJson() {
     solar["backflow"]    = (double)storage.solarBackflowTemp;
     solar["pump"]        = storage.solarPumpRunning ? 1 : 0;
     solar["valvePool"]   = storage.solarValvePool   ? 1 : 0;
+    {
+        JsonObject h = solar.createNestedObject("httpPoll");
+        h["lastCode"] = poolSolarBridgeHttpPollLastCode();
+        h["ageMs"] = poolSolarBridgeHttpPollAgeMs();
+        const char* m = poolSolarBridgeHttpPollMode();
+        if (m && m[0])
+            h["mode"] = m;
+        h["modeEp1"] = poolSolarBridgeHttpPollModeEp1();
+        h["circulationOn"] = poolSolarBridgeHttpPollCirculationOn();
+        h["illuminationOn"] = poolSolarBridgeHttpPollIlluminationOn();
+        h["poolModeRequestHw"] = poolSolarBridgeHttpPollPoolModeRequestHw();
+    }
 
     String out; serializeJson(doc, out);
     return out;
@@ -624,6 +638,14 @@ void initWebUI() {
         req->send(200, "application/json", buildHistoryJson());
     });
 
+    server.on("/api/pool-solar/v1/read", HTTP_GET, [](AsyncWebServerRequest* req) {
+        if (!poolSolarBridgeAuthorizeRead(req)) {
+            req->send(401, "application/json", "{\"error\":\"unauthorized\"}");
+            return;
+        }
+        req->send(200, "application/json", poolSolarBridgeBuildReadJson());
+    });
+
     // ── Settings ───────────────────────────────────────────────────────────────
     server.on("/api/settings", HTTP_GET, [](AsyncWebServerRequest* req) {
         StaticJsonDocument<1280> doc;
@@ -650,6 +672,9 @@ void initWebUI() {
         doc["delayPID"]   = storage.DelayPIDs;
         doc["waterTempSP"] = storage.WaterTemp_SetPoint;
         doc["heatPumpMode"] = storage.HeatPumpMode ? 1 : 0;
+        doc["poolSolBrTok"] = poolSolarBridgeTokenMaskedForSettings();
+        doc["poolSolBrUrl"] = poolSolarBridgeSolarBaseUrlRef();
+        doc["poolSolPollS"] = poolSolarBridgePollIntervalSec();
         doc["firmware"]   = Firmw;
         doc["uptime"]     = storage.Uptime;
         String out; serializeJson(doc, out);

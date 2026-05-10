@@ -5,6 +5,7 @@
 #include <Arduino.h>
 #include "Config.h"
 #include "PoolMaster.h"
+#include "PoolSolarBridge.h"
 #include "MatterBridge.h"
 
 // Functions prototypes
@@ -1480,6 +1481,19 @@ void ProcessCommand(void *pvParameters)
         {
           delay(10000); // wait 10s then restart. Other tasks continue.
           esp_restart();
+        }
+        else if (command.containsKey(F("PoolSolBrTok"))) {
+          poolSolarBridgeSetToken(command[F("PoolSolBrTok")].as<String>());
+          PublishSettings();
+        }
+        else if (command.containsKey(F("PoolSolBrUrl"))) {
+          poolSolarBridgeSetSolarBaseUrl(command[F("PoolSolBrUrl")].as<String>());
+          PublishSettings();
+        }
+        else if (command.containsKey(F("PoolSolPollS"))) {
+          poolSolarBridgeSetPollIntervalSec(
+              (uint32_t)command[F("PoolSolPollS")].as<unsigned long>());
+          PublishSettings();
         }
         else if (command.containsKey(F("Clear"))) //"Clear" command which clears the UpTime and pressure errors of the Pumps
         {

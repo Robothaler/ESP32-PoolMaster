@@ -13,6 +13,7 @@
 #include "Config.h"
 #include "I2CConfig.h"
 #include "PoolMaster.h"
+#include "PoolSolarBridge.h"
 #include "Ota.h"
 #include "Tasks.h"
 #include "PCF8574Manager.h"
@@ -863,6 +864,8 @@ bool loadConfig() {
   nvs.getBytes("address_W_4", storage.address_W_4, 8);
   nvs.getBytes("Array_A", storage.Array_A, 5);
   nvs.getBytes("Array_W", storage.Array_W, 5);
+
+  poolSolarBridgeLoadFromNvs(nvs);
 
   nvs.end();
 
