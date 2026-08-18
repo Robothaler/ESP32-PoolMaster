@@ -34,11 +34,15 @@ CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 #   nicht so viele Peripherie-Tasks/Treiber gleichzeitig hält wie PoolMaster.
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512
 
-# ── ESP32-S3 Instruction Cache / IRAM balance ──────────────────────────────────
+# ── ESP32-S3 Instruction / Data Cache (do NOT use the 3.3.8 ESP-SR 32/64 KB set) ─
 # S3 Bank 0 = 48KB split between I-Cache and IRAM:
 #   32KB cache → 16KB IRAM  (default, leads to 100% IRAM usage with Matter)
 #   16KB cache →  32KB IRAM  ← use this; SPIRAM_FETCH_INSTRUCTIONS compensates the smaller cache
+# Data cache: IDF default 32 KB / 32 B line. Arduino 3.3.8 temporarily forced
+# 64 KB data + 32 KB instruction cache (#12524, −49 KB SRAM); reverted in 3.3.9+.
 CONFIG_ESP32S3_INSTRUCTION_CACHE_16KB=y
+CONFIG_ESP32S3_DATA_CACHE_32KB=y
+CONFIG_ESP32S3_DATA_CACHE_LINE_32B=y
 
 # ── Power / Brownout ──────────────────────────────────────────────────────────
 CONFIG_ESP_BROWNOUT_DET=y
@@ -156,18 +160,11 @@ CONFIG_MAX_EVENT_QUEUE_SIZE=40
 #   Total:    9 → use 12 for comfortable headroom
 CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT=12
 
-# Matter Controller: required for PoolMaster to send commands to SolarControl
-# and subscribe to SolarControl attribute reports.
-#
-# TEMPORARILY DISABLED (2026-04-19) for Apple Home commissioning debugging.
-# Controller-Subsystem läuft im selben CHIP-Task wie der BLE/CHIPoBLE-Handler;
-# bei aktiviertem Controller bekommt der Task nicht genug Zeit, die BTP-
-# Handshake-Pakete im Apple-Home-Timeout (15 s) zu beantworten.
-# Wieder auf =y setzen, sobald Commissioning stabil läuft. Anschließend muss
-# CONFIG_CHIP_TASK_STACK_SIZE ggf. wieder angehoben werden, falls Controller-
-# Pfad zu wenig Stack hat.
-# CONFIG_ESP_MATTER_CONTROLLER_ENABLE=y
-CONFIG_ESP_MATTER_CONTROLLER_ENABLE=n
+# Matter Controller: required for PoolMaster to subscribe to SolarControl and
+# send circulation/illumination commands. Client traffic is gated in
+# MatterSyncTask / kCommissioningComplete (fabric>0, CHIPoBLE idle). HTTP LAN
+# poll remains fallback until the first fresh Matter report arrives.
+CONFIG_ESP_MATTER_CONTROLLER_ENABLE=y
 
 # ── NVS ───────────────────────────────────────────────────────────────────────
 # NVS partition (64 KB) shared between PoolMaster config (~16 KB) and Matter (~32 KB)
@@ -175,10 +172,9 @@ CONFIG_NVS_ENCRYPTION=n
 
 # ── Stack / heap tuning ────────────────────────────────────────────────────────
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
-# 16 KB statt vormals 8 KB — wie SolarControl matter_dev (commissioniert
-# zuverlässig). Die zusätzlichen 8 KB liegen im PSRAM-fähigen Heap; CHIP-Task
-# nutzt sie u.a. während der BTP-Reassembly + PASE-Handshake.
-CONFIG_CHIP_TASK_STACK_SIZE=16384
+# 20 KB CHIP task (was 16 KB) — controller subscribe + BTP/PASE share this task.
+# Extra stack lives in PSRAM-capable heap.
+CONFIG_CHIP_TASK_STACK_SIZE=20480
 # CHIP-Task-Priorität: 7 (statt Default 1).
 # PoolMaster hat ~14 FreeRTOS-Tasks, die alle mit Priority 1 auf app_cpu laufen
 # (CombinedPolling, PoolMaster, TempTask, readBME280, ChlorSaltRegulation,

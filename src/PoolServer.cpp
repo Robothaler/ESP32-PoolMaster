@@ -216,7 +216,6 @@ void ProcessCommand(void *pvParameters)
             storage.WIFI_OnOff = 1;
             connectToWiFi();
             readLocalTime();
-            setTime(timeinfo.tm_hour,timeinfo.tm_min,timeinfo.tm_sec,timeinfo.tm_mday,timeinfo.tm_mon+1,timeinfo.tm_year-100);
           }
           saveParam("WIFI_OnOff",storage.WIFI_OnOff);
         }        

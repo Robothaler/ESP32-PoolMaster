@@ -1,6 +1,9 @@
 #include "PoolSolarBridge.h"
 #include "Config.h"
 #include "PoolMaster.h"
+#ifdef MATTER_ENABLED
+#include "MatterBridge.h"
+#endif
 #include <ArduinoJson.h>
 #include <ESPAsyncWebServer.h>
 #include <HTTPClient.h>
@@ -193,6 +196,12 @@ static void applySolarPayload(const String& payload) {
 }
 
 void poolSolarBridgePollTick() {
+#if defined(MATTER_ENABLED) && POOL_SOLAR_HTTP_FALLBACK
+    if (matterSolarLinkHealthy())
+        return;
+#elif !POOL_SOLAR_HTTP_FALLBACK
+    return;
+#endif
     if (s_solarBaseUrl.length() == 0)
         return;
     if (!wifiStaConnected())

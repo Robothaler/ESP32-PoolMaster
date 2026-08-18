@@ -1,8 +1,12 @@
 #pragma once 
 
 // Firmware revision
-#define FIRMW           "ESP-3.3.6"
+#define FIRMW           "ESP-3.3.11"
 #define TFT_FIRMW       "TFT-2.0"
+
+// POSIX TZ for libc localtime()/mktime(). Do not use configTime(0,0) — that
+// overwrites TZ with UTC0 and the Nextion clock then shows UTC (CEST − 2 h).
+#define POOL_TZ_EUROPE_BERLIN  "CET-1CEST,M3.5.0/2,M10.5.0/3"
 
 //Version of config stored in EEPROM
 //Random value. Change this value (to any other value) to revert the config to default values
@@ -486,6 +490,18 @@
 // External solar (MQTT, HTTP pool–solar bridge, Matter): same thresholds as PoolMaster regulation.
 #define SOLAR_EXT_COLLECTOR_DELTA_MIN  4.0   // °C — collector must exceed pool water by this to request pool heating
 #define SOLAR_EXT_RL_STOP_MARGIN       2.0   // °C — prefer buffer when RL + margin <= pool water
+
+// HTTP LAN poll of SolarControl remains a fallback while Matter subscriptions
+// are not yet delivering reports (or in non-Matter builds).  Set to 0 to
+// disable the client poll entirely (GET /read for SolarControl is kept).
+#ifndef POOL_SOLAR_HTTP_FALLBACK
+#define POOL_SOLAR_HTTP_FALLBACK  1
+#endif
+
+// Treat Matter SolarControl reports as stale after this many ms (max report interval is 60 s).
+#ifndef MATTER_SOLAR_REPORT_STALE_MS
+#define MATTER_SOLAR_REPORT_STALE_MS  90000u
+#endif
 
 #ifdef MATTER_ENABLED
 constexpr char NVS_KEY_SOLAR_NODE_ID[]  = "solar_node_id";  // uint64_t — SolarControl Matter NodeId
