@@ -32,6 +32,15 @@ String poolSolarBridgeBuildReadJson();
  */
 bool poolSolarBridgeSolarModeRequest(void);
 
+/** Updates hysteresis state from pool vs setpoint; safe to call every loop. */
+void poolSolarBridgeTickPoolHeatHysteresis(void);
+
+/** True if pool regulation should aim for solar heat toward setpoint (incl. anti-pendeln vs SOLAR_POOL_RESTART_DELTA). */
+bool poolSolarBridgePoolHeatDemandDesired(void);
+
+/** True when external solar regulation may run (Auto, SolarLocExt, SolarMode, pump/time window). */
+bool poolSolarBridgeRegulationWindowOk(void);
+
 /**
  * MQTT publishSolarMode / SolarControl mode hint: 1 = pool, 2 = puffer, 3 = off,
  * -1 = hold previous command (active window but hysteresis middle zone).

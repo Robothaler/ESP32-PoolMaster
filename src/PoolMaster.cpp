@@ -395,6 +395,7 @@ Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID())
     // ******************************************************************************************
     // SOLAR HEATING LOCAL
     // ******************************************************************************************
+    poolSolarBridgeTickPoolHeatHysteresis();
 
     //The circulator of the pool water heating circuit needs to run regularly to avoid blocking
     //Let it run every day at noon for 2 mins
@@ -419,7 +420,7 @@ Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID())
         hour() >= storage.SolarStartMin && hour() < storage.SolarStopMax) // Check if it's within time range to activate solar heating
     {
         // Check if the temperature difference is large enough to turn on solar pump and valve
-        if (storage.WaterSTemp < storage.WaterTemp_SetPoint &&
+        if (poolSolarBridgePoolHeatDemandDesired() &&
             storage.SolarTemp > storage.WaterSTemp + SOLAR_EXT_COLLECTOR_DELTA_MIN)
         {
             SolarPump.Start();

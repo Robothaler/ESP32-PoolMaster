@@ -515,6 +515,13 @@ static String buildStatusJson() {
                             poolSolarBridgeHttpPollAgeMs() < (int32_t)MATTER_SOLAR_REPORT_STALE_MS)
                                ? "http" : "none";
 #endif
+    solar["external"]    = storage.SolarLocExt      ? 1 : 0;
+    solar["online"]      = storage.SolarOnline       ? 1 : 0;
+    solar["poolHeatRequest"] =
+        poolSolarBridgeSolarModeRequest() ? 1 : 0;
+    solar["regulationWindow"] =
+        poolSolarBridgeRegulationWindowOk() ? 1 : 0;
+    solar["bridgeEvent"] = poolSolarBridgeExternalSolarPublishEvent();
     {
         JsonObject h = solar.createNestedObject("httpPoll");
         h["lastCode"] = poolSolarBridgeHttpPollLastCode();

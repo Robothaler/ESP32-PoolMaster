@@ -488,8 +488,10 @@
 #define SOLAR_MODE_HYSTERESIS  1.0f   // °C
 
 // External solar (MQTT, HTTP pool–solar bridge, Matter): same thresholds as PoolMaster regulation.
-#define SOLAR_EXT_COLLECTOR_DELTA_MIN  4.0   // °C — collector must exceed pool water by this to request pool heating
-#define SOLAR_EXT_RL_STOP_MARGIN       2.0   // °C — prefer buffer when RL + margin <= pool water
+#define SOLAR_EXT_COLLECTOR_DELTA_MIN  2.0   // °C — collector must exceed pool water by this to request pool heating
+#define SOLAR_EXT_RL_STOP_MARGIN       2.0   // °C — prefer buffer when RL + margin <= pool water (only if pool ≥ setpoint)
+/** Below setpoint: after reaching setpoint once, require cooling to here before re-request (anti-pendeln). */
+#define SOLAR_POOL_RESTART_DELTA       0.5f  // °C
 
 // HTTP LAN poll of SolarControl remains a fallback while Matter subscriptions
 // are not yet delivering reports (or in non-Matter builds).  Set to 0 to

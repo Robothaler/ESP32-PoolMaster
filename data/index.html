@@ -289,6 +289,12 @@ input:checked+.slider::before{transform:translateX(18px)}
           <button class="btn btn-sm btn-neutral" id="bt-heatpm-m" onclick="sendCmd({HeatPumpMode:0})">MAN</button>
         </div>
       </div>
+      <div class="pump-row"><span class="pump-name">Solar (Regelung)</span>
+        <div class="pump-controls">
+          <button class="btn btn-sm btn-neutral" id="bt-solar-a" onclick="sendCmd({SolarMode:1})">AUTO</button>
+          <button class="btn btn-sm btn-neutral" id="bt-solar-m" onclick="sendCmd({SolarMode:0})">MAN</button>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -561,9 +567,14 @@ input:checked+.slider::before{transform:translateX(18px)}
   <div style="margin-top:16px" class="grid2">
     <div class="card">
       <div class="card-title">Solar-Status</div>
-      <div class="val-row"><span class="val-name">Solarpumpe</span><span class="chip off" id="c-solpump">–</span></div>
-      <div class="val-row"><span class="val-name">Solar-Modus</span><span class="chip off" id="c-solmode">–</span></div>
-      <div class="val-row"><span class="val-name">Ventil Pool</span><span class="chip off" id="c-solvalve">–</span></div>
+      <div class="val-row"><span class="val-name">Solarpumpe (SolarControl)</span><span class="chip off" id="c-solpump">–</span></div>
+      <div class="val-row"><span class="val-name">Ventil → Pool</span><span class="chip off" id="c-solvalve">–</span></div>
+      <div class="val-row"><span class="val-name">Solar-Automatik (PoolMaster)</span><span class="chip off" id="c-solar-autom">–</span></div>
+      <div id="solar-ext-extra" style="display:none">
+        <div class="val-row"><span class="val-name">Freigabe (Zeitfenster / Filter)</span><span class="chip off" id="c-solar-win">–</span></div>
+        <div class="val-row"><span class="val-name">Wärmeanforderung (MQTT/Matter/HTTP)</span><span class="chip off" id="c-solar-req">–</span></div>
+        <div class="val-row"><span class="val-name">SolarControl verbunden</span><span class="chip off" id="c-solar-onl">–</span></div>
+      </div>
     </div>
   </div>
 </div>
@@ -1166,6 +1177,7 @@ function updateUI() {
   setModeBtns('bt-winter-a', 'bt-winter-m', m.winter);
   setModeBtns('bt-heatpm-a', 'bt-heatpm-m', m.heat);
   setModeBtns('bt-set-heatpm-a', 'bt-set-heatpm-m', m.heat);
+  setModeBtns('bt-solar-a', 'bt-solar-m', m.solar);
   setModeBtns('bt-php-a',    'bt-php-m',    m.phReg);
   setModeBtns('bt-chl-a',    'bt-chl-m',    m.orpReg);
 
@@ -1204,9 +1216,19 @@ function updateUI() {
   setText('t-sbackflow',fmt(s.solar?.backflow,1)+'°C');
   setText('t-svl',  fmt(v.solarVL,1)+'°C');
   setText('t-srl',  fmt(v.solarRL,1)+'°C');
-  setChip('c-solpump',  s.solar?.pump,    ['Läuft','Gestoppt']);
-  setChip('c-solmode',  m.solar,          ['POOL','AUS']);
-  setChip('c-solvalve', s.solar?.valvePool,['Pool','Boiler']);
+  const sol = s.solar || {};
+  const ext = sol.external === 1;
+  const extEl = document.getElementById('solar-ext-extra');
+  if (extEl) extEl.style.display = ext ? 'block' : 'none';
+
+  setChip('c-solpump',  sol.pump,    ['Läuft','Gestoppt']);
+  setChip('c-solvalve', sol.valvePool,['Pool','Boiler']);
+  setChip('c-solar-autom', m.solar, ['Automatik','Manuell']);
+  if (ext) {
+    setChip('c-solar-win', sol.regulationWindow, ['Freigegeben','Gesperrt']);
+    setChip('c-solar-req', sol.poolHeatRequest, ['Ja','Nein']);
+    setChip('c-solar-onl', sol.online, ['Ja','Nein']);
+  }
 
   // Settings live values
   setText('s-cur-kp', fmt(pid.phKp,0)+'×10⁴');

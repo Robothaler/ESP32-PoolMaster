@@ -29,10 +29,26 @@ static int s_lastHttpCode = 0;
 static uint32_t s_lastPollAttemptMs = 0;
 static uint32_t s_lastPollSuccessMs = 0;
 
+/** After pool temp ≥ setpoint: hold off new demand until cooled to setpoint − SOLAR_POOL_RESTART_DELTA. */
+static bool s_poolSolarHitSpOrAbove = false;
+
 /** Default SolarControl LAN base (NVS key psolBrUrl overrides). */
 static const char kDefaultSolarBaseUrl[] = "http://192.168.178.176";
 
-static bool solarExternalRegulationWindowOk() {
+void poolSolarBridgeTickPoolHeatHysteresis(void) {
+    if (storage.WaterSTemp >= storage.WaterTemp_SetPoint)
+        s_poolSolarHitSpOrAbove = true;
+    if (storage.WaterSTemp <= storage.WaterTemp_SetPoint - (double)SOLAR_POOL_RESTART_DELTA)
+        s_poolSolarHitSpOrAbove = false;
+}
+
+bool poolSolarBridgePoolHeatDemandDesired(void) {
+    return (storage.WaterSTemp < storage.WaterTemp_SetPoint) &&
+           (!s_poolSolarHitSpOrAbove ||
+            storage.WaterSTemp <= storage.WaterTemp_SetPoint - (double)SOLAR_POOL_RESTART_DELTA);
+}
+
+bool poolSolarBridgeRegulationWindowOk(void) {
     return storage.AutoMode && storage.SolarLocExt && storage.SolarMode &&
            FiltrationPump.IsRunning() &&
            (FiltrationPump.UpTime / 1000 / 60 > 5) &&
@@ -40,20 +56,39 @@ static bool solarExternalRegulationWindowOk() {
            (hour() < (int)storage.SolarStopMax);
 }
 
+static bool solarExternalRegulationWindowOk() {
+    return poolSolarBridgeRegulationWindowOk();
+}
+
 int poolSolarBridgeExternalSolarPublishEvent(void) {
+    poolSolarBridgeTickPoolHeatHysteresis();
     if (!solarExternalRegulationWindowOk())
         return 3;
-    if (storage.WaterSTemp < storage.WaterTemp_SetPoint &&
-        storage.SolarTemp > storage.WaterSTemp + SOLAR_EXT_COLLECTOR_DELTA_MIN)
+
+    const bool wantPool = poolSolarBridgePoolHeatDemandDesired();
+    const bool collectorGain =
+        storage.SolarTemp > storage.WaterSTemp + SOLAR_EXT_COLLECTOR_DELTA_MIN;
+
+    if (wantPool && collectorGain)
         return 1;
-    if (storage.WaterSTemp >= storage.WaterTemp_SetPoint ||
-        storage.SolarRLTemp + SOLAR_EXT_RL_STOP_MARGIN <= storage.WaterSTemp)
+
+    /* At/above setpoint: pool heating goal met → same MQTT slot as „puffer“ hint */
+    if (storage.WaterSTemp >= storage.WaterTemp_SetPoint)
         return 2;
+
+    /* Below setpoint: never switch to puffer just because of RL */
+    if (wantPool && !collectorGain)
+        return -1;
     return -1;
 }
 
 bool poolSolarBridgeSolarModeRequest(void) {
-    return poolSolarBridgeExternalSolarPublishEvent() == 1;
+    poolSolarBridgeTickPoolHeatHysteresis();
+    if (!solarExternalRegulationWindowOk())
+        return false;
+    if (!poolSolarBridgePoolHeatDemandDesired())
+        return false;
+    return storage.SolarTemp > storage.WaterSTemp + SOLAR_EXT_COLLECTOR_DELTA_MIN;
 }
 
 void poolSolarBridgeLoadFromNvs(Preferences& p) {
