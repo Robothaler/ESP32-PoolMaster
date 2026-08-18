@@ -30,6 +30,7 @@
 #include "MatterAppTaskSuspend.h"
 #include "PoolMaster.h"
 #include "PoolSolarBridge.h"
+#include <Arduino.h>
 
 // PCF8574.h defines P0-P7 as integer pin-number macros (0-7), which conflict
 // with function parameter names in CHIP crypto headers (CHIPCryptoPAL.h uses
@@ -197,6 +198,9 @@ static char s_pairing_code[32] = {};
 static uint16_t s_ep_pool_temp  = chip::kInvalidEndpointId; // Pool water temperature
 static uint16_t s_ep_pool_soll  = chip::kInvalidEndpointId; // Pool target temperature
 static uint16_t s_ep_solar_mode = chip::kInvalidEndpointId; // Solar-mode request (OnOff)
+
+// Last SolarControl Matter report (CHIP task writes, Core-1 HTTP poll reads).
+static std::atomic<uint32_t> s_solar_last_report_ms{0};
 
 // Last synced values — used to avoid redundant attribute writes
 static float s_last_pool_temp  = -999.0f;
@@ -460,6 +464,7 @@ static void solarReportCallback(uint64_t /*remote_node_id*/,
             }
             if (storage.SolarLocExt)
                 storage.SolarOnline = true;
+            s_solar_last_report_ms.store((uint32_t)millis());
             ESP_LOGD(TAG, "SolarControl EP%u temp: %.2f°C", ep, temp);
         }
     }
@@ -479,6 +484,7 @@ static void solarReportCallback(uint64_t /*remote_node_id*/,
             }
             if (storage.SolarLocExt)
                 storage.SolarOnline = true;
+            s_solar_last_report_ms.store((uint32_t)millis());
             ESP_LOGD(TAG, "SolarControl EP%u OnOff: %d", ep, (int)val);
         }
     }
@@ -490,6 +496,7 @@ static void solarReportCallback(uint64_t /*remote_node_id*/,
                 storage.solarValveOK = val;
                 if (storage.SolarLocExt)
                     storage.SolarOnline = true;
+                s_solar_last_report_ms.store((uint32_t)millis());
             }
             ESP_LOGD(TAG, "SolarControl EP%u BoolState: %d", ep, (int)val);
         }
@@ -664,6 +671,7 @@ static void on_device_event(const chip::DeviceLayer::ChipDeviceEvent *event, int
 #ifdef CONFIG_ESP_MATTER_CONTROLLER_ENABLE
             s_solar_subscribed = false;
 #endif
+            s_solar_last_report_ms.store(0);
             break;
 
         default:
@@ -1989,7 +1997,8 @@ static void handleSerialCommands()
                                       "pump=%u valve=%u circ=%u illum=%u\r\n",
                                       nodeId, epPump, epValve, epCirc, epIllum);
                         // Start subscriptions immediately if already commissioned
-                        if (s_started) {
+                        if (s_started && !matterIsBleCommissioning() &&
+                            chip::Server::GetInstance().GetFabricTable().FabricCount() > 0) {
                             s_solar_subscribed = false;
                             subscribeToSolarControl(s_solar_node_id);
                         }
@@ -2085,8 +2094,10 @@ void MatterSyncTask(void *pvParameters)
             }
 
 #ifdef CONFIG_ESP_MATTER_CONTROLLER_ENABLE
-            // Start subscriptions once Matter is running and config is available
-            if (s_solar_node_id != 0 && !s_solar_subscribed && !matterIsBleCommissioning()) {
+            // Start subscriptions once a fabric exists (never during CHIPoBLE).
+            if (s_solar_node_id != 0 && !s_solar_subscribed &&
+                !matterIsBleCommissioning() &&
+                chip::Server::GetInstance().GetFabricTable().FabricCount() > 0) {
                 subscribeToSolarControl(s_solar_node_id);
             }
 #endif
@@ -2103,6 +2114,30 @@ uint8_t matterFabricCount()
     // FabricCount is an atomic uint8 — safe to read without lock
     if (!s_started) return 0;
     return chip::Server::GetInstance().GetFabricTable().FabricCount();
+}
+
+bool matterSolarLinkHealthy()
+{
+#ifdef CONFIG_ESP_MATTER_CONTROLLER_ENABLE
+    if (!s_started || !s_solar_subscribed)
+        return false;
+    if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0)
+        return false;
+    const uint32_t last = s_solar_last_report_ms.load();
+    if (last == 0)
+        return false;
+    return getDurationSafe(last, millis()) < MATTER_SOLAR_REPORT_STALE_MS;
+#else
+    return false;
+#endif
+}
+
+int32_t matterSolarReportAgeMs()
+{
+    const uint32_t last = s_solar_last_report_ms.load();
+    if (last == 0)
+        return -1;
+    return (int32_t)getDurationSafe(last, millis());
 }
 
 bool matterGetQRCode(char* buf, size_t size)

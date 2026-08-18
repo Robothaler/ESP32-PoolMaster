@@ -162,6 +162,16 @@ void matterApplyRadioHoldAfterTimersReady();
  */
 bool matterFactoryReset();
 
+/**
+ * @brief True when SolarControl Matter reports are fresh (subscribed and
+ *        last attribute report younger than MATTER_SOLAR_REPORT_STALE_MS).
+ *        Used to skip the HTTP LAN poll fallback.
+ */
+bool matterSolarLinkHealthy();
+
+/** Milliseconds since last SolarControl Matter report, or -1 if never. */
+int32_t matterSolarReportAgeMs();
+
 // ---------------------------------------------------------------------------
 // Public API — SolarControl Matter Controller (CONFIG_ESP_MATTER_CONTROLLER_ENABLE)
 // ---------------------------------------------------------------------------
@@ -194,7 +204,10 @@ void sendIlluminationCommand(bool on);
 // Non-Matter builds: provide a no-op stub so callers (Publish.cpp etc.)
 // don't need to sprinkle #ifdef MATTER_ENABLED around every call site.
 #include <stdbool.h>
+#include <stdint.h>
 static inline bool matterIsBleCommissioning() { return false; }
 static inline void matterYieldAppTasksIfChipobleBusy() {}
+static inline bool matterSolarLinkHealthy() { return false; }
+static inline int32_t matterSolarReportAgeMs() { return -1; }
 
 #endif // MATTER_ENABLED

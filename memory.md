@@ -90,8 +90,9 @@ Diese Datei fasst **projektspezifische** Erkenntnisse zusammen, damit spätere D
 
 | Datei | Inhalt |
 |--------|--------|
+| `include/PoolData.h` | Domain-Structs: Config / Measures / Runtime / SolarRemote |
 | `include/Config.h` | Matter-/WiFi-/Task-Schalter, Task-Matrix T1–T15 |
-| `sdkconfig.defaults` | PSRAM, NimBLE, `CONFIG_MAX_EVENT_QUEUE_SIZE`, SNTP, Controller |
+| `sdkconfig.defaults` | PSRAM, NimBLE, Cache, Controller, `CONFIG_MAX_EVENT_QUEUE_SIZE` |
 | `platformio.ini` | `MATTER_ENABLED`, Task-/Minimal-Flags, Stack, Log-Level |
 | `src/Tasks.cpp` | Task-Erzeugung, Skip-Logs, WDT/Suspend/Throttle-Hooks |
 | `src/MatterBridge.cpp` | Bridge vs. Minimal-Gerät, Clock-Sync |
@@ -101,4 +102,5 @@ Diese Datei fasst **projektspezifische** Erkenntnisse zusammen, damit spätere D
 
 ## Changelog dieser Notiz
 
+- **2026-08-18**: Datenmodell in `PoolConfig` / `PoolMeasures` / `PoolRuntime` / `PoolSolarRemote` aufgeteilt (`include/PoolData.h`). NVS schreibt keine Live-Messwerte mehr. pioarduino **55.03.311** (Arduino 3.3.11 / IDF 5.5.5). S3-Cache explizit 16/32 KB (Fix für 3.3.8 −49 KB). Matter-Controller nach Fabric, HTTP-Solar-Poll nur Fallback.
 - **2026-05-03**: Erste Version aus Matter-Commissioning-Debug (CASE, Queue, TWDT, Minimal-Tasks, Clock, PSRAM/NimBLE).

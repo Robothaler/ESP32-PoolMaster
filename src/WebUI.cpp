@@ -504,6 +504,17 @@ static String buildStatusJson() {
     solar["backflow"]    = (double)storage.solarBackflowTemp;
     solar["pump"]        = storage.solarPumpRunning ? 1 : 0;
     solar["valvePool"]   = storage.solarValvePool   ? 1 : 0;
+#ifdef MATTER_ENABLED
+    solar["matterAgeMs"] = matterSolarReportAgeMs();
+    solar["link"]        = matterSolarLinkHealthy() ? "matter"
+                         : ((poolSolarBridgeHttpPollAgeMs() >= 0 &&
+                             poolSolarBridgeHttpPollAgeMs() < (int32_t)MATTER_SOLAR_REPORT_STALE_MS)
+                                ? "http" : "none");
+#else
+    solar["link"]        = (poolSolarBridgeHttpPollAgeMs() >= 0 &&
+                            poolSolarBridgeHttpPollAgeMs() < (int32_t)MATTER_SOLAR_REPORT_STALE_MS)
+                               ? "http" : "none";
+#endif
     {
         JsonObject h = solar.createNestedObject("httpPoll");
         h["lastCode"] = poolSolarBridgeHttpPollLastCode();

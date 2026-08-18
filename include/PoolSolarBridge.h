@@ -1,6 +1,7 @@
 #pragma once
 // HTTP pool ↔ Solar bridge (LAN): SolarControl polls GET /api/pool-solar/v1/read
-// Optional: Pool polls Solar GET {base}/api/pool-solar/v1/solar (schema pool-solar-bridge/v1).
+// Optional fallback: Pool polls Solar GET {base}/api/pool-solar/v1/solar
+//   (skipped automatically while Matter SolarControl reports are fresh).
 //   Incoming JSON may include: roofTemp_C, boilerTemp_C, storageTemp_C, backflowTemp_C or returnTemp_C,
 //   pumpOn, valvePool, valveFeedbackEp3, mode, modeEp1, circulationOn, illuminationOn, poolModeRequestHw.
 //
