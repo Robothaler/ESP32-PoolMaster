@@ -4,6 +4,10 @@
 #define FIRMW           "ESP-3.3.11"
 #define TFT_FIRMW       "TFT-2.0"
 
+// POSIX TZ for libc localtime()/mktime(). Do not use configTime(0,0) — that
+// overwrites TZ with UTC0 and the Nextion clock then shows UTC (CEST − 2 h).
+#define POOL_TZ_EUROPE_BERLIN  "CET-1CEST,M3.5.0/2,M10.5.0/3"
+
 //Version of config stored in EEPROM
 //Random value. Change this value (to any other value) to revert the config to default values
 #define CONFIG_VERSION  11

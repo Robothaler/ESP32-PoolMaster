@@ -8,6 +8,7 @@
 #include <esp_system.h>             // for esp_reset_reason
 #include <sys/time.h>
 #include <string.h>
+#include <stdlib.h>
 #include <errno.h>
 
 #include "Config.h"
@@ -568,7 +569,6 @@ void setup()
   // Both StartTime() and readLocalTime() handle the no-WiFi case gracefully.
   StartTime();
   readLocalTime();
-  setTime(timeinfo.tm_hour,timeinfo.tm_min,timeinfo.tm_sec,timeinfo.tm_mday,timeinfo.tm_mon+1,timeinfo.tm_year-100);
 #ifdef MATTER_ENABLED
   // matterBridgeStart() runs earlier, before NTP; push real UTC into CHIP (not Y2K).
   matterResyncChipWallClockAfterNtp();
@@ -1208,13 +1208,12 @@ static constexpr time_t kMinEpochWallClockUtc = 1577836800; // 2020-01-01 00:00 
 
 void poolEnsureEuropeBerlinTz(void)
 {
-  static bool configured = false;
-  if (configured) {
+  const char *tz = getenv("TZ");
+  if (tz != nullptr && strcmp(tz, POOL_TZ_EUROPE_BERLIN) == 0) {
     return;
   }
-  setenv("TZ", "CET-1CEST,M3.5.0/2,M10.5.0/3", 1);
+  setenv("TZ", POOL_TZ_EUROPE_BERLIN, 1);
   tzset();
-  configured = true;
 }
 
 void poolApplyEspSystemTimeFromLocalTm(struct tm *tmLocal)
@@ -1250,15 +1249,16 @@ void poolApplyEspSystemTimeFromLocalTm(struct tm *tmLocal)
 void StartTime()
 {
   static bool ntpConfigured = false;
+  poolEnsureEuropeBerlinTz();
   if (storage.WIFI_OnOff && wifiIsConnected()) {
     if (!ntpConfigured) {
-      Debug.print(DBG_INFO, "[NTP] Configuring time with NTP servers: 0.pool.ntp.org, 1.pool.ntp.org, 2.pool.ntp.org (CET/CEST)");
-      poolEnsureEuropeBerlinTz();
-      configTime(0, 0,"0.pool.ntp.org","1.pool.ntp.org","2.pool.ntp.org"); // 3 possible NTP servers
+      Debug.print(DBG_INFO, "[NTP] Configuring NTP with TZ %s", POOL_TZ_EUROPE_BERLIN);
+      // configTime(0,0) would set TZ=UTC0 and the Nextion clock would show UTC (CEST−2h).
+      configTzTime(POOL_TZ_EUROPE_BERLIN, "0.pool.ntp.org", "1.pool.ntp.org", "2.pool.ntp.org");
       ntpConfigured = true;
       Debug.print(DBG_INFO, "[NTP] NTP configuration completed");
     } else {
-      Debug.print(DBG_INFO, "[NTP] NTP already configured, skipping configTime()");
+      Debug.print(DBG_INFO, "[NTP] NTP already configured, skipping configTzTime()");
     }
     for (int i = 0; i < 10; i++) {
       time_t now = time(nullptr);
@@ -1286,6 +1286,7 @@ void readLocalTime()
 {
   poolEnsureEuropeBerlinTz();
   bool timeSynced = false;
+  bool fromNtp = false;
   struct tm localTimeInfo;
   memset(&localTimeInfo, 0, sizeof(localTimeInfo));
 
@@ -1295,6 +1296,7 @@ void readLocalTime()
         localTimeInfo.tm_year + 1900, localTimeInfo.tm_mon + 1, localTimeInfo.tm_mday,
         localTimeInfo.tm_hour, localTimeInfo.tm_min, localTimeInfo.tm_sec, localTimeInfo.tm_isdst);
       timeSynced = true;
+      fromNtp = true;
     } else {
       Debug.print(DBG_WARNING, "[NTP] Failed to obtain time");
     }
@@ -1344,9 +1346,14 @@ void readLocalTime()
   }
 
   if (timeSynced) {
-    // Arduino TimeLib alone does not update libc — Matter/CHIP reads gettimeofday().
-    poolApplyEspSystemTimeFromLocalTm(&localTimeInfo);
-    // Setze Time-Bibliothek mit lokaler Zeit (inkl. DST) direkt aus localTimeInfo
+    // NTP/SNTP already wrote UTC into gettimeofday(). Re-feeding the local tm
+    // through mktime() is only needed when the source is the DS3231 (civil time).
+    if (!fromNtp) {
+      localTimeInfo.tm_isdst = -1;
+      poolApplyEspSystemTimeFromLocalTm(&localTimeInfo);
+    } else {
+      poolEnsureEuropeBerlinTz();
+    }
     setTime(localTimeInfo.tm_hour, localTimeInfo.tm_min, localTimeInfo.tm_sec,
             localTimeInfo.tm_mday, localTimeInfo.tm_mon + 1, localTimeInfo.tm_year + 1900);
     Debug.print(DBG_INFO, "[TimeLib] Set TimeLib to: %04d-%02d-%02d %02d:%02d:%02d",

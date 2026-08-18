@@ -102,5 +102,6 @@ Diese Datei fasst **projektspezifische** Erkenntnisse zusammen, damit spätere D
 
 ## Changelog dieser Notiz
 
+- **2026-08-18**: Nextion-Uhr zeigte UTC (CEST − 2 h): `configTime(0,0)` überschreibt TZ; `poolEnsureEuropeBerlinTz()` war one-shot. Fix: `configTzTime(CET-1CEST…)` + TZ immer wiederherstellen.
 - **2026-08-18**: Datenmodell in `PoolConfig` / `PoolMeasures` / `PoolRuntime` / `PoolSolarRemote` aufgeteilt (`include/PoolData.h`). NVS schreibt keine Live-Messwerte mehr. pioarduino **55.03.311** (Arduino 3.3.11 / IDF 5.5.5). S3-Cache explizit 16/32 KB (Fix für 3.3.8 −49 KB). Matter-Controller nach Fabric, HTTP-Solar-Poll nur Fallback.
 - **2026-05-03**: Erste Version aus Matter-Commissioning-Debug (CASE, Queue, TWDT, Minimal-Tasks, Clock, PSRAM/NimBLE).

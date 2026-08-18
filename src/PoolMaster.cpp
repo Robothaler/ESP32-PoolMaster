@@ -274,7 +274,6 @@ Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID())
         cleaning_done = false;
 
         readLocalTime();
-        setTime(timeinfo.tm_hour,timeinfo.tm_min,timeinfo.tm_sec,timeinfo.tm_mday,timeinfo.tm_mon+1,timeinfo.tm_year-100);
 
     }
     else if(hour() == 1)

@@ -64,10 +64,12 @@ extern SemaphoreHandle_t prefsMutex;
 void prefsLock(void);
 void prefsUnlock(void);
 
-/** Ensure libc TZ is Europe/Berlin (CET/CEST) before localtime()/strftime — matches NTP path in Setup.cpp. */
+/** Ensure libc TZ is Europe/Berlin (CET/CEST). Re-applies if anything (configTime, CHIP SNTP) stomped TZ. */
 void poolEnsureEuropeBerlinTz(void);
 
-/** Push Europe/Berlin local calendar time into the ESP-IDF wall clock (libc). Matter/CHIP uses gettimeofday(). */
+/** Convert a Europe/Berlin civil `tm` to UTC epoch and write gettimeofday() for Matter/CHIP.
+ *  Do not call this with a tm that getLocalTime() already produced after a successful NTP sync
+ *  (SNTP already set UTC). Use it for RTC fallback and manual Date commands. */
 void poolApplyEspSystemTimeFromLocalTm(struct tm *tmLocal);
 
 bool lockI2C(); // Declaration of the lockI2C function
