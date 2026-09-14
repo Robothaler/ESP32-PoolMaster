@@ -149,8 +149,8 @@ Below are the Payloads/commands to publish on the "PoolTopicAPI" topic (see hard
 <li>{"PhPump":1} or {"PhPump":0}     -> manually start/stop the Acid pump to lower the Ph</li>
 <li>{"PhPID":1} or {"PhPID":0}       -> start/stop the Ph PID regulation loop</li>
 <li>{"OrpPID":1} or {"OrpPID":0}     -> start/stop the Orp PID regulation loop</li>
-<li>{"PhCalib":[4.02,3.8,9.0,9.11]}  -> multi-point linear regression calibration (minimum 1 point-couple, 6 max.) in the form [ProbeReading_0, BufferRating_0, xx, xx, ProbeReading_n, BufferRating_n]
-<li>{"OrpCalib":[450,465,750,784]}   -> multi-point linear regression calibration (minimum 1 point-couple, 6 max.) in the form [ProbeReading_0, BufferRating_0, xx, xx, ProbeReading_n, BufferRating_n]
+<li>{"PhCalib":[4.02,3.8,9.0,9.11]}  -> calibration as [ProbeReading, BufferRating, ...]. One pair = offset only (keeps slope). Two or more pairs = linear regression; order of the pairs does not matter. Do not send two separate 1-point commands if you want a 2-point slope.
+<li>{"OrpCalib":[450,465,750,784]}   -> same as PhCalib. Example is a 2-point ORP cal (readings 450/750 mV vs buffers 465/784 mV). Pair order does not matter. Each pair must be [current probe reading, buffer], not swapped.
 <li>{"PhSetPoint":7.4}               -> set the Ph setpoint, 7.4 in this example</li>
 <li>{"OrpSetPoint":750.0}            -> set the Orp setpoint, 750mV in this example</li>
 <li>{"WSetPoint":27.0}               -> set the water temperature setpoint, 27.0deg in this example</li>

@@ -241,6 +241,21 @@
 #define PH_ADS1115_ADDR   ADS1115ADDRESS+2 // 0x4A is default address -> ADS1115ADDRESS+2
 #define ORP_ADS1115_ADDR  ADS1115ADDRESS+3 // 0x4B is default address -> ADS1115ADDRESS+3
 
+// Factory probe calibration: measured = adc_volts * C0 + C1
+// EXT (Loulou74 differential) and INT (single-ended) use opposite ORP slope signs.
+// RstpHCal / RstOrpCal / NVS fallbacks must match these, not the INT-board leftovers.
+#ifdef EXT_ADS1115
+#define PH_CALIB_DEFAULT_C0   (-2.3183)
+#define PH_CALIB_DEFAULT_C1   (6.68)
+#define ORP_CALIB_DEFAULT_C0  (465.0)
+#define ORP_CALIB_DEFAULT_C1  (0.0)
+#else
+#define PH_CALIB_DEFAULT_C0   (3.61078313)
+#define PH_CALIB_DEFAULT_C1   (-3.88020422)
+#define ORP_CALIB_DEFAULT_C0  (-966.946396)
+#define ORP_CALIB_DEFAULT_C1  (2526.88809)
+#endif
+
 // Buzzer
 #define BUZZER             2  //
 
