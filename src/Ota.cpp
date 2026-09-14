@@ -11,6 +11,8 @@
 #include "PoolMaster.h"
 #include "WebUI.h"
 #include "PoolSolarBridge.h"
+#include <ArduinoOTA.h>
+#include <esp_task_wdt.h>
 
 extern Arduino_DebugUtils Debug;
 
@@ -73,13 +75,59 @@ void handleFileUpload(AsyncWebServerRequest *request, String filename, size_t in
 void initOTA(void) {
 }
 
+void poolArduinoOtaEnsureStarted(void) {
+  static bool s_started = false;
+  if (s_started || !storage.WIFI_OnOff)
+    return;
+  if (!wifiStaConnected())
+    return;
+
+  ArduinoOTA.setPort(OTA_PORT);
+  ArduinoOTA.setHostname(OTA_HOST);
+  ArduinoOTA.setPassword(OTA_PASSWORD);
+  ArduinoOTA.setTimeout(10000);
+  ArduinoOTA.onStart([]() {
+    esp_task_wdt_reset();
+#ifdef MATTER_ENABLED
+    esp_wifi_set_ps(WIFI_PS_NONE);
+#else
+    WiFi.setSleep(false);
+#endif
+    Debug.print(DBG_INFO, "[OTA] ArduinoOTA start cmd=%d", ArduinoOTA.getCommand());
+  });
+  ArduinoOTA.onEnd([]() {
+    Debug.print(DBG_INFO, "[OTA] ArduinoOTA complete — reboot");
+  });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    esp_task_wdt_reset();
+    static unsigned lastPct = 101;
+    unsigned pct = total ? (progress * 100U / total) : 0;
+    if (pct != lastPct && (pct % 10U) == 0) {
+      lastPct = pct;
+      Debug.print(DBG_INFO, "[OTA] ArduinoOTA %u%%", pct);
+    }
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    const char *e = "unknown";
+    if (error == OTA_AUTH_ERROR) e = "auth";
+    else if (error == OTA_BEGIN_ERROR) e = "begin";
+    else if (error == OTA_CONNECT_ERROR) e = "connect";
+    else if (error == OTA_RECEIVE_ERROR) e = "receive";
+    else if (error == OTA_END_ERROR) e = "end";
+    Debug.print(DBG_ERROR, "[OTA] ArduinoOTA error: %s (%u)", e, (unsigned)error);
+  });
+  ArduinoOTA.begin();
+  s_started = true;
+  Debug.print(DBG_INFO, "[OTA] ArduinoOTA listening on UDP %d (%s.local)", OTA_PORT, OTA_HOST);
+}
+
 void otaTask(void *pvParameters) {
   Debug.print(DBG_INFO, "[TASKS] otaTask started on core %d", xPortGetCoreID());
   while (!startTasks);
   Debug.print(DBG_DEBUG, "[TASKS] otaTask running...");
   vTaskDelay(DT13);
 
-  TickType_t period = pdMS_TO_TICKS(980);
+  TickType_t period = pdMS_TO_TICKS(100);
   TickType_t ticktime = xTaskGetTickCount();
 
   #ifdef CHRONO
@@ -175,14 +223,20 @@ void otaTask(void *pvParameters) {
 #endif
   }
 
-  // WebSocket broadcast runs directly in this task loop every 5 s (every 5 × 980 ms ticks).
-  // Previously used a FreeRTOS software timer, but timer callbacks run in the shared
-  // timer task whose stack (~4 KB) is too small for StaticJsonDocument<1280> +
-  // SPIFFS Logger::record() I/O → stack overflow → MMU fault (null ptr in String::write).
+  // WebSocket broadcast every ~5 s (50 × 100 ms). Runs in this task, not a timer
+  // callback — the timer task stack is too small for JSON + SPIFFS I/O.
   uint8_t broadcastTick = 0;
 
   for (;;) {
     esp_task_wdt_reset();
+
+    poolArduinoOtaEnsureStarted();
+    {
+      const TickType_t before = xTaskGetTickCount();
+      ArduinoOTA.handle();
+      if ((xTaskGetTickCount() - before) > period)
+        ticktime = xTaskGetTickCount();
+    }
 
 #if defined(MATTER_ENABLED) && MATTER_DEFER_HTTP_SERVER_UNTIL_COMMISSIONED
     tryStartOtaHttpServer();
@@ -190,7 +244,7 @@ void otaTask(void *pvParameters) {
 
     // WebSocket status broadcast every ~5 s (only after server.begin)
     if (s_otaHttpServerStarted) {
-      if (++broadcastTick >= 5) {
+      if (++broadcastTick >= 50) {
         broadcastTick = 0;
         webUIBroadcast();
       }

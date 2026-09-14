@@ -181,8 +181,8 @@ Debug.print(DBG_INFO, "[TASKS] PoolMaster started on core %d", xPortGetCoreID())
     td = millis();
     #endif    
 
-    // Handle OTA update
-    ArduinoOTA.handle();
+    // ArduinoOTA.handle() lives in otaTask (internal DRAM stack). PoolMaster's
+    // stack is in PSRAM — flash writes during OTA would panic-reboot the device.
 
     //update pumps
     FiltrationPump.loop();

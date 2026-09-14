@@ -58,7 +58,7 @@
 #include <platform/CHIPDeviceLayer.h>
 #include <platform/ConnectivityManager.h>
 #include <platform/PlatformManager.h>
-#include <app/server/OnboardingCodesUtil.h>
+#include <setup_payload/OnboardingCodesUtil.h>
 #include <app/server/Server.h>
 #include <credentials/DeviceAttestationCredsProvider.h>
 #include <credentials/examples/DeviceAttestationCredsExample.h>
@@ -160,6 +160,7 @@ static void matterAgentDbgFn(const char *hypothesisId, const char *location, con
 
 // Timeout for acquiring the CHIP stack lock in the sync task
 #define MATTER_LOCK_TIMEOUT_MS  100
+using MatterChipLock = esp_matter::lock::ScopedChipStackLock;
 
 // =============================================================================
 //  Module-private state
@@ -366,12 +367,10 @@ static void queueCommand(const char *json)
 static void updateOnOff(uint16_t ep_id, bool state)
 {
     if (ep_id == chip::kInvalidEndpointId) return;
-    if (esp_matter::lock::chip_stack_lock(pdMS_TO_TICKS(MATTER_LOCK_TIMEOUT_MS)) != ESP_OK) return;
+    MatterChipLock lock(pdMS_TO_TICKS(MATTER_LOCK_TIMEOUT_MS));
 
     esp_matter_attr_val_t val = esp_matter_bool(state);
     attribute::update(ep_id, OnOff::Id, OnOff::Attributes::OnOff::Id, &val);
-
-    esp_matter::lock::chip_stack_unlock();
 }
 
 /**
@@ -381,13 +380,11 @@ static void updateOnOff(uint16_t ep_id, bool state)
 static void updateActivePower(uint16_t ep_id, int16_t power_w)
 {
     if (ep_id == chip::kInvalidEndpointId) return;
-    if (esp_matter::lock::chip_stack_lock(pdMS_TO_TICKS(MATTER_LOCK_TIMEOUT_MS)) != ESP_OK) return;
+    MatterChipLock lock(pdMS_TO_TICKS(MATTER_LOCK_TIMEOUT_MS));
 
     // ElectricalMeasurement cluster (0x0B04), ActivePower attribute (0x050B), unit: 1 W
     esp_matter_attr_val_t val = esp_matter_int16(power_w);
     attribute::update(ep_id, kElecMeasClusterId, kActivePowerAttrId, &val);
-
-    esp_matter::lock::chip_stack_unlock();
 }
 
 /**
@@ -397,15 +394,13 @@ static void updateActivePower(uint16_t ep_id, int16_t power_w)
 static void setReachable(uint16_t ep_id, bool reachable)
 {
     if (ep_id == chip::kInvalidEndpointId) return;
-    if (esp_matter::lock::chip_stack_lock(pdMS_TO_TICKS(MATTER_LOCK_TIMEOUT_MS)) != ESP_OK) return;
+    MatterChipLock lock(pdMS_TO_TICKS(MATTER_LOCK_TIMEOUT_MS));
 
     esp_matter_attr_val_t val = esp_matter_bool(reachable);
     attribute::update(ep_id,
                       BridgedDeviceBasicInformation::Id,
                       BridgedDeviceBasicInformation::Attributes::Reachable::Id,
                       &val);
-
-    esp_matter::lock::chip_stack_unlock();
 }
 
 /**
@@ -415,13 +410,11 @@ static void setReachable(uint16_t ep_id, bool reachable)
 static void updateTemperature(uint16_t ep_id, float temp_c)
 {
     if (ep_id == chip::kInvalidEndpointId) return;
-    if (esp_matter::lock::chip_stack_lock(pdMS_TO_TICKS(MATTER_LOCK_TIMEOUT_MS)) != ESP_OK) return;
+    MatterChipLock lock(pdMS_TO_TICKS(MATTER_LOCK_TIMEOUT_MS));
 
     const int16_t val_i16 = static_cast<int16_t>(temp_c * 100.0f);
     esp_matter_attr_val_t val = esp_matter_int16(val_i16);
     attribute::update(ep_id, kTempMeasClusterId, kTempMeasAttrId, &val);
-
-    esp_matter::lock::chip_stack_unlock();
 }
 
 // =============================================================================
@@ -1368,11 +1361,11 @@ static void matterReleaseGapWifiCoexSession()
 static endpoint_t *createPumpEndpoint(node_t *node, const char *label, bool withPower)
 {
     // ── On/Off Plugin Unit (device type 0x010A) with BRIDGE flag ─────────────
-    endpoint::on_off_plugin_unit::config_t ep_cfg;
+    endpoint::on_off_plug_in_unit::config_t ep_cfg;
     memset(&ep_cfg, 0, sizeof(ep_cfg));
     ep_cfg.on_off.on_off             = false;   // Start in OFF state
 
-    endpoint_t *ep = endpoint::on_off_plugin_unit::create(
+    endpoint_t *ep = endpoint::on_off_plug_in_unit::create(
         node, &ep_cfg,
         ENDPOINT_FLAG_BRIDGE | ENDPOINT_FLAG_DESTROYABLE,
         nullptr);
@@ -1457,11 +1450,11 @@ void matterBridgeInit()
 
 #if MATTER_MINIMAL_DEVICE
     {
-        endpoint::on_off_plugin_unit::config_t ep_cfg;
+        endpoint::on_off_plug_in_unit::config_t ep_cfg;
         memset(&ep_cfg, 0, sizeof(ep_cfg));
         ep_cfg.on_off.on_off = false;
         endpoint_t *ep =
-            endpoint::on_off_plugin_unit::create(s_node, &ep_cfg, ENDPOINT_FLAG_NONE, nullptr);
+            endpoint::on_off_plug_in_unit::create(s_node, &ep_cfg, ENDPOINT_FLAG_NONE, nullptr);
         if (!ep) {
             ESP_LOGE(TAG, "FATAL: minimal On/Off endpoint failed");
             return;
@@ -1527,10 +1520,10 @@ void matterBridgeInit()
 
     // ── Create Solar-Mode-Request OnOff endpoint (read by SolarControl) ───────
     {
-        endpoint::on_off_plugin_unit::config_t cfgSolarMode;
+        endpoint::on_off_plug_in_unit::config_t cfgSolarMode;
         memset(&cfgSolarMode, 0, sizeof(cfgSolarMode));
         cfgSolarMode.on_off.on_off = false;
-        endpoint_t *ep = endpoint::on_off_plugin_unit::create(
+        endpoint_t *ep = endpoint::on_off_plug_in_unit::create(
             s_node, &cfgSolarMode, ENDPOINT_FLAG_NONE, nullptr);
         if (ep) {
             s_ep_solar_mode = endpoint::get_id(ep);
@@ -1591,14 +1584,13 @@ static void matterSyncChipWallClockFromEsp()
                  (long) tv.tv_sec);
         return;
     }
-    if (esp_matter::lock::chip_stack_lock(pdMS_TO_TICKS(MATTER_LOCK_TIMEOUT_MS)) != ESP_OK) {
-        ESP_LOGW(TAG, "CHIP wall clock: chip stack lock timeout");
-        return;
+    CHIP_ERROR ce = CHIP_ERROR_INTERNAL;
+    {
+        MatterChipLock lock(pdMS_TO_TICKS(MATTER_LOCK_TIMEOUT_MS));
+        chip::System::Clock::Microseconds64 us(
+            static_cast<uint64_t>(tv.tv_sec) * UINT64_C(1000000) + static_cast<uint64_t>(tv.tv_usec));
+        ce = chip::System::SystemClock().SetClock_RealTime(us);
     }
-    chip::System::Clock::Microseconds64 us(
-        static_cast<uint64_t>(tv.tv_sec) * UINT64_C(1000000) + static_cast<uint64_t>(tv.tv_usec));
-    CHIP_ERROR ce = chip::System::SystemClock().SetClock_RealTime(us);
-    esp_matter::lock::chip_stack_unlock();
     if (ce == CHIP_NO_ERROR) {
         ESP_LOGI(TAG, "CHIP wall clock synced from ESP (Unix s=%ld)", (long)tv.tv_sec);
     } else {

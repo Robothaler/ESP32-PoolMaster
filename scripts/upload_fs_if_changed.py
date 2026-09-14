@@ -40,6 +40,14 @@ def _mtime(path):
 
 
 def upload_fs_if_changed(source, target, env):  # noqa: ARG001
+    protocol = env.subst("$UPLOAD_PROTOCOL")
+    if protocol == "espota":
+        # SPIFFS is ~3.8 MB here. Auto-uploading it over ArduinoOTA before firmware
+        # aborts the IDE OTA (timeout / WDT / failed invitation). Flash firmware only;
+        # upload SPIFFS separately via serial or an explicit `uploadfs` target.
+        print("[uploadfs] Skipping SPIFFS auto-upload for espota (firmware OTA only).")
+        return
+
     if not os.path.isdir(DATA_DIR):
         print("[uploadfs] No data/ directory — skipping.")
         return

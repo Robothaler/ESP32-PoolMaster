@@ -429,7 +429,7 @@
 #define STACK_T10         4096  // StatusLights
 #define STACK_T11         8192  // PublishMeasures
 #define STACK_T12         5120  // PublishSettings
-#define STACK_T13         6144  // OTATask — SPIFFS + HardwareSerial + 512 B file buffer
+#define STACK_T13         8192  // OTATask — SPIFFS + ArduinoOTA flash write + Nextion buffer
 #define STACK_T15         4096  // PCF8574Manager update (I2C / Wire)
 
 // Task priorities angepasst für bessere Synchronisation

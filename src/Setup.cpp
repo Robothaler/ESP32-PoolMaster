@@ -593,14 +593,7 @@ void setup()
     else
       MDNS.addService("http", "tcp", OTA_NEXTION_PORT);
 
-    ArduinoOTA.setPort(OTA_PORT);
-    ArduinoOTA.setHostname(OTA_HOST);
-    ArduinoOTA.setPassword(OTA_PASSWORD);
-    ArduinoOTA.onStart([]() { /* ... */ });
-    ArduinoOTA.onEnd([]() { /* ... */ });
-    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) { /* ... */ });
-    ArduinoOTA.onError([](ota_error_t error) { /* ... */ });
-    ArduinoOTA.begin();
+    poolArduinoOtaEnsureStarted();
   }
 
 // reset JTAG-Pins
