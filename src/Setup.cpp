@@ -108,7 +108,7 @@ StoreStruct storage = {
     900000UL, 2500000UL, 900000UL, 300000UL, 30000UL,
     1800000UL, 1800000UL,
     7.2, 740.0, 1.5, 0.3, 0.8, 120.0, 60.0, 4.5, 60.0, 1.0, 10.0, 30.0,
-    -2.3183, 6.68, 465.0, 0.0, 1.31, -0.1, 30.0,
+    PH_CALIB_DEFAULT_C0, PH_CALIB_DEFAULT_C1, ORP_CALIB_DEFAULT_C0, ORP_CALIB_DEFAULT_C1, 1.31, -0.1, 30.0,
     2700000.0, 0.0, 0.0, 18000.0, 0.0, 0.0,
     20.0, 20.0, 2.7, 2.7, 15.0,
     10.0, -25.0, 10.0, -25.0, 10.0, -25.0,
@@ -159,7 +159,7 @@ StoreStruct storage = {
     900000UL, 2500000UL, 900000UL, 300000UL, 30000UL,
     1800000UL, 1800000UL,
     7.2, 740.0, 1.5, 0.3, 0.8, 120.0, 60.0, 4.5, 60.0, 1.0, 10.0, 30.0,
-    3.61078313, -3.88020422, -966.946396, 2526.88809, 1.31, -0.1, 30.0,
+    PH_CALIB_DEFAULT_C0, PH_CALIB_DEFAULT_C1, ORP_CALIB_DEFAULT_C0, ORP_CALIB_DEFAULT_C1, 1.31, -0.1, 30.0,
     2700000.0, 0.0, 0.0, 18000.0, 0.0, 0.0,
     20.0, 20.0, 2.7, 2.7, 15.0,
     10.0, -25.0, 10.0, -25.0, 10.0, -25.0,
@@ -826,10 +826,10 @@ bool loadConfig() {
   storage.SaltDiff              = nvs.getDouble("SaltDiff", 30.);
   storage.WaterTempLowThreshold = nvs.getDouble("WaterTempLow",10.);
   storage.WaterTemp_SetPoint    = nvs.getDouble("WaterTempSet",27.);
-  storage.pHCalibCoeffs0        = nvs.getDouble("pHCalibCoeffs0",4.3);
-  storage.pHCalibCoeffs1        = nvs.getDouble("pHCalibCoeffs1",-2.63);
-  storage.OrpCalibCoeffs0       = nvs.getDouble("OrpCalibCoeffs0",-1189.);
-  storage.OrpCalibCoeffs1       = nvs.getDouble("OrpCalibCoeffs1",2564.);
+  storage.pHCalibCoeffs0        = nvs.getDouble("pHCalibCoeffs0", PH_CALIB_DEFAULT_C0);
+  storage.pHCalibCoeffs1        = nvs.getDouble("pHCalibCoeffs1", PH_CALIB_DEFAULT_C1);
+  storage.OrpCalibCoeffs0       = nvs.getDouble("OrpCalibCoeffs0", ORP_CALIB_DEFAULT_C0);
+  storage.OrpCalibCoeffs1       = nvs.getDouble("OrpCalibCoeffs1", ORP_CALIB_DEFAULT_C1);
   storage.PSICalibCoeffs0       = nvs.getDouble("PSICalibCoeffs0",1.11);
   storage.PSICalibCoeffs1       = nvs.getDouble("PSICalibCoeffs1",0.);
   storage.Ph_Kp                 = nvs.getDouble("Ph_Kp",2000000.);

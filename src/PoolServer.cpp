@@ -3,6 +3,7 @@
 // for other MQTT clients (dashboards)
 
 #include <Arduino.h>
+#include <cmath>
 #include "Config.h"
 #include "PoolMaster.h"
 #include "PoolSolarBridge.h"
@@ -36,6 +37,85 @@ uint8_t DS18B20_W_New[MAX_ADDRESSES][8];
 extern int numSensors_A;
 extern int numSensors_W;
 
+// Probe reading = adc_volts * C0 + C1. Calib JSON is [reading, buffer, ...].
+// Pair order does not matter for the 2-point fit. Sequential 1-point commands
+// only ever match the last buffer (offset-only).
+static bool reconstructCalibVoltage(double reading, double c0, double c1, double& volts)
+{
+  if (!std::isfinite(c0) || std::fabs(c0) < 1e-9) {
+    return false;
+  }
+  volts = (reading - c1) / c0;
+  return std::isfinite(volts);
+}
+
+static bool applyOffsetCalib(double& c0, double& c1, double defaultC0,
+                             float reading, float buffer)
+{
+  double volts = 0.0;
+  if (!reconstructCalibVoltage(reading, c0, c1, volts)) {
+    Debug.print(DBG_ERROR, "[Calib] cannot reconstruct voltage (C0=%.4f). Reset calibration first.", c0);
+    return false;
+  }
+  // A previous 1-point cal forced C0 to +1000 / +3.76, or Rst* used the
+  // opposite-board defaults. Restore factory slope, keep this buffer correct.
+  if (c0 * defaultC0 < 0.0 && std::fabs(defaultC0) > 1e-9) {
+    Debug.print(DBG_WARNING, "[Calib] restoring factory slope %.4f (was %.4f, opposite sign)",
+                defaultC0, c0);
+    c0 = defaultC0;
+  }
+  c1 = (double)buffer - c0 * volts;
+  return std::isfinite(c0) && std::isfinite(c1);
+}
+
+static bool applyLinRegCalib(double& c0, double& c1, double defaultC0,
+                             const float* pairs, int nValues)
+{
+  if (nValues < 4 || (nValues % 2) != 0 || nValues > 12) {
+    return false;
+  }
+  const int n = nValues / 2;
+  double volts = 0.0;
+  if (!reconstructCalibVoltage(pairs[0], c0, c1, volts)) {
+    Debug.print(DBG_ERROR, "[Calib] slope C0 is 0, reset calibration first");
+    return false;
+  }
+  float x[6];
+  float y[6];
+  for (int i = 0; i < nValues; i += 2) {
+    if (!reconstructCalibVoltage(pairs[i], c0, c1, volts)) {
+      Debug.print(DBG_ERROR, "[Calib] failed to reconstruct voltage for point %d", i / 2);
+      return false;
+    }
+    x[i / 2] = (float)volts;
+    y[i / 2] = pairs[i + 1];
+  }
+  float xmin = x[0];
+  float xmax = x[0];
+  for (int i = 1; i < n; i++) {
+    if (x[i] < xmin) xmin = x[i];
+    if (x[i] > xmax) xmax = x[i];
+  }
+  if (!((xmax - xmin) > 1e-6f)) {
+    Debug.print(DBG_ERROR, "[Calib] points map to the same voltage — use two different buffers");
+    return false;
+  }
+  double new0 = 0.0;
+  double new1 = 0.0;
+  simpLinReg(x, y, new0, new1, n);
+  if (!std::isfinite(new0) || !std::isfinite(new1) || std::fabs(new0) < 1e-9) {
+    Debug.print(DBG_ERROR, "[Calib] linear regression failed");
+    return false;
+  }
+  if (new0 * defaultC0 < 0.0 && std::fabs(defaultC0) > 1e-9) {
+    Debug.print(DBG_WARNING,
+                "[Calib] fitted slope %.4f has opposite sign to factory %.4f — check [reading, buffer] pairing",
+                new0, defaultC0);
+  }
+  c0 = new0;
+  c1 = new1;
+  return true;
+}
 
 void ProcessCommand(void *pvParameters)
 {
@@ -448,98 +528,72 @@ void ProcessCommand(void *pvParameters)
     }
 }
 
-        //"PhCalib" command which computes and sets the calibration coefficients of the pH sensor response based on a multi-point linear regression
-        //{"PhCalib":[4.02,3.8,9.0,9.11]}  -> multi-point linear regression calibration (minimum 1 point-couple, 6 max.) in the form [ProbeReading_0, BufferRating_0, xx, xx, ProbeReading_n, BufferRating_n]
+        //"PhCalib" [ProbeReading_0, BufferRating_0, ...] — 1 pair = offset, 2+ pairs = linreg (order of pairs does not matter)
         else if (command.containsKey(F("PhCalib")))
         {
-          float CalibPoints[12]; //Max six calibration point-couples! Should be plenty enough
+          float CalibPoints[12]; //Max six calibration point-couples
           int NbPoints = (int)copyArray(command[F("PhCalib")].as<JsonArray>(),CalibPoints);        
-          Debug.print(DBG_DEBUG,"PhCalib command - %d points received",NbPoints);
+          Debug.print(DBG_DEBUG,"PhCalib command - %d values received",NbPoints);
           for (int i = 0; i < NbPoints; i += 2)
             Debug.print(DBG_DEBUG,"%10.2f - %10.2f",CalibPoints[i],CalibPoints[i + 1]);
 
-          if (NbPoints == 2) //Only one pair of points. Perform a simple offset calibration
+          bool ok = false;
+          if (NbPoints == 2)
           {
-            Debug.print(DBG_DEBUG,"2 points. Performing a simple offset calibration");
-
-            //compute offset correction
-            storage.pHCalibCoeffs1 += CalibPoints[1] - CalibPoints[0];
-
-            //Set slope back to default value
-            storage.pHCalibCoeffs0 = 3.76;
-
-            Debug.print(DBG_DEBUG,"Calibration completed. Coeffs are: %10.2f, %10.2f",storage.pHCalibCoeffs0,storage.pHCalibCoeffs1);
+            Debug.print(DBG_DEBUG,"2 values. Offset calibration (keeps slope)");
+            ok = applyOffsetCalib(storage.pHCalibCoeffs0, storage.pHCalibCoeffs1,
+                                  PH_CALIB_DEFAULT_C0, CalibPoints[0], CalibPoints[1]);
           }
-          else if ((NbPoints > 3) && (NbPoints % 2 == 0)) //we have at least 4 points as well as an even number of points. Perform a linear regression calibration
+          else if ((NbPoints > 3) && (NbPoints % 2 == 0))
           {
-            Debug.print(DBG_DEBUG,"%d points. Performing a linear regression calibration",NbPoints / 2);
-
-            float xCalibPoints[NbPoints / 2];
-            float yCalibPoints[NbPoints / 2];
-
-            //generate array of x sensor values (in volts) and y rated buffer values
-            //storage.PhValue = (storage.pHCalibCoeffs0 * ph_sensor_value) + storage.pHCalibCoeffs1;
-            for (int i = 0; i < NbPoints; i += 2)
-            {
-              xCalibPoints[i / 2] = (CalibPoints[i] - storage.pHCalibCoeffs1) / storage.pHCalibCoeffs0;
-              yCalibPoints[i / 2] = CalibPoints[i + 1];
-            }
-
-            //Compute linear regression coefficients
-            simpLinReg(xCalibPoints, yCalibPoints, storage.pHCalibCoeffs0, storage.pHCalibCoeffs1, NbPoints / 2);
-
-            Debug.print(DBG_DEBUG,"Calibration completed. Coeffs are: %10.2f, %10.2f",storage.pHCalibCoeffs0 ,storage.pHCalibCoeffs1);
+            Debug.print(DBG_DEBUG,"%d pairs. Linear regression (pair order ignored)", NbPoints / 2);
+            ok = applyLinRegCalib(storage.pHCalibCoeffs0, storage.pHCalibCoeffs1,
+                                  PH_CALIB_DEFAULT_C0, CalibPoints, NbPoints);
           }
-          //Store the new coefficients in eeprom
-          saveParam("pHCalibCoeffs0",storage.pHCalibCoeffs0);
-          saveParam("pHCalibCoeffs1",storage.pHCalibCoeffs1);          
-          PublishSettings();
+          if (ok)
+          {
+            Debug.print(DBG_INFO,"PhCalib done. C0=%10.4f C1=%10.4f",storage.pHCalibCoeffs0,storage.pHCalibCoeffs1);
+            saveParam("pHCalibCoeffs0",storage.pHCalibCoeffs0);
+            saveParam("pHCalibCoeffs1",storage.pHCalibCoeffs1);
+            PublishSettings();
+          }
+          else
+          {
+            Debug.print(DBG_ERROR,"PhCalib ignored (need [reading,buffer] or 4+ even values)");
+          }
         }
-        //"OrpCalib" command which computes and sets the calibration coefficients of the Orp sensor response based on a multi-point linear regression
-        //{"OrpCalib":[450,465,750,784]}   -> multi-point linear regression calibration (minimum 1 point-couple, 6 max.) in the form [ProbeReading_0, BufferRating_0, xx, xx, ProbeReading_n, BufferRating_n]
+        //"OrpCalib" [ProbeReading_0, BufferRating_0, ...] — 1 pair = offset, 2+ pairs = linreg (order of pairs does not matter)
         else if (command.containsKey(F("OrpCalib")))
         {
-          float CalibPoints[12]; //Max six calibration point-couples! Should be plenty enough
+          float CalibPoints[12];
           int NbPoints = (int)copyArray(command[F("OrpCalib")].as<JsonArray>(),CalibPoints);
-          Debug.print(DBG_DEBUG,"OrpCalib command - %d points received",NbPoints);
+          Debug.print(DBG_DEBUG,"OrpCalib command - %d values received",NbPoints);
           for (int i = 0; i < NbPoints; i += 2)
-            Debug.print(DBG_DEBUG,"%10.2f - %10.2f",CalibPoints[i],CalibPoints[i + 1]);        
-          if (NbPoints == 2) //Only one pair of points. Perform a simple offset calibration
+            Debug.print(DBG_DEBUG,"%10.2f - %10.2f",CalibPoints[i],CalibPoints[i + 1]);
+          bool ok = false;
+          if (NbPoints == 2)
           {
-            Debug.print(DBG_DEBUG,"2 points. Performing a simple offset calibration");
-
-            //compute offset correction
-            storage.OrpCalibCoeffs1 += CalibPoints[1] - CalibPoints[0];
-
-            //Set slope back to default value
-            storage.OrpCalibCoeffs0 = 1000;
-
-            Debug.print(DBG_DEBUG,"Calibration completed. Coeffs are: %10.2f, %10.2f",storage.OrpCalibCoeffs0,storage.OrpCalibCoeffs1);
+            Debug.print(DBG_DEBUG,"2 values. Offset calibration (keeps slope)");
+            ok = applyOffsetCalib(storage.OrpCalibCoeffs0, storage.OrpCalibCoeffs1,
+                                  ORP_CALIB_DEFAULT_C0, CalibPoints[0], CalibPoints[1]);
           }
-          else if ((NbPoints > 3) && (NbPoints % 2 == 0)) //we have at least 4 points as well as an even number of points. Perform a linear regression calibration
+          else if ((NbPoints > 3) && (NbPoints % 2 == 0))
           {
-            Debug.print(DBG_DEBUG,"%d points. Performing a linear regression calibration",NbPoints / 2);
-
-            float xCalibPoints[NbPoints / 2];
-            float yCalibPoints[NbPoints / 2];
-
-            //generate array of x sensor values (in volts) and y rated buffer values
-            //storage.OrpValue = (storage.OrpCalibCoeffs0 * orp_sensor_value) + storage.OrpCalibCoeffs1;
-            for (int i = 0; i < NbPoints; i += 2)
-            {
-              xCalibPoints[i / 2] = (CalibPoints[i] - storage.OrpCalibCoeffs1) / storage.OrpCalibCoeffs0;
-              yCalibPoints[i / 2] = CalibPoints[i + 1];
-            }
-
-            //Compute linear regression coefficients
-            simpLinReg(xCalibPoints, yCalibPoints, storage.OrpCalibCoeffs0, storage.OrpCalibCoeffs1, NbPoints / 2);
-
-            Debug.print(DBG_DEBUG,"Calibration completed. Coeffs are: %10.2f, %10.2f",storage.OrpCalibCoeffs0,storage.OrpCalibCoeffs1);
+            Debug.print(DBG_DEBUG,"%d pairs. Linear regression (pair order ignored)", NbPoints / 2);
+            ok = applyLinRegCalib(storage.OrpCalibCoeffs0, storage.OrpCalibCoeffs1,
+                                  ORP_CALIB_DEFAULT_C0, CalibPoints, NbPoints);
           }
-          //Store the new coefficients in eeprom
-          saveParam("OrpCalibCoeffs0",storage.OrpCalibCoeffs0);
-          saveParam("OrpCalibCoeffs1",storage.OrpCalibCoeffs1);          
-          PublishSettings();
+          if (ok)
+          {
+            Debug.print(DBG_INFO,"OrpCalib done. C0=%10.4f C1=%10.4f",storage.OrpCalibCoeffs0,storage.OrpCalibCoeffs1);
+            saveParam("OrpCalibCoeffs0",storage.OrpCalibCoeffs0);
+            saveParam("OrpCalibCoeffs1",storage.OrpCalibCoeffs1);
+            PublishSettings();
+          }
+          else
+          {
+            Debug.print(DBG_ERROR,"OrpCalib ignored (need [reading,buffer] or 4+ even values)");
+          }
         }
         //"PSICalib" command which computes and sets the calibration coefficients of the Electronic Pressure sensor response based on a linear regression and a reference mechanical sensor (typically located on the sand filter)
         //{"PSICalib":[0,0,0.71,0.6]}   -> multi-point linear regression calibration (minimum 2 point-couple, 6 max.) in the form [ElectronicPressureSensorReading_0, MechanicalPressureSensorReading_0, xx, xx, ElectronicPressureSensorReading_n, ElectronicPressureSensorReading_n]
@@ -1302,16 +1356,16 @@ void ProcessCommand(void *pvParameters)
         }
         else if (command.containsKey(F("RstpHCal")))//"RstpHCal" reset the calibration coefficients of the pH probe
         {
-          storage.pHCalibCoeffs0 = 3.51;
-          storage.pHCalibCoeffs1 = -2.73;
+          storage.pHCalibCoeffs0 = PH_CALIB_DEFAULT_C0;
+          storage.pHCalibCoeffs1 = PH_CALIB_DEFAULT_C1;
           saveParam("pHCalibCoeffs0",storage.pHCalibCoeffs0);
           saveParam("pHCalibCoeffs1",storage.pHCalibCoeffs1);
           PublishSettings();
         }
         else if (command.containsKey(F("RstOrpCal")))//"RstOrpCal" reset the calibration coefficients of the Orp probe
         {
-          storage.OrpCalibCoeffs0 = (double)-930.;
-          storage.OrpCalibCoeffs1 = (double)2455.;
+          storage.OrpCalibCoeffs0 = ORP_CALIB_DEFAULT_C0;
+          storage.OrpCalibCoeffs1 = ORP_CALIB_DEFAULT_C1;
           saveParam("OrpCalibCoeffs0",storage.OrpCalibCoeffs0);
           saveParam("OrpCalibCoeffs1",storage.OrpCalibCoeffs1);
           PublishSettings();
